@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Surface - CISO Toolbox</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="css/cisotoolbox.css">
+<link rel="stylesheet" href="css/Surface.css">
+</head>
+<body>
+
+<div class="toolbar">
+    <button class="btn-hamburger" data-click="_toggleSidebarMobile">&#9776;</button>
+    <span class="app-title">Surface</span>
+    <span class="flex-spacer"></span>
+    <span class="status" id="status-msg"></span>
+    <span class="toolbar-right" id="toolbar-right"></span>
+</div>
+
+<div class="app-layout">
+<nav class="sidebar" id="sidebar">
+    <div class="sidebar-collapse" data-click="toggleSidebar" title="Masquer le menu">&#10005;</div>
+    <div class="sidebar-section">SURFACE</div>
+    <div class="sidebar-item active" data-click="selectPanel" data-args='["dashboard"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span data-i18n="nav.dashboard">Tableau de bord</span>
+    </div>
+    <div class="sidebar-item" data-click="selectPanel" data-args='["monitored"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span data-i18n="nav.monitored">Surveillance</span>
+    </div>
+    <div class="sidebar-item" data-click="selectPanel" data-args='["hosts"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        <span data-i18n="nav.hosts">Hosts</span>
+    </div>
+    <div class="sidebar-item" data-click="selectPanel" data-args='["jobs"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span data-i18n="nav.jobs">Scans</span>
+    </div>
+    <div class="sidebar-item" data-click="selectPanel" data-args='["findings"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span data-i18n="nav.findings">Findings</span>
+    </div>
+    <div class="sidebar-item" data-click="selectPanel" data-args='["measures"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span data-i18n="nav.measures">Mesures</span>
+    </div>
+
+    <div class="flex-spacer"></div>
+
+    <div class="sidebar-section" data-i18n="nav.help_section">AIDE</div>
+    <div class="sidebar-item" data-click="toggleHelp" data-args='["methodo"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        <span data-i18n="nav.help_methodo">Methodologie</span>
+    </div>
+    <div class="sidebar-item" data-click="toggleHelp" data-args='["usage"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span data-i18n="nav.help_usage">Utilisation</span>
+    </div>
+
+    <a href="https://www.cisotoolbox.org" target="_blank" rel="noopener noreferrer" class="sidebar-brand">cisotoolbox.org</a>
+</nav>
+
+<!-- ════════════════ Help overlay ════════════════ -->
+<div class="help-overlay" id="help-overlay" data-click-self="toggleHelp">
+<div class="help-panel">
+<button class="close-help" data-click="toggleHelp" aria-label="close">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+</button>
+
+<div class="help-tabs">
+    <div class="help-tab active" id="help-tab-methodo" data-click="switchHelpTab" data-args='["methodo"]' data-i18n="help.tab_methodo">Methodologie ASM</div>
+    <div class="help-tab" id="help-tab-usage" data-click="switchHelpTab" data-args='["usage"]' data-i18n="help.tab_usage">Utilisation</div>
+</div>
+
+<!-- ════════ Onglet Methodologie ════════ -->
+<div class="help-content" id="help-content-methodo" data-i18n-html="help.methodo_html"></div>
+
+<!-- ════════ Onglet Utilisation ════════ -->
+<div class="help-content" id="help-content-usage" style="display:none" data-i18n-html="help.usage_html"></div>
+
+</div>
+</div>
+
+<div class="sidebar-expand" id="sidebar-expand" data-click="toggleSidebar" title="Afficher le menu">&#8250;</div>
+<main class="main-content">
+<div class="container" id="content"></div>
+</main>
+</div>
+
+<input type="file" id="file-input" accept=".json" style="display:none">
+
+<script src="js/Surface_config.js"></script>
+<script src="js/cisotoolbox.js"></script>
+<script src="js/cisotoolbox_backend.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/Surface_i18n_fr.js"></script>
+<script src="js/Surface_i18n_en.js"></script>
+<script src="js/surface_api.js"></script>
+<script src="js/Surface_app.js"></script>
+<script src="js/ai_common.js"></script>
+
+</body>
+</html>

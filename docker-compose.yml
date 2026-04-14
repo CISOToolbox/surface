@@ -1,0 +1,42 @@
+# Standalone surface
+services:
+  surface-app:
+    build: .
+    container_name: ciso-surface-standalone
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://surface:${DB_PASSWORD:-ciso2026}@surface-db:5432/surface
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
+      - APP_URL=${APP_URL:-http://localhost:8087}
+    ports:
+      - "8087:8080"
+    depends_on:
+      surface-db:
+        condition: service_healthy
+    networks:
+      - surface-net
+
+  surface-db:
+    image: postgres:16-alpine
+    container_name: ciso-surface-db-standalone
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=surface
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-ciso2026}
+      - POSTGRES_DB=surface
+    volumes:
+      - surface-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U surface"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - surface-net
+
+volumes:
+  surface-db-data:
+
+networks:
+  surface-net:

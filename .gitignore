@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets — keep only .env.example
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.smtp_password
+
+# Docker local overrides
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+# Runtime data
+data/
+logs/
+*.log
+*.sqlite
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node / JS (should be empty but just in case)
+node_modules/
