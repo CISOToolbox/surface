@@ -1075,34 +1075,32 @@ function _dashBanner(stats, recent24) {
 // ── B. Timeline 30 days ───────────────────────────────────────
 function _dashTimeline() {
     var days = _timelineDaily(30);
+    // Vendor-style soft palette — only critical stays vivid, the rest are
+    // pastels so the chart feels calm at first glance and screams only when
+    // there's actually something to scream about.
     var colors = {
-        critical: "#dc2626",
-        high:     "#ea580c",
-        medium:   "#f59e0b",
-        low:      "#3b82f6",
-        info:     "#9ca3af",
+        critical: "#ef4444",
+        high:     "#fca5a5",
+        medium:   "#fed7aa",
+        low:      "#fef9c3",
+        info:     "#dcfce7",
     };
-    // Reverse so critical is at the top of the stack (highest severity on top)
-    var sevStack = _SEV_ORDER.slice().reverse();
 
-    // Build cumulative series (stacked) — each step adds the previous severity total
-    var maxTotal = 0;
-    var totals = days.map(function(d) {
-        var tot = 0;
-        sevStack.forEach(function(s) { tot += d[s] || 0; });
-        if (tot > maxTotal) maxTotal = tot;
-        return tot;
+    // Per-severity max for the Y scale (lines, not stacked)
+    var maxVal = 1;
+    days.forEach(function(d) {
+        _SEV_ORDER.forEach(function(s) {
+            if ((d[s] || 0) > maxVal) maxVal = d[s];
+        });
     });
-    if (maxTotal === 0) maxTotal = 1;
 
-    // Geometry — match Vendor's proportions (W=600 H=200 ML=30 MR=10 MT=10 MB=40)
+    // Match Vendor exactly (W=600 H=200 ML=30 MR=10 MT=10 MB=40)
     var W = 600, H = 200, ML = 30, MR = 10, MT = 10, MB = 40;
     var cW = W - ML - MR, cH = H - MT - MB;
 
     function xFor(i) { return ML + (i / Math.max(1, days.length - 1)) * cW; }
-    function yFor(v) { return MT + cH - (v / maxTotal) * cH; }
+    function yFor(v) { return MT + cH - (v / maxVal) * cH; }
 
-    // Cardinal spline path through a list of {x,y} points
     function smoothPath(pts) {
         if (pts.length < 2) return "";
         var d = "M" + pts[0].x.toFixed(1) + "," + pts[0].y.toFixed(1);
@@ -1122,48 +1120,36 @@ function _dashTimeline() {
         return d;
     }
 
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%">';
+    // Cap the rendered height so the chart never dominates the dashboard,
+    // even on very wide cards. width:100% keeps it responsive horizontally.
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;max-height:200px;display:block">';
 
-    // Grid lines
+    // Grid lines + Y labels (5 levels)
     for (var g = 0; g <= 4; g++) {
         var gy = MT + cH - (g / 4 * cH);
         svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="#e2e8f0" stroke-width="0.5"/>';
-        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 3) + '" text-anchor="end" font-size="8" fill="#94a3b8">' + Math.round(g / 4 * maxTotal) + '</text>';
+        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 3) + '" text-anchor="end" font-size="8" fill="#94a3b8">' + Math.round(g / 4 * maxVal) + '</text>';
     }
 
-    // Stacked smooth areas — draw from top-of-stack down to the x axis,
-    // and fill each slice from current cumulative to next cumulative.
-    var cumulative = days.map(function() { return 0; });
-    sevStack.forEach(function(sev) {
-        var topPts = [];
-        var prevPts = [];
-        days.forEach(function(d, i) {
-            var v = d[sev] || 0;
-            var next = cumulative[i] + v;
-            topPts.push({ x: xFor(i), y: yFor(next) });
-            prevPts.push({ x: xFor(i), y: yFor(cumulative[i]) });
-            cumulative[i] = next;
+    // One smooth thin line per severity, painted from low → critical so
+    // critical is on top and never gets visually overwritten by lighter
+    // shades crossing through it.
+    _SEV_ORDER.slice().reverse().forEach(function(sev) {
+        var pts = days.map(function(d, i) {
+            return { x: xFor(i), y: yFor(d[sev] || 0) };
         });
-        var topPath = smoothPath(topPts);
-        if (!topPath) return;
-        // Close the area by tracing back along the baseline (no need to
-        // smooth the bottom — these are straight horizontal segments).
-        var areaPath = topPath;
-        for (var j = prevPts.length - 1; j >= 0; j--) {
-            areaPath += " L" + prevPts[j].x.toFixed(1) + "," + prevPts[j].y.toFixed(1);
-        }
-        areaPath += " Z";
-        svg += '<path d="' + areaPath + '" fill="' + colors[sev] + '" fill-opacity="0.85" stroke="none"/>';
+        if (pts.length < 2) return;
+        svg += '<path d="' + smoothPath(pts) + '" fill="none" stroke="' + colors[sev] + '" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>';
     });
 
-    // Triaged cumulative line overlay (scaled to its own max so it stays readable)
+    // Triaged cumulative — distinct from severities (dashed gray-blue)
     var tcum = 0, maxCum = 1;
     var triagedPoints = days.map(function(d) { tcum += d.triaged; if (tcum > maxCum) maxCum = tcum; return tcum; });
     if (tcum > 0) {
         var linePts = triagedPoints.map(function(y, i) {
             return { x: xFor(i), y: MT + cH - (y / maxCum) * cH };
         });
-        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,3"/>';
+        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#94a3b8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,2"/>';
     }
 
     // X axis labels (every ~5 days)
@@ -1174,16 +1160,15 @@ function _dashTimeline() {
 
     svg += '</svg>';
 
-    // Legend — inline row, Vendor style
-    var legend = '<div class="dash-timeline-legend" style="display:flex;gap:8px;justify-content:center;margin-top:6px;font-size:0.7em;flex-wrap:wrap">';
-    sevStack.slice().reverse().forEach(function(sev) {
+    var legend = '<div class="dash-timeline-legend" style="display:flex;gap:10px;justify-content:center;margin-top:4px;font-size:0.7em;flex-wrap:wrap">';
+    _SEV_ORDER.forEach(function(sev) {
         legend += '<span style="display:flex;align-items:center;gap:3px">' +
-            '<span style="width:14px;height:3px;border-radius:1px;background:' + colors[sev] + '"></span>' +
+            '<span style="width:14px;height:2px;border-radius:1px;background:' + colors[sev] + '"></span>' +
             esc(t("sev." + sev)) +
             '</span>';
     });
     legend += '<span style="display:flex;align-items:center;gap:3px">' +
-        '<span style="width:14px;height:0;border-top:2px dashed #16a34a"></span>' +
+        '<span style="width:14px;height:0;border-top:1px dashed #94a3b8"></span>' +
         esc(t("dash.timeline_triaged")) +
         '</span>';
     legend += '</div>';
