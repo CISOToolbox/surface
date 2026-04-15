@@ -30,7 +30,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("surface-backend")
 
-app = FastAPI(title="Surface Backend", version="0.1.2")
+app = FastAPI(title="Surface Backend", version="0.2.0")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

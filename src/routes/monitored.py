@@ -58,6 +58,28 @@ def _validate(kind: str, value: str) -> str:
     return v
 
 
+_VALID_CRITICALITY = {"low", "medium", "high", "critical"}
+
+
+def _clean_tags(tags: list[str] | None) -> list[str]:
+    """Tags are short user-supplied labels — strip whitespace, dedupe,
+    cap length and total count to keep storage tidy."""
+    if not tags:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        v = t.strip()[:30]
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+        if len(out) >= 20:
+            break
+    return out
+
+
 class MonitoredAssetCreate(BaseModel):
     kind: str = Field(..., pattern="^(domain|host|ip_range)$")
     value: str
@@ -66,6 +88,8 @@ class MonitoredAssetCreate(BaseModel):
     enabled: bool = True
     scan_frequency_hours: int = 24
     enabled_scanners: Optional[list[str]] = None
+    tags: Optional[list[str]] = None
+    criticality: Optional[str] = "medium"
 
 
 class MonitoredAssetUpdate(BaseModel):
@@ -76,6 +100,8 @@ class MonitoredAssetUpdate(BaseModel):
     enabled: Optional[bool] = None
     scan_frequency_hours: Optional[int] = None
     enabled_scanners: Optional[list[str]] = None
+    tags: Optional[list[str]] = None
+    criticality: Optional[str] = None
 
 
 def _to_dict(a: MonitoredAsset) -> dict:
@@ -84,6 +110,8 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "notes": a.notes or "", "enabled": a.enabled,
         "scan_frequency_hours": a.scan_frequency_hours,
         "enabled_scanners": list(a.enabled_scanners or []),
+        "tags": list(a.tags or []),
+        "criticality": a.criticality or "medium",
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
     }
 
@@ -126,11 +154,16 @@ async def create_asset(
     else:
         scanners = [s for s in requested if s in SCANNER_REGISTRY and body.kind in SCANNER_REGISTRY[s]["kinds"]]
 
+    crit = (body.criticality or "medium").lower()
+    if crit not in _VALID_CRITICALITY:
+        crit = "medium"
     a = MonitoredAsset(
         kind=body.kind, value=canonical, label=body.label or "",
         notes=body.notes or "", enabled=bool(body.enabled),
         scan_frequency_hours=int(body.scan_frequency_hours or 24),
         enabled_scanners=scanners,
+        tags=_clean_tags(body.tags),
+        criticality=crit,
     )
     db.add(a)
     await db.commit()
@@ -170,6 +203,12 @@ async def update_asset(
             s for s in body.enabled_scanners
             if s in SCANNER_REGISTRY and a.kind in SCANNER_REGISTRY[s]["kinds"]
         ]
+    if body.tags is not None:
+        a.tags = _clean_tags(body.tags)
+    if body.criticality is not None:
+        crit = body.criticality.lower()
+        if crit in _VALID_CRITICALITY:
+            a.criticality = crit
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)

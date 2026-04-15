@@ -558,6 +558,72 @@
 .host-badge-manual { background: #dbeafe; color: #1e40af; }
 .host-badge-off    { background: #f3f4f6; color: #6b7280; }
 .host-badge-scanner{ background: #f0fdf4; color: #166534; margin-right: 4px; }
+/* v0.2 — criticality badges + risk score chip on host cards */
+.host-badge-crit-low      { background: #f0fdf4; color: #166534; }
+.host-badge-crit-medium   { background: #fef9c3; color: #854d0e; }
+.host-badge-crit-high     { background: #ffedd5; color: #9a3412; }
+.host-badge-crit-critical { background: #fee2e2; color: #991b1b; }
+.host-badge-risk {
+    font-weight: 700;
+    color: white;
+    min-width: 28px;
+    text-align: center;
+}
+.host-badge-risk.risk-info     { background: #94a3b8; }
+.host-badge-risk.risk-low      { background: #65a30d; }
+.host-badge-risk.risk-medium   { background: #eab308; color: #1f2937; }
+.host-badge-risk.risk-high     { background: #f97316; }
+.host-badge-risk.risk-critical { background: #b91c1c; }
+.host-card-tags {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin: 4px 0 0;
+}
+.host-tag {
+    display: inline-block;
+    font-size: 0.7em;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: #e0f2fe;
+    color: #075985;
+    font-weight: 500;
+}
+/* v0.2 — scan diff bubbles on jobs list + host timeline */
+.job-diff {
+    margin-top: 2px;
+    font-size: 0.72em;
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+}
+.job-diff-added    { color: #166534; font-weight: 700; }
+.job-diff-reopened { color: #9a3412; font-weight: 700; }
+.job-diff-refreshed{ color: #6b7280; }
+/* v0.2 — host detail per-host scan timeline */
+.host-timeline {
+    border-left: 2px solid var(--border);
+    margin: 8px 0 16px 6px;
+    padding-left: 12px;
+}
+.host-timeline-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 0.82em;
+    border-bottom: 1px dashed var(--border);
+}
+.host-timeline-row:last-child { border-bottom: none; }
+.host-timeline-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+    margin-left: -17px;
+    box-shadow: 0 0 0 3px white;
+}
+.host-timeline-date { color: var(--text-muted); font-family: monospace; min-width: 110px; }
+.host-timeline-status { font-size: 0.85em; }
+.host-timeline-diff { margin-left: auto; display: flex; gap: 6px; }
+.host-timeline-err { color: #dc2626; cursor: help; }
 
 /* ═════════════════════════════════════════════════════════
    BULK ACTION BAR — findings bulk triage

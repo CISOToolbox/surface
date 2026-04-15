@@ -403,6 +403,54 @@ def _hostname_covered_by(cert_details: dict[str, Any], hostname: str) -> bool:
     return False
 
 
+def _reverse_cert_lookup(cert_dict: dict, target: str, max_results: int = 50) -> list[str]:
+    """Query crt.sh for any other hostname that has been issued a cert by
+    the same issuer with the same serial number. Useful to find sibling
+    assets (CDN edges, regional aliases) that share a wildcard cert but
+    are not in the local SAN list. Filtered to the same registrable
+    domain as `target` to stay in scope. Network failure → empty list."""
+    serial = ""
+    issuer = ""
+    issuer_tuples = cert_dict.get("issuer") or ()
+    for entry in issuer_tuples:
+        for k, v in entry:
+            if k == "commonName":
+                issuer = v
+                break
+    serial = (cert_dict.get("serialNumber", "") or "").lower()
+    if not serial and not issuer:
+        return []
+
+    base = _registrable(target)
+    if not base:
+        return []
+
+    out: set[str] = set()
+    try:
+        import httpx
+        # crt.sh accepts a serial query via id parameter or the serial in
+        # hex. Use the keyword search on the registrable domain — cheaper
+        # and gives sibling hosts directly.
+        with httpx.Client(timeout=15.0) as c:
+            r = c.get(f"https://crt.sh/?q=%25.{base}&output=json")
+            if r.status_code != 200:
+                return []
+            for entry in r.json()[:1000]:
+                names = (entry.get("name_value") or "").split("\n")
+                for n in names:
+                    n = n.strip().lower().lstrip("*.")
+                    if not n or n == target.lower():
+                        continue
+                    if not (n == base or n.endswith("." + base)):
+                        continue
+                    out.add(n)
+                    if len(out) >= max_results:
+                        return sorted(out)
+    except Exception as e:
+        logger.info("crt.sh reverse lookup failed: %s", e)
+    return sorted(out)
+
+
 def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
     """Check the TLS certificate validity on port 443 AND extract SAN DNS
     names as discovered hosts (pivoting from one cert to its siblings)."""
@@ -474,6 +522,32 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                 "target": f"{target}:443",
                 "evidence": {"discovered_hosts": discovered},
             })
+
+        # v0.2 — reverse cert lookup: ask crt.sh which OTHER hostnames have
+        # been issued certs by the same issuer + serial. This catches sibling
+        # assets that share the same wildcard cert but are not in the local
+        # SAN list (e.g. CDN edges, regional aliases).
+        try:
+            sibling_hosts = _reverse_cert_lookup(cert, target)
+            if sibling_hosts:
+                # Merge into discovered so the scheduler enrolls them too
+                for h in sibling_hosts:
+                    if h not in discovered:
+                        discovered.append(h)
+                findings.append({
+                    "scanner": "tls", "type": "tls_reverse_cert", "severity": "info",
+                    "title": f"Reverse cert : {len(sibling_hosts)} hostname(s) partagent le cert de {target}",
+                    "description": (
+                        f"crt.sh a identifie {len(sibling_hosts)} autre(s) hostname(s) "
+                        f"emis par le meme issuer/serial. Ils sont ajoutes aux assets "
+                        f"surveilles."
+                    ),
+                    "target": f"{target}:443",
+                    "evidence": {"siblings": sibling_hosts, "source": "crt.sh"},
+                })
+        except Exception as e:
+            logger.info("reverse cert lookup failed for %s: %s", target, e)
+
         return findings, discovered
 
     except (ssl.SSLCertVerificationError, ssl.SSLError) as e:
@@ -2177,6 +2251,482 @@ def scan_domain_ct_logs(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
 #   - a callable: (value: str) -> list[finding_dict] OR (list[finding_dict], list[str])
 #   - the kinds it applies to
 #   - whether it returns discovered hosts (only ip_range scanners do)
+# ═══════════════════════════════════════════════════════════════
+# v0.2 — Tech stack fingerprinting (Wappalyzer-lite)
+# ═══════════════════════════════════════════════════════════════
+#
+# Probes HTTP/HTTPS on the target and tries to identify the underlying
+# stack from response headers, body markers and cookies. Designed to be
+# fast (single GET per scheme/port) and dependency-free — no Wappalyzer
+# binary, no chromium, no JS execution. The signature DB is intentionally
+# small (~30 entries) and covers the products that produce the noisiest
+# CVE feeds — operators who need exhaustive fingerprinting can plug
+# Nuclei templates instead.
+#
+# Each detected product yields a finding of type `tech_fingerprint` with
+# evidence `{product, version, source}` so the cve_lookup helper below
+# can match it without re-parsing.
+
+import re as _re
+
+# Signatures — (product, regex, source_field). source_field is "header",
+# "body" or "cookie". The regex captures the version in group(1) when
+# possible; absent group → version "" (still flagged for inventory).
+_TECH_SIGNATURES: list[tuple[str, str, str, str]] = [
+    # Servers
+    ("nginx",       r"nginx/?([\d.]+)?",                            "Server",      "header"),
+    ("Apache",      r"Apache/?([\d.]+)?",                           "Server",      "header"),
+    ("IIS",         r"Microsoft-IIS/?([\d.]+)?",                    "Server",      "header"),
+    ("LiteSpeed",   r"LiteSpeed",                                   "Server",      "header"),
+    ("Caddy",       r"Caddy",                                       "Server",      "header"),
+    ("Tomcat",      r"Apache-Coyote/?([\d.]+)?",                    "Server",      "header"),
+    ("Cloudflare",  r"cloudflare",                                  "Server",      "header"),
+
+    # App frameworks (X-Powered-By)
+    ("PHP",         r"PHP/?([\d.]+)?",                              "X-Powered-By","header"),
+    ("ASP.NET",     r"ASP\.NET",                                    "X-Powered-By","header"),
+    ("Express",     r"Express",                                     "X-Powered-By","header"),
+    ("Next.js",     r"Next\.js",                                    "X-Powered-By","header"),
+    ("Servlet",     r"Servlet/?([\d.]+)?",                          "X-Powered-By","header"),
+    ("PHP",         r"PHPSESSID",                                   "Set-Cookie",  "cookie"),
+
+    # CMS — body markers
+    ("WordPress",   r'<meta name="generator" content="WordPress ?([\d.]+)?',           "",            "body"),
+    ("Drupal",      r'<meta name="generator" content="Drupal ?([\d.]+)?',              "",            "body"),
+    ("Joomla",      r'<meta name="generator" content="Joomla! ?([\d.]+)?',             "",            "body"),
+    ("TYPO3",       r'<meta name="generator" content="TYPO3 ?CMS ?([\d.]+)?',          "",            "body"),
+    ("Ghost",       r'<meta name="generator" content="Ghost ?([\d.]+)?',               "",            "body"),
+    ("Strapi",      r"X-Strapi",                                    "",            "header_any"),
+
+    # JS frameworks (body inspection)
+    ("React",       r"react(?:-dom)?@?([\d.]+)?",                   "",            "body"),
+    ("Angular",     r"ng-version=\"([\d.]+)?\"",                    "",            "body"),
+    ("Vue.js",      r"vue(?:js)?@?([\d.]+)?",                       "",            "body"),
+
+    # Edge / CDN / WAF
+    ("Akamai",      r"AkamaiGHost",                                 "Server",      "header"),
+    ("Fastly",      r"Fastly",                                      "X-Served-By", "header"),
+    ("Sucuri",      r"Sucuri",                                      "X-Sucuri-ID", "header"),
+
+    # Databases — sometimes leaked in error pages, very rare on prod
+    ("MySQL",       r"MySQL server has gone away|MySQL_(\d+)",      "",            "body"),
+    ("PostgreSQL",  r"PostgreSQL ?([\d.]+)?",                       "",            "body"),
+
+    # Container / orchestration (rare but high signal)
+    ("Kubernetes",  r"kubernetes",                                  "X-Kubernetes-Pod-Name", "header"),
+    ("Traefik",     r"Traefik",                                     "Server",      "header"),
+]
+
+
+def _http_probe(target: str, port: int, scheme: str, timeout: float = 5.0) -> dict[str, Any] | None:
+    """Issue one GET / on (target:port) and return {status, headers, body}.
+    Returns None on connection failure."""
+    import httpx
+    url = f"{scheme}://{target}:{port}/"
+    try:
+        with httpx.Client(verify=False, follow_redirects=False, timeout=timeout) as c:
+            r = c.get(url, headers={"User-Agent": "Surface/0.2 (CISO Toolbox)"})
+            body_snippet = r.text[:8192] if r.text else ""
+            return {
+                "status": r.status_code,
+                "headers": dict(r.headers),
+                "body": body_snippet,
+                "url": url,
+            }
+    except Exception:
+        return None
+
+
+def _match_tech_signatures(probe: dict[str, Any]) -> list[dict[str, str]]:
+    """Run every signature against the probe response. Returns a list of
+    {product, version, source}."""
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    headers = probe.get("headers") or {}
+    body = probe.get("body") or ""
+    # Lowercase header lookup
+    lc_headers = {k.lower(): v for k, v in headers.items()}
+    for product, pattern, header_name, source in _TECH_SIGNATURES:
+        haystack = ""
+        if source == "header":
+            haystack = lc_headers.get(header_name.lower(), "")
+        elif source == "header_any":
+            for v in lc_headers.values():
+                if _re.search(pattern, str(v), _re.IGNORECASE):
+                    haystack = str(v)
+                    break
+            if not haystack and header_name and header_name.lower() in lc_headers:
+                haystack = lc_headers[header_name.lower()]
+        elif source == "cookie":
+            haystack = lc_headers.get("set-cookie", "")
+        elif source == "body":
+            haystack = body
+        if not haystack:
+            continue
+        m = _re.search(pattern, haystack, _re.IGNORECASE)
+        if not m:
+            continue
+        version = ""
+        if m.lastindex and m.group(1):
+            version = m.group(1)
+        # Dedupe by product+version
+        key = product + "|" + version
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({"product": product, "version": version, "source": source})
+    return found
+
+
+def scan_host_techstack(target: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Probe HTTP and HTTPS on the standard ports and emit one
+    `tech_fingerprint` finding per detected product. The detected
+    (product, version) tuples flow into the cve_lookup scanner that
+    runs right after this one (when both are enabled)."""
+    target = _safe_target(target)
+    findings: list[dict[str, Any]] = []
+    seen: dict[str, dict[str, str]] = {}
+
+    for port, scheme in [(80, "http"), (443, "https"), (8080, "http"), (8443, "https")]:
+        probe = _http_probe(target, port, scheme)
+        if not probe:
+            continue
+        for tech in _match_tech_signatures(probe):
+            key = (tech["product"] + "|" + tech["version"]).lower()
+            if key in seen:
+                continue
+            seen[key] = tech
+            label = tech["product"] + (f" {tech['version']}" if tech["version"] else "")
+            findings.append({
+                "scanner": "techstack",
+                "type": "tech_fingerprint",
+                "severity": "info",
+                "title": f"Tech detectee : {label} sur {target}",
+                "description": (
+                    f"Le probe HTTP a identifie {label} via "
+                    f"{tech['source']}. Cette information est passive et sert "
+                    f"d'inventaire — utilisez le scanner cve_lookup pour la "
+                    f"correler aux CVE connus."
+                ),
+                "target": f"{target}:{port}",
+                "evidence": {
+                    "product": tech["product"],
+                    "version": tech["version"],
+                    "source": tech["source"],
+                    "port": port,
+                    "scheme": scheme,
+                    "url": probe.get("url", ""),
+                    "http_status": probe.get("status", 0),
+                },
+            })
+    return findings, []
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.2 — CVE matching + EPSS + CISA KEV enrichment
+# ═══════════════════════════════════════════════════════════════
+#
+# Given the (product, version) tuples produced by the techstack scanner
+# (and any nmap service detection that emits banner data), look up known
+# CVEs via the public NVD JSON 2.0 API, then enrich each CVE with its
+# EPSS probability and a CISA KEV flag. Everything is cached in-process
+# for 24h so the same lookup never hits the network twice in a row.
+#
+# Heavy CVE feeds (full mirrors) are explicitly out of scope — Surface
+# is meant to be a small, self-hostable tool, not a vulnerability
+# database. The lookup is best-effort: if NVD is unreachable, the
+# scanner emits an info finding but never blocks the rest of the scan.
+
+import threading as _threading
+import time as _time
+
+_CVE_CACHE_LOCK = _threading.Lock()
+_CVE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_CVE_CACHE_TTL = 24 * 3600
+
+_EPSS_CACHE: dict[str, float] = {}
+_KEV_CACHE: set[str] = set()
+_KEV_LOADED_AT: float = 0.0
+_KEV_TTL = 24 * 3600
+
+
+def _kev_load() -> set[str]:
+    """Pull CISA's Known Exploited Vulnerabilities catalog (≈1000 CVE IDs).
+    Refreshed once a day. Best-effort — a network failure leaves the
+    previous cached set untouched."""
+    global _KEV_LOADED_AT, _KEV_CACHE
+    now = _time.monotonic()
+    with _CVE_CACHE_LOCK:
+        if _KEV_CACHE and (now - _KEV_LOADED_AT) < _KEV_TTL:
+            return _KEV_CACHE
+    try:
+        import httpx
+        with httpx.Client(timeout=10.0) as c:
+            r = c.get("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json")
+            if r.status_code != 200:
+                return _KEV_CACHE
+            data = r.json()
+        ids = {v.get("cveID", "") for v in (data.get("vulnerabilities") or []) if v.get("cveID")}
+        with _CVE_CACHE_LOCK:
+            _KEV_CACHE = ids
+            _KEV_LOADED_AT = now
+    except Exception as e:
+        logger.warning("kev: fetch failed: %s", e)
+    return _KEV_CACHE
+
+
+def _epss_lookup(cve_ids: list[str]) -> dict[str, float]:
+    """Batch EPSS lookup — POST one request per ~50 CVE IDs to the FIRST
+    EPSS API. Returns {cve_id: probability}. Network failure → empty."""
+    out: dict[str, float] = {}
+    missing = [c for c in cve_ids if c not in _EPSS_CACHE]
+    if missing:
+        try:
+            import httpx
+            with httpx.Client(timeout=10.0) as c:
+                # FIRST EPSS API supports comma-separated cve= param
+                r = c.get("https://api.first.org/data/v1/epss", params={"cve": ",".join(missing[:50])})
+                if r.status_code == 200:
+                    for item in (r.json().get("data") or []):
+                        cid = item.get("cve", "")
+                        try:
+                            _EPSS_CACHE[cid] = float(item.get("epss", 0))
+                        except (TypeError, ValueError):
+                            pass
+        except Exception as e:
+            logger.warning("epss: fetch failed: %s", e)
+    for c in cve_ids:
+        if c in _EPSS_CACHE:
+            out[c] = _EPSS_CACHE[c]
+    return out
+
+
+def _nvd_lookup(product: str, version: str) -> list[dict[str, Any]]:
+    """Query NVD 2.0 for CVEs affecting `product` (optionally version).
+    Returns up to 25 entries sorted by CVSS v3 score desc. Cached 24h."""
+    if not product:
+        return []
+    key = f"{product.lower()}|{version or '*'}"
+    with _CVE_CACHE_LOCK:
+        cached = _CVE_CACHE.get(key)
+        if cached and (_time.monotonic() - cached[0]) < _CVE_CACHE_TTL:
+            return cached[1]
+
+    cves: list[dict[str, Any]] = []
+    try:
+        import httpx
+        # NVD CPE-name search is more accurate when we have a version
+        params: dict[str, Any] = {"keywordSearch": product, "resultsPerPage": 25}
+        if version:
+            params["keywordSearch"] = f"{product} {version}"
+        with httpx.Client(timeout=15.0) as c:
+            r = c.get("https://services.nvd.nist.gov/rest/json/cves/2.0", params=params)
+            if r.status_code != 200:
+                logger.info("nvd: %s for %s", r.status_code, product)
+                with _CVE_CACHE_LOCK:
+                    _CVE_CACHE[key] = (_time.monotonic(), [])
+                return []
+            data = r.json()
+        for item in (data.get("vulnerabilities") or [])[:25]:
+            cve = item.get("cve") or {}
+            cve_id = cve.get("id", "")
+            if not cve_id:
+                continue
+            descs = cve.get("descriptions") or []
+            description = next((d.get("value", "") for d in descs if d.get("lang") == "en"), "")
+            metrics = cve.get("metrics") or {}
+            score = 0.0
+            severity = ""
+            for k in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+                arr = metrics.get(k) or []
+                if arr:
+                    cd = arr[0].get("cvssData") or {}
+                    score = float(cd.get("baseScore", 0))
+                    severity = cd.get("baseSeverity", "") or arr[0].get("baseSeverity", "")
+                    break
+            cves.append({
+                "id": cve_id,
+                "description": description[:500],
+                "score": score,
+                "severity": severity.lower(),
+                "published": cve.get("published", ""),
+            })
+        cves.sort(key=lambda c: c["score"], reverse=True)
+    except Exception as e:
+        logger.warning("nvd: query failed for %s: %s", product, e)
+    with _CVE_CACHE_LOCK:
+        _CVE_CACHE[key] = (_time.monotonic(), cves)
+    return cves
+
+
+def _cvss_to_severity(score: float) -> str:
+    if score >= 9.0:
+        return "critical"
+    if score >= 7.0:
+        return "high"
+    if score >= 4.0:
+        return "medium"
+    if score > 0:
+        return "low"
+    return "info"
+
+
+def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    """For each tech_fingerprint finding produced earlier in the same
+    scanner chain, look up the matching CVEs and emit one `cve_match`
+    finding per CVE (capped to top 5 per product). Each finding carries
+    EPSS + KEV enrichment in its evidence.
+
+    The `prior_findings` list is supplied by `run_enabled_scanners` —
+    it contains every finding emitted by the scanners that ran before
+    cve_lookup on the same target. We pull (product, version) out of
+    each tech_fingerprint evidence and feed the lookups."""
+    target = _safe_target(target)
+    findings: list[dict[str, Any]] = []
+
+    products: list[tuple[str, str]] = []
+    for f in prior_findings or []:
+        if f.get("type") != "tech_fingerprint":
+            continue
+        ev = f.get("evidence") or {}
+        p = ev.get("product", "")
+        v = ev.get("version", "")
+        if p and (p, v) not in products:
+            products.append((p, v))
+
+    if not products:
+        return [{
+            "scanner": "cve_lookup",
+            "type": "cve_no_tech",
+            "severity": "info",
+            "title": f"CVE lookup : aucune tech detectee sur {target}",
+            "description": (
+                f"Aucun finding de type tech_fingerprint trouve pour {target}. "
+                f"Activez le scanner techstack pour amorcer le matching CVE."
+            ),
+            "target": target,
+            "evidence": {"target": target},
+        }], []
+
+    kev = _kev_load()
+    all_cve_ids: list[str] = []
+    by_product: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for product, version in products:
+        cves = _nvd_lookup(product, version)
+        if not cves:
+            continue
+        by_product[(product, version)] = cves[:5]
+        all_cve_ids.extend(c["id"] for c in cves[:5])
+
+    epss = _epss_lookup(all_cve_ids) if all_cve_ids else {}
+
+    for (product, version), cves in by_product.items():
+        for cve in cves:
+            cid = cve["id"]
+            sev = _cvss_to_severity(cve["score"])
+            in_kev = cid in kev
+            epss_score = epss.get(cid)
+            label = product + (f" {version}" if version else "")
+            title = f"{cid} — {label} sur {target}"
+            if in_kev:
+                title = "[KEV] " + title
+                # Bump severity on KEV (actively exploited in the wild)
+                if sev in ("medium", "low"):
+                    sev = "high"
+            description_parts = [
+                f"CVSS : {cve['score']} ({sev})",
+                cve["description"],
+            ]
+            if epss_score is not None:
+                description_parts.append(f"EPSS : {epss_score * 100:.1f}% probabilite d'exploitation publique")
+            if in_kev:
+                description_parts.append("CISA KEV : exploite dans la nature, fixe en priorite")
+            findings.append({
+                "scanner": "cve_lookup",
+                "type": "cve_match",
+                "severity": sev,
+                "title": title,
+                "description": "\n\n".join(description_parts),
+                "target": target,
+                "evidence": {
+                    "cve_id": cid,
+                    "cvss_score": cve["score"],
+                    "cvss_severity": cve["severity"],
+                    "epss": epss_score,
+                    "kev": in_kev,
+                    "product": product,
+                    "version": version,
+                    "published": cve["published"],
+                    "nvd_url": f"https://nvd.nist.gov/vuln/detail/{cid}",
+                },
+            })
+    return findings, []
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.2 — HTTP screenshot capture (optional, env-gated)
+# ═══════════════════════════════════════════════════════════════
+#
+# Visual recon: grab a PNG screenshot of every reachable HTTP root and
+# attach it to a finding so the operator can see what the asset actually
+# looks like without leaving Surface. OFF by default because chromium is
+# a 250 MB dependency — turn on with `SURFACE_ENABLE_SCREENSHOTS=1` after
+# adding `playwright` + `playwright install chromium` to the image.
+#
+# When the dependency is missing the scanner emits a single info finding
+# explaining how to enable it, and never crashes the scan.
+
+def scan_host_screenshot(target: str) -> tuple[list[dict[str, Any]], list[str]]:
+    if os.environ.get("SURFACE_ENABLE_SCREENSHOTS", "") != "1":
+        return [], []
+    target = _safe_target(target)
+    findings: list[dict[str, Any]] = []
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except ImportError:
+        return [{
+            "scanner": "screenshot", "type": "screenshot_disabled", "severity": "info",
+            "title": f"Screenshots desactives sur {target}",
+            "description": (
+                "Le scanner screenshot necessite playwright + chromium. "
+                "Installez-les dans l'image (`pip install playwright && "
+                "playwright install chromium`) puis relancez le scan."
+            ),
+            "target": target, "evidence": {"reason": "playwright not installed"},
+        }], []
+
+    import base64
+    for port, scheme in [(443, "https"), (80, "http")]:
+        url = f"{scheme}://{target}:{port}/"
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                context = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 720})
+                page = context.new_page()
+                page.set_default_timeout(8000)
+                page.goto(url, wait_until="domcontentloaded")
+                title = page.title()[:200]
+                png = page.screenshot(type="png", full_page=False)
+                browser.close()
+            findings.append({
+                "scanner": "screenshot",
+                "type": "screenshot",
+                "severity": "info",
+                "title": f"Screenshot {scheme.upper()} : {title or target}",
+                "description": f"Capture visuelle de {url}",
+                "target": f"{target}:{port}",
+                "evidence": {
+                    "url": url,
+                    "page_title": title,
+                    "png_b64": base64.b64encode(png).decode("ascii"),
+                    "size_bytes": len(png),
+                },
+            })
+        except Exception as e:
+            logger.info("screenshot failed for %s: %s", url, e)
+    return findings, []
+
+
 SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
     "email_security": {
         "label": "Email security (SPF/DMARC/DKIM/MX)",
@@ -2226,6 +2776,25 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "callable": scan_nuclei,
         "returns_discovered": False,
     },
+    "techstack": {
+        "label": "Tech stack fingerprinting",
+        "kinds": {"host"},
+        "callable": scan_host_techstack,
+        "returns_discovered": False,
+    },
+    "screenshot": {
+        "label": "HTTP screenshot capture (optional)",
+        "kinds": {"host"},
+        "callable": scan_host_screenshot,
+        "returns_discovered": False,
+    },
+    "cve_lookup": {
+        "label": "CVE matching (NVD + EPSS + KEV)",
+        "kinds": {"host"},
+        "callable": scan_host_cve_lookup,
+        "returns_discovered": False,
+        "wants_prior_findings": True,
+    },
     "takeover": {
         "label": "Subdomain takeover (CNAME fingerprint)",
         "kinds": {"host", "domain"},
@@ -2255,7 +2824,7 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
 
 DEFAULT_SCANNERS_BY_KIND = {
     "domain": ["email_security", "typosquatting", "tls", "ct_logs", "dns_brute", "takeover"],
-    "host": ["nmap_quick", "tls", "nuclei", "takeover"],
+    "host": ["nmap_quick", "tls", "nuclei", "takeover", "techstack", "cve_lookup"],
     "ip_range": ["discovery"],
 }
 
@@ -2285,7 +2854,13 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str]) -> tuple[lis
             logger.warning("Scanner %s not applicable to kind=%s, skipping", name, kind)
             continue
         try:
-            result = meta["callable"](value)
+            if meta.get("wants_prior_findings"):
+                # Pass a snapshot of everything emitted so far on this scope
+                # so the scanner can chain off it (e.g. cve_lookup reads
+                # tech_fingerprint evidences).
+                result = meta["callable"](value, list(findings))
+            else:
+                result = meta["callable"](value)
             if meta["returns_discovered"]:
                 f, d = result
                 findings.extend(f)

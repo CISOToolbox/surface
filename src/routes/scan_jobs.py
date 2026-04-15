@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user
 from src.database import async_session, get_db
-from src.findings_dedup import insert_many
+from src.findings_dedup import diff_summary, insert_many
 from src.models import Finding, ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.scanners import _parse_nmap_xml, _resolve_safe_target
@@ -104,6 +104,7 @@ async def _run_nmap_job(job_id: uuid.UUID) -> None:
             finding_dicts = _parse_nmap_xml(xml_text, job.target)
             counts = await insert_many(db, finding_dicts)
             job.findings_count = counts.get("inserted", 0) + counts.get("reopened", 0)
+            job.diff = diff_summary(counts)
             job.status = "completed"
         except Exception as e:
             logger.exception("nmap job %s failed", job_id)
@@ -145,6 +146,7 @@ def _to_dict(j: ScanJob) -> dict:
         "status": j.status, "started_at": j.started_at, "completed_at": j.completed_at,
         "findings_count": j.findings_count, "error": j.error or "",
         "triggered_by": j.triggered_by or "", "created_at": j.created_at,
+        "diff": j.diff or {},
     }
 
 

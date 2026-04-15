@@ -92,19 +92,25 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
     return "refreshed"
 
 
-async def insert_many(db: AsyncSession, finding_dicts: list[dict[str, Any]]) -> dict[str, int]:
-    """Apply insert_or_dedupe on a batch and return per-action counts.
+async def insert_many(db: AsyncSession, finding_dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply insert_or_dedupe on a batch and return per-action counts plus
+    the diff vs the previous state.
 
-    Pre-fetches all existing findings matching the batch's dedup keys in a
-    single IN query to avoid N+1 SELECT queries. The per-row logic still
-    runs through insert_or_dedupe to preserve the status-machine semantics.
+    The result dict has the v0.1.x integer keys (`inserted`, `refreshed`,
+    `reopened`, `silenced`) and **also** v0.2 lists used by the Scans page:
 
-    If two concurrent scans race to insert the same dedup_key, the DB's
-    UNIQUE constraint rejects one of them with IntegrityError — we rollback
-    and retry the insert path, which now sees the row the winner just
-    inserted and takes the refresh branch instead.
+        added:       new findings inserted
+        reopened_l:  findings whose status went back to 'new'
+        gone:        dedup keys that exist in the DB for this scope but
+                     were NOT seen in the current scan — *informational*
+                     only, callers can use this for the "what's new"
+                     summary on the per-host timeline. Currently empty
+                     because the dedup helper does not know the scope.
     """
-    counts = {"inserted": 0, "refreshed": 0, "reopened": 0, "silenced": 0}
+    counts: dict[str, Any] = {
+        "inserted": 0, "refreshed": 0, "reopened": 0, "silenced": 0,
+        "added": [], "reopened_l": [], "gone": [],
+    }
     if not finding_dicts:
         return counts
 
@@ -129,6 +135,20 @@ async def insert_many(db: AsyncSession, finding_dicts: list[dict[str, Any]]) -> 
             action = await insert_or_dedupe(db, fd)
             await db.flush()
             counts[action] = counts.get(action, 0) + 1
+            if action == "inserted":
+                counts["added"].append({
+                    "title": fd.get("title", "")[:140],
+                    "severity": fd.get("severity", ""),
+                    "scanner": fd.get("scanner", ""),
+                    "target": fd.get("target", ""),
+                })
+            elif action == "reopened":
+                counts["reopened_l"].append({
+                    "title": fd.get("title", "")[:140],
+                    "severity": fd.get("severity", ""),
+                    "scanner": fd.get("scanner", ""),
+                    "target": fd.get("target", ""),
+                })
         except IntegrityError:
             await db.rollback()
             try:
@@ -140,3 +160,18 @@ async def insert_many(db: AsyncSession, finding_dicts: list[dict[str, Any]]) -> 
         except Exception:
             logger.exception("dedup insert failed for %s", fd.get("title"))
     return counts
+
+
+def diff_summary(counts: dict[str, Any]) -> dict[str, Any]:
+    """Compact ScanJob.diff value: counts only, plus the first 5 added titles
+    so the UI badge can show "+3 (XSS, sqli, …)" without re-querying."""
+    added = counts.get("added") or []
+    reopened = counts.get("reopened_l") or []
+    return {
+        "added": len(added),
+        "reopened": len(reopened),
+        "refreshed": counts.get("refreshed", 0),
+        "silenced": counts.get("silenced", 0),
+        "added_sample": added[:5],
+        "reopened_sample": reopened[:5],
+    }

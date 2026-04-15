@@ -274,7 +274,14 @@ function _renderJobs(c) {
         h += '<td><span class="job-status job-' + esc(j.status) + '">' + _jobStatusLabel(j.status) + '</span>';
         if (j.error) h += '<div style="font-size:0.72em;color:#991b1b;margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
         h += '</td>';
-        h += '<td style="text-align:center;font-weight:600">' + j.findings_count + '</td>';
+        h += '<td style="text-align:center;font-weight:600">' + j.findings_count;
+        if (j.diff && (j.diff.added || j.diff.reopened)) {
+            var diffParts = [];
+            if (j.diff.added)    diffParts.push('<span class="job-diff-added">+' + j.diff.added + '</span>');
+            if (j.diff.reopened) diffParts.push('<span class="job-diff-reopened">↻' + j.diff.reopened + '</span>');
+            h += '<div class="job-diff">' + diffParts.join(" ") + '</div>';
+        }
+        h += '</td>';
         h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc((j.created_at || "").substring(0, 16).replace("T", " ")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
         h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur) + '</td>';
         h += '<td style="white-space:nowrap">';
@@ -643,6 +650,19 @@ function _ensureMonitoredModal() {
                 '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.notes")) + '</label>' +
                     '<textarea class="ct-input" id="monitored-notes" rows="3" placeholder="' + esc(t("mon_modal.notes_ph")) + '"></textarea>' +
                 '</div>' +
+                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.criticality")) + '</label>' +
+                    '<select class="ct-input" id="monitored-criticality">' +
+                        '<option value="low">' + esc(t("mon_modal.crit_low")) + '</option>' +
+                        '<option value="medium" selected>' + esc(t("mon_modal.crit_medium")) + '</option>' +
+                        '<option value="high">' + esc(t("mon_modal.crit_high")) + '</option>' +
+                        '<option value="critical">' + esc(t("mon_modal.crit_critical")) + '</option>' +
+                    '</select>' +
+                    '<div class="ct-field-help">' + esc(t("mon_modal.criticality_help")) + '</div>' +
+                '</div>' +
+                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.tags")) + '</label>' +
+                    '<input type="text" class="ct-input" id="monitored-tags" placeholder="' + esc(t("mon_modal.tags_ph")) + '">' +
+                    '<div class="ct-field-help">' + esc(t("mon_modal.tags_help")) + '</div>' +
+                '</div>' +
                 '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.frequency")) + '</label>' +
                     '<select class="ct-input" id="monitored-frequency">' +
                         '<option value="1">1 h</option>' +
@@ -721,6 +741,8 @@ window._newMonitoredDialog = function() {
     document.getElementById("monitored-notes").value = "";
     document.getElementById("monitored-enabled").checked = true;
     document.getElementById("monitored-frequency").value = "24";
+    document.getElementById("monitored-criticality").value = "medium";
+    document.getElementById("monitored-tags").value = "";
     document.getElementById("monitored-error").style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(null);
@@ -744,6 +766,8 @@ window._editMonitoredDialog = function(id) {
     document.getElementById("monitored-notes").value = a.notes || "";
     document.getElementById("monitored-enabled").checked = !!a.enabled;
     document.getElementById("monitored-frequency").value = String(a.scan_frequency_hours != null ? a.scan_frequency_hours : 24);
+    document.getElementById("monitored-criticality").value = a.criticality || "medium";
+    document.getElementById("monitored-tags").value = (a.tags || []).join(", ");
     document.getElementById("monitored-error").style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(a.enabled_scanners || null);
@@ -761,6 +785,8 @@ window._saveMonitored = function() {
     document.querySelectorAll("#monitored-scanners input[type=checkbox]:checked").forEach(function(cb) {
         enabledScanners.push(cb.value);
     });
+    var rawTags = (document.getElementById("monitored-tags").value || "")
+        .split(",").map(function(s) { return s.trim(); }).filter(Boolean);
     var data = {
         kind: sel ? sel.value : "domain",
         value: document.getElementById("monitored-value").value.trim(),
@@ -769,6 +795,8 @@ window._saveMonitored = function() {
         enabled: document.getElementById("monitored-enabled").checked,
         scan_frequency_hours: parseInt(document.getElementById("monitored-frequency").value, 10),
         enabled_scanners: enabledScanners,
+        criticality: document.getElementById("monitored-criticality").value || "medium",
+        tags: rawTags,
     };
     var err = document.getElementById("monitored-error");
     err.style.display = "none";
@@ -1115,6 +1143,30 @@ function _renderDashboard(c) {
     h += '</div>';
 
     c.innerHTML = h;
+}
+
+// v0.2 — per-asset risk score = severity-weighted active findings × business
+// criticality. Returns 0–100. The weights mirror the Surface dashboard
+// gradient: critical hurts 10×, high 5×, medium 2×, low/info 0. Multiplying
+// by the criticality factor (1–4) lets a "critical" asset bubble up even
+// with fewer findings than a "low" asset that has many medium findings.
+var _CRIT_FACTOR = { low: 1, medium: 2, high: 3, critical: 4 };
+function _riskScoreFor(asset, counts) {
+    if (!counts) return 0;
+    var raw = (counts.critical || 0) * 10
+            + (counts.high     || 0) * 5
+            + (counts.medium   || 0) * 2
+            + (counts.low      || 0) * 0.5;
+    var crit = _CRIT_FACTOR[(asset && asset.criticality) || "medium"] || 2;
+    var score = raw * crit;
+    return Math.min(100, Math.round(score));
+}
+function _riskTier(score) {
+    if (score >= 70) return { lvl: "critical", lbl: t("risk.tier_critical") };
+    if (score >= 40) return { lvl: "high",     lbl: t("risk.tier_high") };
+    if (score >= 15) return { lvl: "medium",   lbl: t("risk.tier_medium") };
+    if (score > 0)   return { lvl: "low",      lbl: t("risk.tier_low") };
+    return                  { lvl: "info",     lbl: t("risk.tier_clean") };
 }
 
 function _statCard(value, label, cls) {
@@ -2527,14 +2579,27 @@ function _refreshHostCards() {
         var counts = _countFindingsByHost(a.value);
         var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
         var last = a.last_scan_at ? a.last_scan_at.substring(0, 16).replace("T", " ") : t("monitored.last.never");
+        var score = _riskScoreFor(a, counts);
+        var tier = _riskTier(score);
         h += '<div class="host-card" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
         h += '<div class="host-card-top">';
         h += '<div class="host-card-value">' + esc(a.value) + '</div>';
         if (!a.enabled) h += '<span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>';
         if (autoDiscovered) h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
         else h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
+        if (a.criticality && a.criticality !== "medium") {
+            h += '<span class="host-badge host-badge-crit-' + esc(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
+        }
+        h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + '</span>';
         h += '</div>';
         if (a.label) h += '<div class="host-card-label">' + esc(a.label) + '</div>';
+        if (a.tags && a.tags.length) {
+            h += '<div class="host-card-tags">';
+            a.tags.forEach(function(tag) {
+                h += '<span class="host-tag">' + esc(tag) + '</span>';
+            });
+            h += '</div>';
+        }
         h += '<div class="host-card-meta">' + esc(t("hosts.last_scan")) + ' : ' + esc(last) + '</div>';
         if (counts.active) {
             h += '<div class="host-card-findings">';
@@ -2593,11 +2658,17 @@ function _renderHostDetail(c) {
     var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
     var last = a.last_scan_at ? a.last_scan_at.substring(0, 19).replace("T", " ") : t("monitored.last.never");
 
+    var score = _riskScoreFor(a, counts);
+    var tier = _riskTier(score);
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<button class="btn-add btn-icon" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back")) + '</button>';
     h += '<h2 style="margin:0;flex:1">' + esc(a.value) + '</h2>';
     if (autoDiscovered) h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
     else h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
+    if (a.criticality && a.criticality !== "medium") {
+        h += '<span class="host-badge host-badge-crit-' + esc(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
+    }
+    h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + ' — ' + esc(tier.lbl) + '</span>';
     h += '</div>';
 
     // Info card
@@ -2620,6 +2691,34 @@ function _renderHostDetail(c) {
     h += '<span style="flex:1"></span>';
     h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
     h += '</div>';
+
+    // Per-host scan timeline — list the last 8 scan jobs that targeted
+    // this asset, newest first. Each entry shows the scanner, the time
+    // delta, and the diff bubble (+N / ↻N) so the operator can see at
+    // a glance what changed between runs.
+    var hostJobs = (_jobs || []).filter(function(j) { return j.target === a.value; }).slice(0, 8);
+    if (hostJobs.length) {
+        h += '<h3 style="margin-top:20px">' + esc(t("host.scan_history")) + '</h3>';
+        h += '<div class="host-timeline">';
+        hostJobs.forEach(function(j) {
+            var dateStr = (j.created_at || "").substring(0, 16).replace("T", " ");
+            var diff = j.diff || {};
+            h += '<div class="host-timeline-row">';
+            h += '<span class="host-timeline-dot"></span>';
+            h += '<span class="host-timeline-date">' + esc(dateStr) + '</span>';
+            h += '<span class="scanner-badge scanner-' + esc((j.scanner||"").replace(/[^a-z0-9]/g,"-")) + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
+            h += '<span class="host-timeline-status job-status job-' + esc(j.status) + '">' + esc(_jobStatusLabel(j.status)) + '</span>';
+            var bits = [];
+            if (diff.added)    bits.push('<span class="job-diff-added">+' + diff.added + '</span>');
+            if (diff.reopened) bits.push('<span class="job-diff-reopened">↻' + diff.reopened + '</span>');
+            if (diff.refreshed) bits.push('<span class="job-diff-refreshed">~' + diff.refreshed + '</span>');
+            if (bits.length) h += '<span class="host-timeline-diff">' + bits.join(" ") + '</span>';
+            else h += '<span class="host-timeline-diff text-muted">—</span>';
+            if (j.error) h += '<span class="host-timeline-err" title="' + esc(j.error) + '">' + _icon("alert", 12) + '</span>';
+            h += '</div>';
+        });
+        h += '</div>';
+    }
 
     // Findings summary + list. Severity stats count only active findings
     // (new / to_fix). False positives and fixed are kept as separate tiles

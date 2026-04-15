@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from src.database import async_session
-from src.findings_dedup import insert_many
+from src.findings_dedup import diff_summary, insert_many
 from src.models import Finding, MonitoredAsset, ScanJob
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, run_enabled_scanners
 
@@ -78,6 +78,7 @@ async def _scan_one(asset_id) -> None:
         if asset is None or job is None:
             return
         dedup_counts = await insert_many(db, findings)
+        job.diff = diff_summary(dedup_counts)
 
         # Auto-add discovered hosts to monitored_assets if not already present.
         # Dedup against BOTH host and domain kinds (a hostname from CT / SAN

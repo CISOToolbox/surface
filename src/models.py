@@ -126,6 +126,10 @@ class ScanJob(Base):
     error = Column(Text, nullable=True, default="")
     raw_output = Column(Text, nullable=True, default="")
     triggered_by = Column(String(255), nullable=True, default="")
+    # v0.2: scan-to-scan diff. Populated by findings_dedup.insert_many() so
+    # the Scans page can show "+3 / -1" badges and the per-host timeline can
+    # render a per-run summary without re-querying every finding.
+    diff = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
 
 
@@ -142,6 +146,13 @@ class MonitoredAsset(Base):
     enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     scan_frequency_hours = Column(Integer, nullable=False, default=24, server_default=text("24"))
     enabled_scanners = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    # v0.2: free-form tags + business criticality so the operator can rank
+    # what to fix first. `tags` is a JSON array of short strings (e.g.
+    # ["production", "pci-scope", "customer-facing"]). `criticality` is the
+    # business value of the asset (low|medium|high|critical) used by the
+    # per-asset risk score.
+    tags = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    criticality = Column(String(20), nullable=False, default="medium", server_default=text("'medium'"))
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
