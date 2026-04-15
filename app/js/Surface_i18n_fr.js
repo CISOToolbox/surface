@@ -249,6 +249,7 @@ if (typeof _registerTranslations === "function") {
         "host.delete":             "Supprimer",
         "host.findings_title":     "Findings associés",
         "host.findings_empty":     "Aucun finding associé à ce host. Lancez un scan pour en générer.",
+        "host.hide_fp":            "Masquer les {n} faux positif(s)",
         "host.delete_confirm":     "Supprimer ce host ? Les findings associés resteront dans la base mais ne seront plus rattachés à un asset surveillé.",
 
         // ── Findings panel ─────────────────────────────────
@@ -332,6 +333,8 @@ if (typeof _registerTranslations === "function") {
         "jobs.status.failed":   "Échoué",
         "jobs.empty":           "Aucun scan n'a ete lance. Cliquez sur + Nouveau scan pour commencer.",
         "jobs.no_match":        "Aucun scan ne correspond aux filtres.",
+        "jobs.rerun":           "Relancer",
+        "jobs.rerun_started":   "Nouveau scan lancé sur {target}",
         "jobs.source.manual":   "manuel",
         "jobs.source.auto":     "auto",
         "jobs.new_title":       "Nouveau scan manuel (nmap)",

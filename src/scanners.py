@@ -130,6 +130,19 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
     return locked, t
 
 
+def _is_ip_literal(value: str) -> bool:
+    """True when `value` is a bare IPv4/IPv6 literal (no hostname, no port)."""
+    bare = (value or "").strip()
+    # Strip square brackets around IPv6 literals (e.g. "[::1]")
+    if bare.startswith("[") and bare.endswith("]"):
+        bare = bare[1:-1]
+    try:
+        ipaddress.ip_address(bare)
+        return True
+    except ValueError:
+        return False
+
+
 def _check_ip_allowed(ip: ipaddress._BaseAddress, original: str) -> None:
     """Raise ValueError if the IP is on the blocklist. Allows public + private LAN."""
     ip_str = str(ip)
@@ -515,7 +528,12 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                 "target": f"{target}:443",
                 "evidence": {**details, "error": err_str},
             })
-        elif not hostname_ok and sans:
+        elif not hostname_ok and sans and not _is_ip_literal(target):
+            # Only flag hostname mismatch when the target is actually a DNS
+            # name. If the operator scans a bare IP, the cert is inherently
+            # issued for the hostname(s) in its SAN — a mismatch against the
+            # IP is expected and not a security finding (it's the same
+            # behaviour `openssl s_client` would produce).
             findings.append({
                 "scanner": "tls", "type": "tls_hostname_mismatch", "severity": "high",
                 "title": f"Certificat TLS ne couvre pas {target}",

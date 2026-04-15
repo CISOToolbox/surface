@@ -249,6 +249,7 @@ if (typeof _registerTranslations === "function") {
         "host.delete":             "Delete",
         "host.findings_title":     "Associated findings",
         "host.findings_empty":     "No finding associated with this host. Run a scan to generate some.",
+        "host.hide_fp":            "Hide {n} false positive(s)",
         "host.delete_confirm":     "Delete this host? Associated findings will stay in the DB but won't be linked to a monitored asset anymore.",
 
         // ── Findings panel ─────────────────────────────────
@@ -332,6 +333,8 @@ if (typeof _registerTranslations === "function") {
         "jobs.status.failed":   "Failed",
         "jobs.empty":           "No scan has been run. Click + New scan to start.",
         "jobs.no_match":        "No scan matches the filters.",
+        "jobs.rerun":           "Rerun",
+        "jobs.rerun_started":   "New scan started on {target}",
         "jobs.source.manual":   "manual",
         "jobs.source.auto":     "auto",
         "jobs.new_title":       "New manual scan (nmap)",

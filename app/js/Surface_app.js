@@ -104,6 +104,7 @@ var _filterSeverities = [];  // multi-select; empty = all
 var _filterScanners = [];    // multi-select; empty = all
 var _selectedFinding = null;
 var _selectedHost = null;    // MonitoredAsset object, set when user clicks a host card
+var _hostHideFP = true;      // Host detail: hide false-positive findings by default
 var _hostSearch = "";        // free-text filter for the Hosts panel
 var _bulkSelection = {};     // { [finding_id]: true } — checked rows in findings table
 var _monitoredSearch = "";   // free-text search for the Surveillance panel
@@ -261,7 +262,13 @@ function _renderJobs(c) {
         h += '<td style="text-align:center;font-weight:600">' + j.findings_count + '</td>';
         h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc((j.created_at || "").substring(0, 16).replace("T", " ")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
         h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur) + '</td>';
-        h += '<td><button class="btn-mini" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button></td>';
+        h += '<td style="white-space:nowrap">';
+        // Rerun: only sensible for nmap jobs (the only scanner that accepts a direct create-job call today)
+        if (j.scanner === "nmap" && j.status !== "pending" && j.status !== "running") {
+            h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
+        }
+        h += '<button class="btn-mini" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
+        h += '</td>';
         h += '</tr>';
     });
     h += '</tbody></table>';
@@ -294,6 +301,17 @@ window._deleteJob = function(id) {
         showStatus(t("action.delete"));
         _loadAndRender();
     }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+};
+
+window._rerunJob = function(id) {
+    var job = _jobs.find(function(j) { return j.id === id; });
+    if (!job) return;
+    SurfaceAPI.createJob({ target: job.target, profile: job.profile || "quick" })
+        .then(function() {
+            showStatus(t("jobs.rerun_started").replace("{target}", job.target));
+            _loadAndRender();
+        })
+        .catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
 
 function _ensureJobModal() {
@@ -1057,18 +1075,6 @@ function _dashBanner(stats, recent24) {
 // ── B. Timeline 30 days ───────────────────────────────────────
 function _dashTimeline() {
     var days = _timelineDaily(30);
-    var maxTotal = 1;
-    days.forEach(function(d) {
-        var tot = d.critical + d.high + d.medium + d.low + d.info;
-        if (tot > maxTotal) maxTotal = tot;
-    });
-
-    var W = 700, H = 140, PAD_LEFT = 36, PAD_BOT = 22, PAD_TOP = 10;
-    var plotW = W - PAD_LEFT - 10;
-    var plotH = H - PAD_TOP - PAD_BOT;
-    var barW = Math.max(8, plotW / days.length - 2);
-    var barGap = plotW / days.length - barW;
-
     var colors = {
         critical: "#dc2626",
         high:     "#ea580c",
@@ -1076,53 +1082,110 @@ function _dashTimeline() {
         low:      "#3b82f6",
         info:     "#9ca3af",
     };
+    // Reverse so critical is at the top of the stack (highest severity on top)
+    var sevStack = _SEV_ORDER.slice().reverse();
 
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" class="dash-timeline">';
-    // Y axis baseline
-    svg += '<line x1="' + PAD_LEFT + '" y1="' + (H - PAD_BOT) + '" x2="' + (W - 10) + '" y2="' + (H - PAD_BOT) + '" stroke="#e5e7eb"/>';
-    // Y axis label (max)
-    svg += '<text x="' + (PAD_LEFT - 6) + '" y="' + (PAD_TOP + 8) + '" text-anchor="end" font-size="10" fill="#9ca3af">' + maxTotal + '</text>';
-    svg += '<text x="' + (PAD_LEFT - 6) + '" y="' + (H - PAD_BOT - 2) + '" text-anchor="end" font-size="10" fill="#9ca3af">0</text>';
+    // Build cumulative series (stacked) — each step adds the previous severity total
+    var maxTotal = 0;
+    var totals = days.map(function(d) {
+        var tot = 0;
+        sevStack.forEach(function(s) { tot += d[s] || 0; });
+        if (tot > maxTotal) maxTotal = tot;
+        return tot;
+    });
+    if (maxTotal === 0) maxTotal = 1;
 
-    // Stacked bars
-    days.forEach(function(d, idx) {
-        var x = PAD_LEFT + idx * (barW + barGap);
-        var yCursor = H - PAD_BOT;
-        _SEV_ORDER.forEach(function(sev) {
-            var v = d[sev];
-            if (!v) return;
-            var height = Math.round(v / maxTotal * plotH);
-            if (height < 1) height = 1;
-            yCursor -= height;
-            svg += '<rect x="' + x.toFixed(1) + '" y="' + yCursor.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + height + '" fill="' + colors[sev] + '"><title>' + d.label + ' — ' + sev + ': ' + v + '</title></rect>';
-        });
-        // X label every ~5 days
-        if (idx % 5 === 0 || idx === days.length - 1) {
-            svg += '<text x="' + (x + barW / 2).toFixed(1) + '" y="' + (H - PAD_BOT + 14) + '" text-anchor="middle" font-size="9" fill="#9ca3af">' + d.label + '</text>';
+    // Geometry — match Vendor's proportions (W=600 H=200 ML=30 MR=10 MT=10 MB=40)
+    var W = 600, H = 200, ML = 30, MR = 10, MT = 10, MB = 40;
+    var cW = W - ML - MR, cH = H - MT - MB;
+
+    function xFor(i) { return ML + (i / Math.max(1, days.length - 1)) * cW; }
+    function yFor(v) { return MT + cH - (v / maxTotal) * cH; }
+
+    // Cardinal spline path through a list of {x,y} points
+    function smoothPath(pts) {
+        if (pts.length < 2) return "";
+        var d = "M" + pts[0].x.toFixed(1) + "," + pts[0].y.toFixed(1);
+        for (var i = 0; i < pts.length - 1; i++) {
+            var p0 = pts[Math.max(i - 1, 0)];
+            var p1 = pts[i];
+            var p2 = pts[i + 1];
+            var p3 = pts[Math.min(i + 2, pts.length - 1)];
+            var cp1x = p1.x + (p2.x - p0.x) / 6;
+            var cp1y = Math.min(p1.y + (p2.y - p0.y) / 6, MT + cH);
+            var cp2x = p2.x - (p3.x - p1.x) / 6;
+            var cp2y = Math.min(p2.y - (p3.y - p1.y) / 6, MT + cH);
+            d += " C" + cp1x.toFixed(1) + "," + cp1y.toFixed(1)
+               + " "  + cp2x.toFixed(1) + "," + cp2y.toFixed(1)
+               + " "  + p2.x.toFixed(1) + "," + p2.y.toFixed(1);
         }
+        return d;
+    }
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%">';
+
+    // Grid lines
+    for (var g = 0; g <= 4; g++) {
+        var gy = MT + cH - (g / 4 * cH);
+        svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="#e2e8f0" stroke-width="0.5"/>';
+        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 3) + '" text-anchor="end" font-size="8" fill="#94a3b8">' + Math.round(g / 4 * maxTotal) + '</text>';
+    }
+
+    // Stacked smooth areas — draw from top-of-stack down to the x axis,
+    // and fill each slice from current cumulative to next cumulative.
+    var cumulative = days.map(function() { return 0; });
+    sevStack.forEach(function(sev) {
+        var topPts = [];
+        var prevPts = [];
+        days.forEach(function(d, i) {
+            var v = d[sev] || 0;
+            var next = cumulative[i] + v;
+            topPts.push({ x: xFor(i), y: yFor(next) });
+            prevPts.push({ x: xFor(i), y: yFor(cumulative[i]) });
+            cumulative[i] = next;
+        });
+        var topPath = smoothPath(topPts);
+        if (!topPath) return;
+        // Close the area by tracing back along the baseline (no need to
+        // smooth the bottom — these are straight horizontal segments).
+        var areaPath = topPath;
+        for (var j = prevPts.length - 1; j >= 0; j--) {
+            areaPath += " L" + prevPts[j].x.toFixed(1) + "," + prevPts[j].y.toFixed(1);
+        }
+        areaPath += " Z";
+        svg += '<path d="' + areaPath + '" fill="' + colors[sev] + '" fill-opacity="0.85" stroke="none"/>';
     });
 
-    // Triaged line overlay (cumulative)
-    var cum = 0, maxCum = 1;
-    var triagedPoints = days.map(function(d) { cum += d.triaged; if (cum > maxCum) maxCum = cum; return cum; });
-    if (cum > 0) {
-        var path = "";
-        triagedPoints.forEach(function(y, idx) {
-            var px = PAD_LEFT + idx * (barW + barGap) + barW / 2;
-            var py = (H - PAD_BOT) - (y / maxCum) * plotH;
-            path += (idx === 0 ? "M" : "L") + px.toFixed(1) + " " + py.toFixed(1);
+    // Triaged cumulative line overlay (scaled to its own max so it stays readable)
+    var tcum = 0, maxCum = 1;
+    var triagedPoints = days.map(function(d) { tcum += d.triaged; if (tcum > maxCum) maxCum = tcum; return tcum; });
+    if (tcum > 0) {
+        var linePts = triagedPoints.map(function(y, i) {
+            return { x: xFor(i), y: MT + cH - (y / maxCum) * cH };
         });
-        svg += '<path d="' + path + '" fill="none" stroke="#16a34a" stroke-width="2"/>';
+        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,3"/>';
     }
+
+    // X axis labels (every ~5 days)
+    days.forEach(function(d, i) {
+        if (i % 5 !== 0 && i !== days.length - 1) return;
+        svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 14) + '" text-anchor="middle" font-size="8" fill="#94a3b8">' + esc(d.label) + '</text>';
+    });
 
     svg += '</svg>';
 
-    // Legend
-    var legend = '<div class="dash-timeline-legend">';
-    _SEV_ORDER.forEach(function(sev) {
-        legend += '<span class="dash-legend-item"><span class="dash-legend-sq" style="background:' + colors[sev] + '"></span>' + esc(t("sev." + sev)) + '</span>';
+    // Legend — inline row, Vendor style
+    var legend = '<div class="dash-timeline-legend" style="display:flex;gap:8px;justify-content:center;margin-top:6px;font-size:0.7em;flex-wrap:wrap">';
+    sevStack.slice().reverse().forEach(function(sev) {
+        legend += '<span style="display:flex;align-items:center;gap:3px">' +
+            '<span style="width:14px;height:3px;border-radius:1px;background:' + colors[sev] + '"></span>' +
+            esc(t("sev." + sev)) +
+            '</span>';
     });
-    legend += '<span class="dash-legend-item"><span class="dash-legend-line" style="background:#16a34a"></span>' + esc(t("dash.timeline_triaged")) + '</span>';
+    legend += '<span style="display:flex;align-items:center;gap:3px">' +
+        '<span style="width:14px;height:0;border-top:2px dashed #16a34a"></span>' +
+        esc(t("dash.timeline_triaged")) +
+        '</span>';
     legend += '</div>';
 
     return '<div class="dash-card dash-card-full">' +
@@ -2482,10 +2545,13 @@ function _renderHostDetail(c) {
         h += '</div>';
     }
 
-    var hostFindings = _findings.filter(function(f) {
+    var hostFindingsAll = _findings.filter(function(f) {
         var tgt = f.target || "";
         return tgt === a.value || tgt.indexOf(a.value + ":") === 0;
     });
+    var fpCount = hostFindingsAll.filter(function(f) { return f.status === "false_positive"; }).length;
+    var hostFindings = _hostHideFP ? hostFindingsAll.filter(function(f) { return f.status !== "false_positive"; }) : hostFindingsAll;
+
     // Sort: severity desc, then date desc
     var sevOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
     hostFindings.sort(function(f1, f2) {
@@ -2493,6 +2559,14 @@ function _renderHostDetail(c) {
         if (d !== 0) return d;
         return (f2.created_at || "").localeCompare(f1.created_at || "");
     });
+
+    if (fpCount > 0) {
+        h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:0.85em;color:var(--text-muted)">';
+        h += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">';
+        h += '<input type="checkbox"' + (_hostHideFP ? " checked" : "") + ' data-change="_toggleHostHideFP">';
+        h += esc(t("host.hide_fp").replace("{n}", fpCount));
+        h += '</label></div>';
+    }
 
     if (!hostFindings.length) {
         h += '<div class="empty-state">' + esc(t("host.findings_empty")) + '</div>';
@@ -2546,6 +2620,12 @@ function _renderHostDetail(c) {
 
     c.innerHTML = h;
 }
+
+window._toggleHostHideFP = function() {
+    _hostHideFP = !_hostHideFP;
+    _bulkSelection = {};
+    renderPanel();
+};
 
 window._toggleHostBulkAll = function() {
     var el = document.getElementById("host-bulk-select-all");
