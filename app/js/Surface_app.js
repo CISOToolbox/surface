@@ -263,8 +263,10 @@ function _renderJobs(c) {
         h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc((j.created_at || "").substring(0, 16).replace("T", " ")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
         h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur) + '</td>';
         h += '<td style="white-space:nowrap">';
-        // Rerun: only sensible for nmap jobs (the only scanner that accepts a direct create-job call today)
-        if (j.scanner === "nmap" && j.status !== "pending" && j.status !== "running") {
+        // Rerun is offered on every completed/failed job. The handler picks
+        // the right path: manual nmap → POST /scans/jobs, scheduled jobs →
+        // POST /monitored-assets/{id}/scan based on target match.
+        if (j.status !== "pending" && j.status !== "running") {
             h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
         }
         h += '<button class="btn-mini" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
@@ -306,12 +308,28 @@ window._deleteJob = function(id) {
 window._rerunJob = function(id) {
     var job = _jobs.find(function(j) { return j.id === id; });
     if (!job) return;
-    SurfaceAPI.createJob({ target: job.target, profile: job.profile || "quick" })
-        .then(function() {
-            showStatus(t("jobs.rerun_started").replace("{target}", job.target));
-            _loadAndRender();
-        })
-        .catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    var ok = function() {
+        showStatus(t("jobs.rerun_started").replace("{target}", job.target));
+        _loadAndRender();
+    };
+    var fail = function(e) { showStatus(e.message || t("common.error"), true); };
+
+    // Manual nmap jobs replay through the create-job endpoint.
+    if (job.scanner === "nmap") {
+        SurfaceAPI.createJob({ target: job.target, profile: job.profile || "quick" }).then(ok).catch(fail);
+        return;
+    }
+    // Scheduled jobs (scheduled-host / scheduled-domain / scheduled-discovery)
+    // are bound to a MonitoredAsset — find it by value and trigger its
+    // /scan endpoint, which kicks off the same scanner pipeline as the
+    // scheduler tick.
+    var asset = (_monitored || []).find(function(a) { return a.value === job.target; });
+    if (asset) {
+        SurfaceAPI.scanMonitored(asset.id).then(ok).catch(fail);
+        return;
+    }
+    // Fallback: try a quick port scan
+    SurfaceAPI.quickScan(job.target).then(ok).catch(fail);
 };
 
 function _ensureJobModal() {
