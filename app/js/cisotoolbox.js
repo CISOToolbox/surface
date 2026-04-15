@@ -44,6 +44,40 @@ function badge(text, color) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// CT_ICONS — Shared inline SVG icon set (Lucide-style)
+// ═══════════════════════════════════════════════════════════════════════
+// Single-color stroke icons that inherit currentColor. Usage:
+//   _icon("plus")                  // 1em, inherits color
+//   _icon("trash", 18)             // 18px square
+//   _icon("pencil", 16, "danger")  // custom class alongside .ct-icon
+// Apps should style with .ct-icon { vertical-align:-0.15em } and size
+// via parent font-size or the size argument.
+
+var CT_ICONS = {
+    "plus":      '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    "minus":     '<line x1="5" y1="12" x2="19" y2="12"/>',
+    "check":     '<polyline points="20 6 9 17 4 12"/>',
+    "x":         '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    "upload":    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+    "download":  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    "clipboard": '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    "shield":    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>',
+    "pencil":    '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>',
+    "copy":      '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    "trash":     '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>',
+    "search":    '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+    "settings":  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    "alert":     '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+};
+function _icon(name, size, extraClass) {
+    var p = CT_ICONS[name];
+    if (!p) return "";
+    var s = size ? ('width="' + size + '" height="' + size + '"') : 'width="1em" height="1em"';
+    var cls = 'ct-icon' + (extraClass ? ' ' + extraClass : '');
+    return '<svg class="' + cls + '" ' + s + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // CT_COLORS — Centralized color palette for all apps
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -148,6 +182,278 @@ function confColor(v) {
 
 function _noop() {}
 window._noop = _noop;
+
+// ═══════════════════════════════════════════════════════════════════════
+// CT_VIZ — Inline SVG helpers for Pilot dashboard (and any other app
+// that needs lightweight data visualisations without a charting library)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// All helpers return a self-contained <svg>…</svg> string and use
+// CT_COLORS for the palette. They are deliberately compact and
+// opinionated — if you need flexibility, compose several of them.
+//
+// See shared/docs/pilot-dashboard-contract.md for the data shapes
+// each helper expects.
+
+function _svgEsc(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+// ── Gauge ─────────────────────────────────────────────────────────
+// Circular gauge with a value label in the centre.
+//   value: current value
+//   max:   upper bound
+//   opts:  { size, color, label, sublabel, thickness }
+function _svgGauge(value, max, opts) {
+    opts = opts || {};
+    var size = opts.size || 120;
+    var thickness = opts.thickness || 10;
+    var pct = Math.max(0, Math.min(1, (max > 0 ? value / max : 0)));
+    var color = (CT_COLORS[opts.color || _postureColor(value, max)] || CT_COLORS.blue).vivid;
+    var r = (size - thickness) / 2;
+    var cx = size / 2, cy = size / 2;
+    var C = 2 * Math.PI * r;
+    var dash = C * pct;
+    var label = opts.label != null ? opts.label : Math.round(value) + (max === 100 ? "%" : "");
+    var sub = opts.sublabel || "";
+    var h = '<svg class="ct-svg-gauge" viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="' + size + '" role="img" aria-label="' + _svgEsc(label + " / " + max) + '">';
+    // Background ring
+    h += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + CT_COLORS.gray.bg + '" stroke-width="' + thickness + '"/>';
+    // Value arc (starts at top, rotates -90deg)
+    h += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="' + thickness + '" stroke-linecap="round" stroke-dasharray="' + dash + ' ' + C + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"/>';
+    // Centre label
+    h += '<text x="' + cx + '" y="' + (cy + 6) + '" text-anchor="middle" font-size="' + (size * 0.28) + '" font-weight="700" fill="' + CT_COLORS.dark.vivid + '">' + _svgEsc(label) + '</text>';
+    if (sub) {
+        h += '<text x="' + cx + '" y="' + (cy + size * 0.24) + '" text-anchor="middle" font-size="' + (size * 0.10) + '" fill="' + CT_COLORS.gray.vivid + '">' + _svgEsc(sub) + '</text>';
+    }
+    h += '</svg>';
+    return h;
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────
+// Points is a numeric array. opts: { width, height, color, fill }
+function _svgSparkline(points, opts) {
+    opts = opts || {};
+    points = points || [];
+    if (points.length < 2) return '<svg class="ct-svg-spark" viewBox="0 0 60 20" width="60" height="20"></svg>';
+    var w = opts.width || 120, h = opts.height || 28;
+    var min = Math.min.apply(null, points), max = Math.max.apply(null, points);
+    var range = max - min || 1;
+    var step = w / (points.length - 1);
+    var coords = points.map(function(p, i) {
+        var x = (i * step).toFixed(1);
+        var y = (h - ((p - min) / range) * (h - 4) - 2).toFixed(1);
+        return x + "," + y;
+    });
+    var color = (CT_COLORS[opts.color || "blue"] || CT_COLORS.blue).vivid;
+    var out = '<svg class="ct-svg-spark" viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '">';
+    if (opts.fill !== false) {
+        var area = "0," + h + " " + coords.join(" ") + " " + w + "," + h;
+        out += '<polygon points="' + area + '" fill="' + color + '" fill-opacity="0.14"/>';
+    }
+    out += '<polyline points="' + coords.join(" ") + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+    out += '</svg>';
+    return out;
+}
+
+// ── Horizontal bar chart ──────────────────────────────────────────
+// Data: { buckets: [{ label, value, color }], scale, unit }
+// Optionally buckets can carry `segments: [{value, color}]` for
+// stacked bars (used by compliance).
+function _svgBar(data, opts) {
+    opts = opts || {};
+    data = data || {};
+    var buckets = data.buckets || [];
+    var scale = data.scale || Math.max.apply(null, buckets.map(function(b) {
+        if (b.segments) return b.segments.reduce(function(a, s) { return a + (s.value || 0); }, 0);
+        return b.value || 0;
+    }).concat([1]));
+    var rowH = opts.rowHeight || 26;
+    var labelW = opts.labelWidth || 110;
+    var valueW = opts.valueWidth || 42;
+    var width = opts.width || 320;
+    var barW = width - labelW - valueW;
+    var h = buckets.length * rowH + 4;
+    var out = '<svg class="ct-svg-bar" viewBox="0 0 ' + width + ' ' + h + '" width="' + width + '" height="' + h + '">';
+    buckets.forEach(function(b, i) {
+        var y = i * rowH + 4;
+        out += '<text x="0" y="' + (y + 13) + '" font-size="11" fill="' + CT_COLORS.dark.vivid + '">' + _svgEsc(b.label) + '</text>';
+        // Background track
+        out += '<rect x="' + labelW + '" y="' + (y + 4) + '" width="' + barW + '" height="12" rx="3" fill="' + CT_COLORS.gray.bg + '"/>';
+        // Bars (stacked or single)
+        var cursor = labelW;
+        var total = 0;
+        if (b.segments) {
+            b.segments.forEach(function(s) {
+                var w = (s.value / scale) * barW;
+                var color = (CT_COLORS[s.color || "blue"] || CT_COLORS.blue).vivid;
+                out += '<rect x="' + cursor + '" y="' + (y + 4) + '" width="' + w.toFixed(1) + '" height="12" fill="' + color + '"/>';
+                cursor += w;
+                total += s.value || 0;
+            });
+            // Round corners on the last visible segment
+            out += '<rect x="' + labelW + '" y="' + (y + 4) + '" width="' + barW + '" height="12" rx="3" fill="none" stroke="' + CT_COLORS.gray.bg + '" stroke-width="0.5"/>';
+        } else {
+            var w = (b.value / scale) * barW;
+            var color = (CT_COLORS[b.color || "blue"] || CT_COLORS.blue).vivid;
+            out += '<rect x="' + labelW + '" y="' + (y + 4) + '" width="' + w.toFixed(1) + '" height="12" rx="3" fill="' + color + '"/>';
+            total = b.value || 0;
+        }
+        // Value
+        var unit = data.unit || "";
+        out += '<text x="' + (width - 2) + '" y="' + (y + 13) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + CT_COLORS.dark.vivid + '">' + _svgEsc(total + unit) + '</text>';
+    });
+    out += '</svg>';
+    return out;
+}
+
+// ── Donut chart ───────────────────────────────────────────────────
+// Data: { segments: [{ label, value, color }], center_label, center_sublabel }
+function _svgDonut(data, opts) {
+    opts = opts || {};
+    data = data || {};
+    var segments = (data.segments || []).filter(function(s) { return s.value > 0; });
+    var size = opts.size || 140;
+    var thickness = opts.thickness || 20;
+    var r = (size - thickness) / 2;
+    var cx = size / 2, cy = size / 2;
+    var total = segments.reduce(function(a, s) { return a + s.value; }, 0) || 1;
+    var C = 2 * Math.PI * r;
+    var out = '<svg class="ct-svg-donut" viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="' + size + '">';
+    out += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + CT_COLORS.gray.bg + '" stroke-width="' + thickness + '"/>';
+    var cumulative = 0;
+    segments.forEach(function(s) {
+        var frac = s.value / total;
+        var len = C * frac;
+        var color = (CT_COLORS[s.color || "blue"] || CT_COLORS.blue).vivid;
+        var offset = -C * cumulative;
+        out += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="' + thickness + '" stroke-dasharray="' + len.toFixed(1) + ' ' + C + '" stroke-dashoffset="' + offset.toFixed(1) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')"/>';
+        cumulative += frac;
+    });
+    if (data.center_label) {
+        out += '<text x="' + cx + '" y="' + (cy + 4) + '" text-anchor="middle" font-size="' + (size * 0.24) + '" font-weight="700" fill="' + CT_COLORS.dark.vivid + '">' + _svgEsc(data.center_label) + '</text>';
+    }
+    if (data.center_sublabel) {
+        out += '<text x="' + cx + '" y="' + (cy + size * 0.22) + '" text-anchor="middle" font-size="' + (size * 0.10) + '" fill="' + CT_COLORS.gray.vivid + '">' + _svgEsc(data.center_sublabel) + '</text>';
+    }
+    out += '</svg>';
+    // Legend
+    var legend = '<div class="ct-donut-legend">';
+    segments.forEach(function(s) {
+        var color = (CT_COLORS[s.color || "blue"] || CT_COLORS.blue).vivid;
+        legend += '<span class="ct-donut-legend-item"><span class="ct-donut-dot" style="background:' + color + '"></span>' + _svgEsc(s.label) + ' <strong>' + s.value + '</strong></span>';
+    });
+    legend += '</div>';
+    return '<div class="ct-donut-wrap">' + out + legend + '</div>';
+}
+
+// ── 5x5 heatmap (risk matrix) ─────────────────────────────────────
+// Data: { matrix: number[5][5], x_label, y_label }
+// matrix[impact][likelihood] = count. Impact 0 = lowest row (bottom),
+// likelihood 0 = leftmost column.
+function _svgHeatmap(data, opts) {
+    opts = opts || {};
+    data = data || {};
+    var m = data.matrix || [];
+    var n = m.length || 5;
+    var size = opts.size || 140;
+    var cell = (size - 16) / n;
+    var palette = CT_COLORS.matrix5 || [];
+    var out = '<svg class="ct-svg-heatmap" viewBox="0 0 ' + (size + 4) + ' ' + (size + 4) + '" width="' + (size + 4) + '" height="' + (size + 4) + '">';
+    for (var i = 0; i < n; i++) {
+        for (var j = 0; j < n; j++) {
+            var v = (m[n - 1 - i] && m[n - 1 - i][j]) || 0;  // flip so row 0 is bottom
+            var paletteRow = palette[n - 1 - i] || palette[0] || [];
+            var fill = paletteRow[j] || CT_COLORS.gray.bg;
+            var x = j * cell + 8;
+            var y = i * cell + 2;
+            out += '<rect x="' + x + '" y="' + y + '" width="' + (cell - 1) + '" height="' + (cell - 1) + '" rx="2" fill="' + fill + '" stroke="rgba(255,255,255,0.6)" stroke-width="1"/>';
+            if (v > 0) {
+                out += '<text x="' + (x + cell / 2) + '" y="' + (y + cell / 2 + 3) + '" text-anchor="middle" font-size="' + Math.max(9, cell * 0.38) + '" font-weight="700" fill="#0f172a">' + v + '</text>';
+            }
+        }
+    }
+    out += '</svg>';
+    return out;
+}
+
+// ── Timeline ──────────────────────────────────────────────────────
+// Data: { events: [{ date, label, status }] }
+function _svgTimeline(data, opts) {
+    opts = opts || {};
+    data = data || {};
+    var events = (data.events || []).slice(-8); // keep latest 8
+    if (!events.length) return '<div class="ct-empty">Aucun événement</div>';
+    var w = opts.width || 320, h = 60;
+    var statusColor = {
+        completed: CT_COLORS.green.vivid,
+        in_progress: CT_COLORS.blue.vivid,
+        planned: CT_COLORS.gray.vivid,
+        overdue: CT_COLORS.red.vivid,
+        cancelled: CT_COLORS.gray.vivid,
+    };
+    // X axis: time between first and last event
+    var first = new Date(events[0].date).getTime();
+    var last = new Date(events[events.length - 1].date).getTime();
+    var span = Math.max(1, last - first);
+    var out = '<svg class="ct-svg-timeline" viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '">';
+    out += '<line x1="8" y1="30" x2="' + (w - 8) + '" y2="30" stroke="' + CT_COLORS.gray.bg + '" stroke-width="2"/>';
+    events.forEach(function(e) {
+        var t = new Date(e.date).getTime();
+        var frac = span > 0 ? (t - first) / span : 0.5;
+        var x = 8 + frac * (w - 16);
+        var color = statusColor[e.status] || CT_COLORS.gray.vivid;
+        out += '<circle cx="' + x.toFixed(1) + '" cy="30" r="5" fill="' + color + '" stroke="#fff" stroke-width="2"><title>' + _svgEsc(e.label + " — " + e.date) + '</title></circle>';
+    });
+    // Date ticks on edges
+    out += '<text x="8" y="50" font-size="10" fill="' + CT_COLORS.gray.vivid + '">' + _svgEsc((events[0].date || "").slice(0, 10)) + '</text>';
+    out += '<text x="' + (w - 8) + '" y="50" text-anchor="end" font-size="10" fill="' + CT_COLORS.gray.vivid + '">' + _svgEsc((events[events.length - 1].date || "").slice(0, 10)) + '</text>';
+    out += '</svg>';
+    return out;
+}
+
+// ── Posture color helper ──────────────────────────────────────────
+// Returns a CT_COLORS key based on a 0..100 score.
+function _postureColor(value, max) {
+    var pct = max ? value / max * 100 : value;
+    if (pct < 40) return "red";
+    if (pct < 60) return "orange";
+    if (pct < 80) return "yellow";
+    return "green";
+}
+
+// ── Posture label helper ──────────────────────────────────────────
+function _postureLabel(score) {
+    if (score == null) return "";
+    if (score < 40) return "Faible";
+    if (score < 60) return "Modéré";
+    if (score < 80) return "Bon";
+    return "Excellent";
+}
+
+// ── Dispatcher: render a breakdown by its type ───────────────────
+// Used by Pilot to turn the module stats.breakdown into SVG.
+function _svgBreakdown(breakdown, opts) {
+    if (!breakdown || !breakdown.type) return "";
+    var data = breakdown.data || {};
+    switch (breakdown.type) {
+        case "heatmap_5x5": return _svgHeatmap(data, opts);
+        case "bar":         return _svgBar(data, opts);
+        case "donut":       return _svgDonut(data, opts);
+        case "gauge":       return _svgGauge(data.value || 0, data.max || 100, { label: data.label, color: data.color });
+        case "timeline":    return _svgTimeline(data, opts);
+        default:            return "";
+    }
+}
+
+// Expose on window so apps loaded after cisotoolbox.js can use them
+window._svgGauge = _svgGauge;
+window._svgSparkline = _svgSparkline;
+window._svgBar = _svgBar;
+window._svgDonut = _svgDonut;
+window._svgHeatmap = _svgHeatmap;
+window._svgTimeline = _svgTimeline;
+window._svgBreakdown = _svgBreakdown;
+window._postureColor = _postureColor;
+window._postureLabel = _postureLabel;
 
 // ═══════════════════════════════════════════════════════════════════════
 // SIDEBAR ACCORDION — shared accordion for sidebar groups
@@ -562,8 +868,7 @@ function showStatus(msg) {
 }
 
 function toggleMenu() {
-    var m = document.getElementById("io-menu");
-    if (m) m.classList.toggle("open");
+    document.getElementById("io-menu").classList.toggle("open");
 }
 
 document.addEventListener("click", function(e) {

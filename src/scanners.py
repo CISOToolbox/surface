@@ -2404,6 +2404,748 @@ def _match_tech_signatures(probe: dict[str, Any]) -> list[dict[str, str]]:
     return found
 
 
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — Cloud bucket enumeration
+# ═══════════════════════════════════════════════════════════════
+#
+# Given a domain, try the most common cloud bucket naming schemes
+# for the org and flag any that resolves + answers a HEAD request.
+# Passive — a 200/403 on the bucket URL is enough to declare
+# existence, we do not try to list content (that would be intrusive).
+
+_CLOUD_BUCKET_PROBES: list[tuple[str, str]] = [
+    # (template, provider)
+    ("http://{name}.s3.amazonaws.com",          "AWS S3"),
+    ("http://s3.amazonaws.com/{name}",          "AWS S3 (path-style)"),
+    ("https://{name}.s3.amazonaws.com",         "AWS S3 (HTTPS)"),
+    ("https://{name}.blob.core.windows.net",    "Azure Blob"),
+    ("https://storage.googleapis.com/{name}",   "Google Cloud Storage"),
+    ("https://{name}.storage.googleapis.com",   "Google Cloud Storage (subdomain)"),
+    ("https://{name}.digitaloceanspaces.com",   "DigitalOcean Spaces"),
+]
+
+
+def _bucket_candidates(domain: str) -> list[str]:
+    """Build a short list of bucket name candidates from a registrable
+    domain, e.g. example.com → [example, examplecom, example-prod,
+    example-backup, example-dev, example-assets, static-example, ...]."""
+    base = _registrable(domain) or domain
+    root = base.split(".")[0]
+    variants = {
+        root,
+        root.replace("-", ""),
+        base.replace(".", ""),
+        base.replace(".", "-"),
+    }
+    prefixes = ["", "www-", "static-", "assets-", "cdn-", "backup-"]
+    suffixes = ["", "-prod", "-staging", "-dev", "-backup", "-assets", "-static", "-data", "-uploads"]
+    out: set[str] = set()
+    for p in prefixes:
+        for s in suffixes:
+            for r in variants:
+                name = p + r + s
+                if 3 <= len(name) <= 63:
+                    out.add(name)
+    return sorted(out)
+
+
+def scan_domain_cloud_buckets(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Enumerate common cloud bucket naming schemes for the domain.
+    Returns findings + no discovered hosts (buckets aren't enrolled as
+    MonitoredAsset automatically — the operator can add them manually
+    if interested)."""
+    import httpx
+
+    domain = _safe_target(domain)
+    candidates = _bucket_candidates(domain)
+    # Cap to avoid hitting rate limits on cloud providers
+    candidates = candidates[:80]
+    findings: list[dict[str, Any]] = []
+    hit: set[str] = set()
+
+    with httpx.Client(verify=False, follow_redirects=False, timeout=3.0,
+                       headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"}) as client:
+        for name in candidates:
+            for tpl, provider in _CLOUD_BUCKET_PROBES:
+                url = tpl.format(name=name)
+                if url in hit:
+                    continue
+                hit.add(url)
+                try:
+                    r = client.head(url, timeout=2.5)
+                except Exception:
+                    continue
+                # 200/403 → exists. 404 → doesn't.
+                if r.status_code in (200, 403):
+                    sev = "medium"
+                    body_access = False
+                    try:
+                        g = client.get(url, timeout=2.5)
+                        if g.status_code == 200 and ("<Contents>" in g.text or "<ListBucketResult" in g.text):
+                            sev = "high"
+                            body_access = True
+                    except Exception:
+                        pass
+                    findings.append({
+                        "scanner": "cloud_buckets",
+                        "type": "cloud_bucket_exposed",
+                        "severity": sev,
+                        "title": f"Cloud bucket {provider} : {name} pour {domain}",
+                        "description": (
+                            f"Le bucket {name} existe sur {provider}. "
+                            f"URL : {url}. "
+                            + ("Son contenu est listable publiquement — "
+                               "a priori un leak majeur." if body_access else
+                               "Acces refuse (403) — le bucket existe "
+                               "mais les ACLs sont correctes, verifier tout de meme.")
+                        ),
+                        "target": domain,
+                        "evidence": {
+                            "bucket_name": name,
+                            "provider": provider,
+                            "url": url,
+                            "http_status": r.status_code,
+                            "listable": body_access,
+                        },
+                    })
+                    break  # one hit per bucket name is enough
+    return findings, []
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — GitHub organization enumeration
+# ═══════════════════════════════════════════════════════════════
+#
+# Given an org name configured in AppSettings (key `github.org`),
+# list public repos via the GitHub REST API and grep commits/files
+# for obvious secret patterns. An optional `github.token` (PAT) can
+# be configured for higher rate limits and access to private repos.
+
+def _get_github_config() -> dict[str, str]:
+    """Read GitHub settings from the scanner cache (mirrored from
+    AppSettings on startup)."""
+    return {
+        "org": os.environ.get("SURFACE_GITHUB_ORG", "") or _GITHUB_CACHE.get("org", ""),
+        "token": os.environ.get("SURFACE_GITHUB_TOKEN", "") or _GITHUB_CACHE.get("token", ""),
+    }
+
+
+_GITHUB_CACHE: dict[str, str] = {}
+
+
+def set_github_config_cache(org: str | None, token: str | None) -> None:
+    if org is not None:
+        _GITHUB_CACHE["org"] = org
+    if token is not None:
+        _GITHUB_CACHE["token"] = token
+
+
+def scan_domain_github_enum(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """List public repos of the configured GitHub org and grep the
+    default branch tree for obvious secret patterns. The org is global
+    (not per-domain) — this scanner is only useful when the operator
+    runs a single org's surface."""
+    import httpx
+
+    cfg = _get_github_config()
+    org = cfg.get("org", "").strip()
+    if not org:
+        return [{
+            "scanner": "github_enum",
+            "type": "github_not_configured",
+            "severity": "info",
+            "title": "GitHub org non configuree",
+            "description": (
+                "Pour activer la decouverte GitHub, renseignez le nom "
+                "d'organisation dans Parametres > GitHub. Un token PAT est "
+                "optionnel mais evite les limites de taux anonymes (60/h)."
+            ),
+            "target": domain,
+            "evidence": {"reason": "missing github.org"},
+        }], []
+
+    token = cfg.get("token", "").strip()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Surface/0.3 (CISO Toolbox)",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    findings: list[dict[str, Any]] = []
+    repos: list[dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=10.0, headers=headers) as client:
+            # Page 1 only — cap to 100 repos to stay fast
+            r = client.get(f"https://api.github.com/orgs/{org}/repos",
+                           params={"per_page": 100, "type": "public"})
+            if r.status_code == 404:
+                return [{
+                    "scanner": "github_enum",
+                    "type": "github_org_not_found",
+                    "severity": "info",
+                    "title": f"Organisation GitHub '{org}' introuvable",
+                    "description": f"L'API GitHub a renvoye 404 pour l'organisation {org}.",
+                    "target": domain,
+                    "evidence": {"org": org},
+                }], []
+            if r.status_code != 200:
+                return [{
+                    "scanner": "github_enum",
+                    "type": "github_api_error",
+                    "severity": "info",
+                    "title": f"GitHub API erreur {r.status_code}",
+                    "description": f"Impossible de lister les repos de {org}: {r.text[:200]}",
+                    "target": domain,
+                    "evidence": {"status": r.status_code},
+                }], []
+            repos = r.json() or []
+    except Exception as e:
+        return [{
+            "scanner": "github_enum",
+            "type": "github_api_error",
+            "severity": "info",
+            "title": "GitHub API injoignable",
+            "description": f"Erreur de connexion a l'API GitHub : {e}",
+            "target": domain,
+            "evidence": {"error": str(e)[:200]},
+        }], []
+
+    findings.append({
+        "scanner": "github_enum",
+        "type": "github_repo_inventory",
+        "severity": "info",
+        "title": f"GitHub : {len(repos)} repos publics pour {org}",
+        "description": (
+            f"L'organisation {org} expose {len(repos)} repositories publics. "
+            + "Top repos : " + ", ".join(r.get("name", "") for r in repos[:10])
+        ),
+        "target": domain,
+        "evidence": {
+            "org": org,
+            "repo_count": len(repos),
+            "repos": [{"name": r.get("name"), "url": r.get("html_url"),
+                       "pushed_at": r.get("pushed_at")} for r in repos[:50]],
+        },
+    })
+
+    # Light secret grep: fetch README/package.json/env.example of each repo
+    # via raw.githubusercontent.com and look for obvious patterns
+    secrets_found: list[dict[str, Any]] = []
+    probe_files = ["README.md", ".env.example", "config.yml", "docker-compose.yml"]
+    with httpx.Client(timeout=8.0, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"}) as client:
+        for repo in repos[:30]:  # cap to 30 repos for secret grep
+            default_branch = repo.get("default_branch", "main")
+            name = repo.get("name", "")
+            if not name:
+                continue
+            for path in probe_files:
+                url = f"https://raw.githubusercontent.com/{org}/{name}/{default_branch}/{path}"
+                try:
+                    r = client.get(url)
+                    if r.status_code != 200:
+                        continue
+                    body = r.text[:16384]
+                except Exception:
+                    continue
+                for label, pattern, sev in _JS_SECRET_PATTERNS:
+                    for m in _re.finditer(pattern, body):
+                        match = (m.group(1) if m.groups() else m.group(0))[:200]
+                        secrets_found.append({
+                            "repo": name,
+                            "file": path,
+                            "pattern": label,
+                            "match": match,
+                            "severity": sev,
+                            "url": url,
+                        })
+
+    for s in secrets_found[:50]:
+        findings.append({
+            "scanner": "github_enum",
+            "type": "github_secret_leak",
+            "severity": s["severity"],
+            "title": f"GitHub {s['repo']}/{s['file']} : {s['pattern']}",
+            "description": (
+                f"Pattern '{s['pattern']}' trouve dans {s['repo']}/{s['file']} "
+                f"(branche par defaut). Extrait : {s['match'][:100]}"
+            ),
+            "target": domain,
+            "evidence": s,
+        })
+    return findings, []
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — Sensitive files / dotfiles exposure
+# ═══════════════════════════════════════════════════════════════
+#
+# Probes a short list of well-known paths (≈25) that should NEVER
+# be publicly served: .git/config, .env, web.config, backup.sql,
+# server-status, phpinfo.php, swagger.json, etc. A 200 response with
+# content matching a known signature is a high-severity finding.
+#
+# Kept intentionally small to stay fast (< 5s per host). Operators
+# who need exhaustive path bruteforce should use dirb/gobuster/
+# feroxbuster externally and bulk-import the results.
+
+_SENSITIVE_PATHS: list[tuple[str, str, str]] = [
+    # (path, expected_content_marker, severity)
+    ("/.git/config",                "[core]",                   "critical"),
+    ("/.git/HEAD",                  "ref:",                     "critical"),
+    ("/.env",                       "=",                        "critical"),
+    ("/.env.local",                 "=",                        "critical"),
+    ("/.env.production",            "=",                        "critical"),
+    ("/.htpasswd",                  ":$",                       "critical"),
+    ("/config.php",                 "<?php",                    "high"),
+    ("/config.yml",                 ":",                        "high"),
+    ("/config.yaml",                ":",                        "high"),
+    ("/application.properties",     "=",                        "high"),
+    ("/web.config",                 "<?xml",                    "high"),
+    ("/backup.sql",                 "INSERT",                   "critical"),
+    ("/dump.sql",                   "INSERT",                   "critical"),
+    ("/database.sql",               "INSERT",                   "critical"),
+    ("/wp-config.php",              "<?php",                    "critical"),
+    ("/.DS_Store",                  "Bud1",                     "low"),
+    ("/server-status",              "Server Status",            "medium"),
+    ("/server-info",                "Server Version",           "medium"),
+    ("/phpinfo.php",                "phpinfo()",                "high"),
+    ("/info.php",                   "phpinfo()",                "high"),
+    ("/.well-known/security.txt",   "",                         "info"),
+    ("/swagger.json",               '"swagger"',                "medium"),
+    ("/swagger/v1/swagger.json",    '"swagger"',                "medium"),
+    ("/openapi.json",               '"openapi"',                "medium"),
+    ("/api/docs",                   "",                         "info"),
+    ("/.aws/credentials",           "aws_",                     "critical"),
+    ("/docker-compose.yml",         "services:",                "high"),
+    ("/Dockerfile",                 "FROM ",                    "low"),
+]
+
+
+def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
+    """Probe a list of well-known sensitive paths on the target host.
+    A 200 response whose body contains the expected marker is flagged
+    as a security finding. Probes both HTTP (80) and HTTPS (443), and
+    stops after 3 connection errors in a row to stay fast on dead hosts."""
+    import httpx
+
+    target = _safe_target(target)
+    findings: list[dict[str, Any]] = []
+    schemes = [(443, "https"), (80, "http")]
+
+    # Pick whichever scheme answers /.
+    working: tuple[int, str] | None = None
+    with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
+        for port, scheme in schemes:
+            try:
+                r = client.get(f"{scheme}://{target}:{port}/",
+                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+                if r.status_code < 500:
+                    working = (port, scheme)
+                    break
+            except Exception:
+                continue
+    if not working:
+        return []
+    port, scheme = working
+    base = f"{scheme}://{target}:{port}"
+
+    with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
+        consecutive_errors = 0
+        for path, marker, sev in _SENSITIVE_PATHS:
+            try:
+                r = client.get(base + path,
+                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+            except Exception:
+                consecutive_errors += 1
+                if consecutive_errors >= 3:
+                    break
+                continue
+            consecutive_errors = 0
+            if r.status_code != 200:
+                continue
+            # Security.txt and api/docs are informational — they're
+            # expected to be 200 and have no marker. Other paths
+            # must carry the expected content marker to be flagged.
+            body = (r.text or "")[:512]
+            if marker and marker not in body:
+                continue
+            findings.append({
+                "scanner": "sensitive_files",
+                "type": "sensitive_file_exposed",
+                "severity": sev,
+                "title": f"Fichier sensible expose : {path} sur {target}",
+                "description": (
+                    f"Le chemin {path} est accessible publiquement sur {base} "
+                    f"(HTTP 200). Contenu caracteristique detecte : {marker or '(aucun)'}. "
+                    f"Retirer ou proteger ce chemin immediatement — il peut "
+                    f"exposer des identifiants, des sources ou la configuration "
+                    f"de l'infrastructure."
+                ),
+                "target": f"{target}:{port}",
+                "evidence": {
+                    "url": base + path,
+                    "http_status": r.status_code,
+                    "marker_found": marker,
+                    "body_preview": body[:200],
+                    "content_length": len(r.content),
+                },
+            })
+    return findings
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — Security headers grade (Mozilla Observatory-lite)
+# ═══════════════════════════════════════════════════════════════
+#
+# Probes HTTPS root and grades 6 security headers:
+#   HSTS, Content-Security-Policy, X-Frame-Options,
+#   X-Content-Type-Options, Referrer-Policy, Permissions-Policy
+#
+# Emits one finding per missing/weak header + one summary finding
+# with the overall letter grade (A/B/C/D/F).
+
+def _grade_headers(headers: dict[str, str]) -> tuple[str, list[str], list[str]]:
+    """Return (letter_grade, strengths, weaknesses)."""
+    lc = {k.lower(): v for k, v in headers.items()}
+    score = 0
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+
+    hsts = lc.get("strict-transport-security", "")
+    if hsts:
+        if "max-age" in hsts and "includesubdomains" in hsts.lower():
+            score += 20
+            strengths.append("HSTS with includeSubDomains")
+        else:
+            score += 10
+            weaknesses.append("HSTS present but missing includeSubDomains")
+    else:
+        weaknesses.append("HSTS missing (Strict-Transport-Security)")
+
+    csp = lc.get("content-security-policy", "")
+    if csp:
+        if "'unsafe-inline'" in csp or "'unsafe-eval'" in csp:
+            score += 10
+            weaknesses.append("CSP present but allows 'unsafe-inline' / 'unsafe-eval'")
+        else:
+            score += 25
+            strengths.append("CSP configured (no unsafe-inline)")
+    else:
+        weaknesses.append("Content-Security-Policy missing")
+
+    xfo = lc.get("x-frame-options", "")
+    if xfo.upper() in ("DENY", "SAMEORIGIN"):
+        score += 15
+        strengths.append(f"X-Frame-Options: {xfo}")
+    elif "frame-ancestors" in csp:
+        score += 15
+        strengths.append("frame-ancestors via CSP")
+    else:
+        weaknesses.append("X-Frame-Options missing (clickjacking risk)")
+
+    xcto = lc.get("x-content-type-options", "")
+    if xcto.lower() == "nosniff":
+        score += 10
+        strengths.append("X-Content-Type-Options: nosniff")
+    else:
+        weaknesses.append("X-Content-Type-Options missing")
+
+    rp = lc.get("referrer-policy", "")
+    if rp:
+        score += 15
+        strengths.append(f"Referrer-Policy: {rp}")
+    else:
+        weaknesses.append("Referrer-Policy missing")
+
+    pp = lc.get("permissions-policy", "") or lc.get("feature-policy", "")
+    if pp:
+        score += 15
+        strengths.append("Permissions-Policy configured")
+    else:
+        weaknesses.append("Permissions-Policy missing")
+
+    if score >= 90:
+        grade = "A"
+    elif score >= 70:
+        grade = "B"
+    elif score >= 50:
+        grade = "C"
+    elif score >= 30:
+        grade = "D"
+    else:
+        grade = "F"
+    return grade, strengths, weaknesses
+
+
+def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
+    """Fetch the HTTPS root and grade its security headers."""
+    import httpx
+
+    target = _safe_target(target)
+    url = f"https://{target}/"
+    try:
+        with httpx.Client(verify=False, follow_redirects=True, timeout=5.0) as client:
+            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+    except Exception:
+        return []
+
+    grade, strengths, weaknesses = _grade_headers(dict(r.headers))
+    sev = {"A": "info", "B": "info", "C": "low", "D": "medium", "F": "high"}[grade]
+    title = f"Security headers grade {grade} sur {target}"
+    desc = f"Grade {grade}.\n\n"
+    if strengths:
+        desc += "Points forts :\n- " + "\n- ".join(strengths) + "\n\n"
+    if weaknesses:
+        desc += "A corriger :\n- " + "\n- ".join(weaknesses)
+    return [{
+        "scanner": "security_headers",
+        "type": "security_headers_grade",
+        "severity": sev,
+        "title": title,
+        "description": desc,
+        "target": f"{target}:443",
+        "evidence": {
+            "grade": grade,
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "raw_headers": {k: v for k, v in r.headers.items() if k.lower().startswith(("strict-", "content-security", "x-", "referrer", "permissions", "feature-"))},
+        },
+    }]
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — TLS protocol/cipher grade
+# ═══════════════════════════════════════════════════════════════
+#
+# Beyond cert validity (already covered by scan_host_tls), grade the
+# TLS handshake configuration: supported protocols, cipher families,
+# Forward Secrecy. Qualys-lite, pure Python stdlib, one connection
+# per protocol attempt.
+
+_TLS_PROBE_VERSIONS = [
+    ("TLSv1.3", "TLS 1.3"),
+    ("TLSv1.2", "TLS 1.2"),
+    ("TLSv1.1", "TLS 1.1 (deprecated)"),
+    ("TLSv1",   "TLS 1.0 (deprecated)"),
+    ("SSLv3",   "SSL 3.0 (POODLE)"),
+]
+
+
+def _try_tls_version(target: str, port: int, version_name: str) -> bool:
+    """Return True if the server accepts a handshake for `version_name`."""
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # Force a single version via min/max when supported (3.10+)
+        v_map = {
+            "TLSv1.3": ssl.TLSVersion.TLSv1_3,
+            "TLSv1.2": ssl.TLSVersion.TLSv1_2,
+            "TLSv1.1": ssl.TLSVersion.TLSv1_1,
+            "TLSv1":   ssl.TLSVersion.TLSv1,
+            "SSLv3":   ssl.TLSVersion.SSLv3 if hasattr(ssl.TLSVersion, "SSLv3") else None,
+        }
+        v = v_map.get(version_name)
+        if v is None:
+            return False
+        try:
+            ctx.minimum_version = v
+            ctx.maximum_version = v
+        except (ValueError, OSError):
+            return False
+        with socket.create_connection((target, port), timeout=4) as sock:
+            with ctx.wrap_socket(sock, server_hostname=target) as ssock:
+                return ssock.version() is not None
+    except Exception:
+        return False
+
+
+def scan_host_tls_grade(target: str) -> list[dict[str, Any]]:
+    """Probe each major TLS version and the negotiated cipher at the
+    highest supported version. Emit one finding per insecure legacy
+    version accepted + one summary with the overall grade."""
+    target = _safe_target(target)
+    port = 443
+
+    # Quick reachability check — skip hosts that don't even answer 443
+    try:
+        with socket.create_connection((target, port), timeout=3):
+            pass
+    except Exception:
+        return []
+
+    supported: list[str] = []
+    for vkey, _label in _TLS_PROBE_VERSIONS:
+        if _try_tls_version(target, port, vkey):
+            supported.append(vkey)
+
+    # Inspect the best connection for cipher info
+    best_cipher = ""
+    best_protocol = ""
+    try:
+        ctx = _tls_ssl_context()
+        with socket.create_connection((target, port), timeout=4) as sock:
+            with ctx.wrap_socket(sock, server_hostname=target) as ssock:
+                c = ssock.cipher()
+                if c:
+                    best_cipher = c[0]
+                    best_protocol = c[1] or ssock.version() or ""
+    except Exception:
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with socket.create_connection((target, port), timeout=4) as sock:
+                with ctx.wrap_socket(sock, server_hostname=target) as ssock:
+                    c = ssock.cipher()
+                    if c:
+                        best_cipher = c[0]
+                        best_protocol = c[1] or ""
+        except Exception:
+            pass
+
+    findings: list[dict[str, Any]] = []
+    legacy = [v for v in supported if v in ("TLSv1", "TLSv1.1", "SSLv3")]
+    has_modern = "TLSv1.3" in supported or "TLSv1.2" in supported
+
+    # Grade
+    if not has_modern:
+        grade = "F"
+    elif legacy:
+        grade = "D" if "SSLv3" in legacy else "C"
+    elif best_cipher and any(w in best_cipher for w in ("RC4", "3DES", "NULL", "EXPORT", "MD5")):
+        grade = "D"
+    elif "TLSv1.3" in supported:
+        grade = "A"
+    else:
+        grade = "B"
+
+    sev = {"A": "info", "B": "info", "C": "medium", "D": "high", "F": "critical"}[grade]
+    desc = f"Grade TLS : {grade}\n\nProtocoles supportes : {', '.join(supported) or 'aucun'}\n"
+    if best_cipher:
+        desc += f"Cipher negocie : {best_cipher} ({best_protocol})\n"
+    if legacy:
+        desc += f"\n⚠ Versions legacy acceptees : {', '.join(legacy)} — a desactiver."
+    findings.append({
+        "scanner": "tls_grade",
+        "type": "tls_grade",
+        "severity": sev,
+        "title": f"TLS grade {grade} sur {target}",
+        "description": desc,
+        "target": f"{target}:443",
+        "evidence": {
+            "grade": grade,
+            "supported_versions": supported,
+            "legacy_versions": legacy,
+            "best_cipher": best_cipher,
+            "best_protocol": best_protocol,
+        },
+    })
+    return findings
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — JavaScript bundle analysis (secrets & endpoints)
+# ═══════════════════════════════════════════════════════════════
+#
+# Fetch the HTML root, pull out every <script src>, download each
+# (bounded size), and grep for common secret/endpoint patterns:
+# API keys, JWT tokens, internal hostnames, cloud bucket URLs,
+# Slack/Stripe/Sentry DSNs, AWS keys.
+#
+# Pure passive inspection — we only grep bytes we already have.
+
+_JS_MAX_FILES = 20
+_JS_MAX_BYTES = 512 * 1024  # 512 KB per file
+_JS_SECRET_PATTERNS: list[tuple[str, str, str]] = [
+    # (label, regex, severity)
+    ("AWS access key",      r"AKIA[0-9A-Z]{16}",                                "critical"),
+    ("AWS secret key",      r"aws_secret_access_key[\s:=\"']+([A-Za-z0-9/+=]{40})", "critical"),
+    ("Google API key",      r"AIza[0-9A-Za-z\-_]{35}",                          "high"),
+    ("Slack webhook",       r"https://hooks\.slack\.com/services/T[A-Z0-9]{8,}/B[A-Z0-9]{8,}/[A-Za-z0-9]{24}", "high"),
+    ("Stripe live key",     r"sk_live_[A-Za-z0-9]{24,}",                        "critical"),
+    ("Sentry DSN",          r"https://[a-f0-9]+@[a-z0-9.-]+sentry\.io/[0-9]+",  "medium"),
+    ("JWT",                 r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", "medium"),
+    ("Private IP",          r"\b(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.(?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3})\b", "low"),
+    ("S3 bucket",           r"[a-z0-9][a-z0-9\-.]{1,61}[a-z0-9]\.s3(?:\.[a-z0-9\-]+)?\.amazonaws\.com", "low"),
+    ("Azure Blob",          r"[a-z0-9][a-z0-9\-]{1,61}\.blob\.core\.windows\.net", "low"),
+    ("GCS bucket",          r"storage\.googleapis\.com/[a-zA-Z0-9_\-]{3,}",     "low"),
+    ("Firebase",            r"[a-zA-Z0-9\-]+\.firebaseio\.com",                 "low"),
+]
+
+
+def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
+    """Fetch / on the target, extract <script src> URLs, download each
+    (capped), grep each for secret/endpoint patterns. Emits one finding
+    per unique (pattern, match) tuple across all JS files."""
+    import httpx
+
+    target = _safe_target(target)
+    base_url = f"https://{target}/"
+    try:
+        with httpx.Client(verify=False, follow_redirects=True, timeout=5.0) as client:
+            r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+            if r.status_code != 200:
+                return []
+            html = r.text or ""
+            # Extract every script src
+            src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
+            urls = src_re.findall(html)[:_JS_MAX_FILES]
+            # Resolve relative URLs
+            from urllib.parse import urljoin
+            urls = [urljoin(str(r.url), u) for u in urls]
+
+            js_bodies: list[tuple[str, str]] = []
+            for u in urls:
+                try:
+                    # Size-bounded download
+                    with client.stream("GET", u, timeout=4.0) as resp:
+                        if resp.status_code != 200:
+                            continue
+                        chunks: list[bytes] = []
+                        total = 0
+                        for chunk in resp.iter_bytes(8192):
+                            chunks.append(chunk)
+                            total += len(chunk)
+                            if total >= _JS_MAX_BYTES:
+                                break
+                        body = b"".join(chunks).decode("utf-8", errors="ignore")
+                    js_bodies.append((u, body))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for url, body in js_bodies:
+        for label, pattern, sev in _JS_SECRET_PATTERNS:
+            for m in _re.finditer(pattern, body):
+                match = (m.group(1) if m.groups() else m.group(0))[:200]
+                key = (label, match)
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append({
+                    "scanner": "js_analysis",
+                    "type": "js_secret_leak",
+                    "severity": sev,
+                    "title": f"{label} trouve dans un bundle JS de {target}",
+                    "description": (
+                        f"Un pattern de type '{label}' a ete trouve dans le bundle "
+                        f"JS {url}. Extrait : {match[:100]}"
+                    ),
+                    "target": target,
+                    "evidence": {
+                        "js_url": url,
+                        "pattern": label,
+                        "match": match,
+                    },
+                })
+    return findings
+
+
 def scan_host_techstack(target: str) -> list[dict[str, Any]]:
     """Probe HTTP and HTTPS on the standard ports and emit one
     `tech_fingerprint` finding per detected product. The detected
@@ -2841,6 +3583,30 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "callable": scan_host_techstack,
         "returns_discovered": False,
     },
+    "sensitive_files": {
+        "label": "Sensitive files exposure",
+        "kinds": {"host"},
+        "callable": scan_host_sensitive_files,
+        "returns_discovered": False,
+    },
+    "security_headers": {
+        "label": "Security headers grade",
+        "kinds": {"host"},
+        "callable": scan_host_security_headers,
+        "returns_discovered": False,
+    },
+    "tls_grade": {
+        "label": "TLS protocol/cipher grade",
+        "kinds": {"host"},
+        "callable": scan_host_tls_grade,
+        "returns_discovered": False,
+    },
+    "js_analysis": {
+        "label": "JavaScript bundle analysis (secrets & endpoints)",
+        "kinds": {"host"},
+        "callable": scan_host_js_analysis,
+        "returns_discovered": False,
+    },
     "screenshot": {
         "label": "HTTP screenshot capture (optional)",
         "kinds": {"host"},
@@ -2866,6 +3632,18 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "callable": scan_domain_shodan,
         "returns_discovered": True,
     },
+    "cloud_buckets": {
+        "label": "Cloud bucket enumeration (S3/Azure/GCS)",
+        "kinds": {"domain"},
+        "callable": scan_domain_cloud_buckets,
+        "returns_discovered": True,
+    },
+    "github_enum": {
+        "label": "GitHub org enumeration + secret scan",
+        "kinds": {"domain"},
+        "callable": scan_domain_github_enum,
+        "returns_discovered": True,
+    },
     "shodan_host": {
         "label": "Shodan host lookup (ports/CVE, 1 credit/req)",
         "kinds": {"host"},
@@ -2883,7 +3661,11 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
 
 DEFAULT_SCANNERS_BY_KIND = {
     "domain": ["email_security", "typosquatting", "tls", "ct_logs", "dns_brute", "takeover"],
-    "host": ["nmap_quick", "tls", "nuclei", "takeover", "techstack", "cve_lookup"],
+    "host": [
+        "nmap_quick", "tls", "tls_grade", "nuclei", "takeover",
+        "techstack", "cve_lookup", "sensitive_files", "security_headers",
+        "js_analysis",
+    ],
     "ip_range": ["discovery"],
 }
 

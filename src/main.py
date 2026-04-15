@@ -17,6 +17,7 @@ from src.routes.findings import router as findings_router
 from src.routes.measures import router as measures_router
 from src.routes.monitored import router as monitored_router
 from src.routes.scan_jobs import router as scan_jobs_router
+from src.routes.reports import router as reports_router
 from src.routes.scans import router as scans_router
 from src.routes.users import router as users_router
 
@@ -30,7 +31,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("surface-backend")
 
-app = FastAPI(title="Surface Backend", version="0.2.1")
+app = FastAPI(title="Surface Backend", version="0.3.0")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -63,6 +64,7 @@ app.include_router(scan_jobs_router)
 app.include_router(monitored_router)
 app.include_router(measures_router)
 app.include_router(ai_router)
+app.include_router(reports_router)
 app.include_router(users_router)
 if internal_router is not None:
     app.include_router(internal_router)
@@ -80,7 +82,7 @@ async def on_startup():
     from src.scheduler import run_scheduler
     from src.database import async_session
     from src.models import AppSettings
-    from src.scanners import set_shodan_api_key_cache, set_nuclei_tuning_cache, _NUCLEI_TUNING_KEYS
+    from src.scanners import set_shodan_api_key_cache, set_nuclei_tuning_cache, set_github_config_cache, _NUCLEI_TUNING_KEYS
 
     assert_auth_configured()
 
@@ -111,6 +113,21 @@ async def on_startup():
         if overrides:
             set_nuclei_tuning_cache(overrides)
             logger.info("Nuclei tuning loaded from DB: %s", overrides)
+
+        # v0.3 — GitHub org + token for github_enum scanner
+        gh_rows = await db.execute(
+            select(AppSettings).where(AppSettings.key.like("github.%"))
+        )
+        gh_org = ""
+        gh_token = ""
+        for r in gh_rows.scalars():
+            if r.key == "github.org":
+                gh_org = r.value or ""
+            elif r.key == "github.token":
+                gh_token = r.value or ""
+        set_github_config_cache(gh_org or None, gh_token or None)
+        if gh_org:
+            logger.info("GitHub org loaded from DB: %s (token=%s)", gh_org, "set" if gh_token else "unset")
 
     asyncio.create_task(run_scheduler())
     logger.info("Surveillance scheduler started")

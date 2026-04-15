@@ -1372,6 +1372,7 @@ function _renderDashboard(c) {
     h += '<button class="btn-add btn-icon" data-click="_scanAllMonitored" title="' + esc(t("monitored.scan_all")) + '">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
+    h += '<button class="btn-add btn-icon" data-click="_openExecutiveReport" title="' + esc(t("report.exec_tooltip")) + '">' + _icon("activity", 14) + ' ' + esc(t("report.exec_button")) + '</button>';
     h += '</div></div>';
 
     // ── A. Critical banner ────────────────────────────────────
@@ -2263,9 +2264,11 @@ function _renderFindingDetail(c) {
     if (f.status !== "new") {
         h += '<button class="btn-add" data-click="_triageDetail" data-args=\'["new"]\'>' + esc(t("fd.triage_reset")) + '</button>';
     }
+    h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
     h += '<span style="flex:1"></span>';
     h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteFindingDetail">' + esc(t("fd.delete")) + '</button>';
     h += '</div>';
+    h += '<div id="ai-triage-result" style="display:none;margin-top:12px;padding:12px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;font-size:0.88em"></div>';
     h += '</div>';
 
     if (f.measure_id) {
@@ -2281,6 +2284,159 @@ function _renderFindingDetail(c) {
 
     c.innerHTML = h;
 }
+
+// v0.3 — AI triage button: sends the finding to the configured LLM
+// (via ai_common.js) and asks for a structured JSON response.
+// v0.3 — Executive PDF report. Fetches aggregated data from the backend
+// and opens a print-friendly HTML in a new tab. User clicks their
+// browser's print dialog to save as PDF — no server-side PDF lib needed.
+window._openExecutiveReport = async function() {
+    try {
+        var r = await SurfaceAPI.executiveReport();
+        var html = _buildExecutiveHtml(r);
+        var w = window.open("", "_blank");
+        if (!w) {
+            showStatus(t("report.popup_blocked"), true);
+            return;
+        }
+        w.document.write(html);
+        w.document.close();
+    } catch (e) {
+        showStatus(e.message || t("common.error"), true);
+    }
+};
+
+function _buildExecutiveHtml(d) {
+    var sev = d.totals.by_severity || {};
+    var topF = (d.top_findings || []).map(function(f) {
+        return '<tr><td class="sev-td"><span class="sev sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>' +
+               '<td>' + esc(f.title) + '</td>' +
+               '<td class="mono">' + esc(f.target || "") + '</td></tr>';
+    }).join("");
+    var topH = (d.top_hosts || []).map(function(h) {
+        var c = h.counts || {};
+        return '<tr><td class="mono">' + esc(h.value) + '</td>' +
+               '<td>' +
+               '<span class="sev sev-critical">' + (c.critical||0) + '</span> ' +
+               '<span class="sev sev-high">' + (c.high||0) + '</span> ' +
+               '<span class="sev sev-medium">' + (c.medium||0) + '</span> ' +
+               '<span class="sev sev-low">' + (c.low||0) + '</span> ' +
+               '<span class="sev sev-info">' + (c.info||0) + '</span>' +
+               '</td></tr>';
+    }).join("");
+    var now = _fmtDate(d.generated_at, "long");
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8">' +
+        '<title>Surface — Rapport exécutif</title>' +
+        '<style>' +
+        '@page{size:A4;margin:15mm}' +
+        'body{font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px;line-height:1.5;background:white}' +
+        'h1{color:#1e40af;margin:0 0 4px;font-size:1.6em}' +
+        'h2{color:#334155;font-size:1.1em;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #e5e7eb}' +
+        '.subtitle{color:#6b7280;margin:0 0 24px}' +
+        '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}' +
+        '.kpi{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;text-align:center}' +
+        '.kpi-val{font-size:2em;font-weight:700;color:#1e40af;line-height:1}' +
+        '.kpi-lbl{font-size:0.72em;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;margin-top:4px}' +
+        '.kpi.critical .kpi-val{color:#b91c1c}' +
+        '.kpi.high .kpi-val{color:#f97316}' +
+        '.kpi.medium .kpi-val{color:#eab308}' +
+        'table{width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:12px}' +
+        'th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left}' +
+        'th{background:#f9fafb;font-weight:600;text-transform:uppercase;font-size:0.72em;color:#6b7280}' +
+        '.mono{font-family:monospace}' +
+        '.sev{display:inline-block;padding:1px 6px;border-radius:3px;font-size:0.72em;font-weight:700;color:white;text-transform:uppercase}' +
+        '.sev-critical{background:#b91c1c}.sev-high{background:#f97316}.sev-medium{background:#eab308;color:#1f2937}.sev-low{background:#65a30d}.sev-info{background:#0284c7}' +
+        '.footer{color:#9ca3af;font-size:0.78em;margin-top:24px;border-top:1px solid #e5e7eb;padding-top:12px}' +
+        '.print{float:right;padding:8px 16px;background:#1e40af;color:white;border:none;border-radius:6px;cursor:pointer}' +
+        '@media print{.print{display:none}}' +
+        '</style></head><body>' +
+        '<button class="print" onclick="window.print()">🖨 Imprimer / Sauvegarder en PDF</button>' +
+        '<h1>Surface — Rapport exécutif</h1>' +
+        '<p class="subtitle">Généré le ' + esc(now) + '</p>' +
+        '<div class="kpis">' +
+            '<div class="kpi"><div class="kpi-val">' + d.totals.active_findings + '</div><div class="kpi-lbl">Findings actifs</div></div>' +
+            '<div class="kpi critical"><div class="kpi-val">' + (sev.critical||0) + '</div><div class="kpi-lbl">Critical</div></div>' +
+            '<div class="kpi high"><div class="kpi-val">' + (sev.high||0) + '</div><div class="kpi-lbl">High</div></div>' +
+            '<div class="kpi"><div class="kpi-val">' + d.totals.new_last_7d + '</div><div class="kpi-lbl">Nouveaux 7j</div></div>' +
+        '</div>' +
+        '<h2>Périmètre</h2>' +
+        '<p><strong>' + d.scope.hosts + '</strong> hosts surveillés · <strong>' + d.scope.domains + '</strong> domaines · <strong>' + d.scope.assets_total + '</strong> assets au total</p>' +
+        '<h2>Top 10 findings à traiter</h2>' +
+        '<table><tr><th style="width:80px">Sévérité</th><th>Titre</th><th>Cible</th></tr>' + topF + '</table>' +
+        '<h2>Top 10 hosts exposés</h2>' +
+        '<table><tr><th>Host</th><th>Findings (critical · high · medium · low · info)</th></tr>' + topH + '</table>' +
+        '<h2>Santé des scans (7 jours)</h2>' +
+        '<p><strong>' + d.scans.last_7d + '</strong> scans lancés · <strong>' + d.scans.success_rate + '%</strong> de succès · <strong>' + d.scans.failed + '</strong> échecs</p>' +
+        '<h2>Plan d\'action</h2>' +
+        '<p><strong>' + d.measures.done + ' / ' + d.measures.total + '</strong> mesures correctives terminées (' + d.measures.burn_down + '% burndown)</p>' +
+        '<div class="footer">Rapport généré automatiquement par Surface (CISO Toolbox). Les données couvrent les ' + d.period.days + ' derniers jours. ' +
+        'Ce document est destiné à un usage interne uniquement.</div>' +
+        '</body></html>';
+}
+
+window._aiTriageFinding = async function() {
+    var f = _selectedFinding;
+    if (!f) return;
+    var box = document.getElementById("ai-triage-result");
+    if (!box) return;
+    if (typeof window._aiIsEnabled !== "function" || !window._aiIsEnabled()) {
+        box.style.display = "block";
+        box.innerHTML = '<strong>' + esc(t("fd.ai_not_configured")) + '</strong><br>' +
+            '<span style="font-size:0.85em;color:var(--text-muted)">' + esc(t("fd.ai_open_settings")) + '</span>';
+        return;
+    }
+    box.style.display = "block";
+    box.innerHTML = '<em>' + esc(t("fd.ai_analyzing")) + '…</em>';
+    var systemPrompt = (
+        "Tu es un analyste cybersécurité senior. L'utilisateur te donne un finding issu d'un scan ASM. " +
+        "Tu dois répondre UNIQUEMENT en JSON strict, sans texte autour, avec ces champs : " +
+        '{"is_probable_false_positive": boolean, "confidence": number between 0 and 1, ' +
+        '"severity_recommendation": "critical"|"high"|"medium"|"low"|"info", ' +
+        '"summary": "2-3 phrases expliquant la finding au CISO", ' +
+        '"remediation": ["étape 1", "étape 2", "étape 3"], ' +
+        '"references": ["URL 1", "URL 2"]}. ' +
+        "Sois concret et actionnable."
+    );
+    var userPrompt = (
+        "Scanner : " + (f.scanner || "unknown") + "\n" +
+        "Type : " + (f.type || "unknown") + "\n" +
+        "Cible : " + (f.target || "unknown") + "\n" +
+        "Sévérité actuelle : " + (f.severity || "unknown") + "\n" +
+        "Titre : " + (f.title || "") + "\n\n" +
+        "Description :\n" + (f.description || "(aucune)") + "\n\n" +
+        "Évidence :\n" + JSON.stringify(f.evidence || {}, null, 2)
+    );
+    try {
+        var raw = await window._aiCallAPI(systemPrompt, userPrompt);
+        var parsed = window._aiParseJSON ? window._aiParseJSON(raw) : JSON.parse(raw);
+        var fp = parsed.is_probable_false_positive;
+        var conf = Math.round((parsed.confidence || 0) * 100);
+        var sev = parsed.severity_recommendation || "";
+        var html = '';
+        html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_verdict")) + ' :</strong> ';
+        html += fp
+            ? '<span style="color:#9a3412">' + esc(t("fd.ai_fp_probable")) + ' (' + conf + '%)</span>'
+            : '<span style="color:#166534">' + esc(t("fd.ai_genuine")) + ' (' + conf + '%)</span>';
+        html += ' &mdash; <span>' + esc(t("fd.ai_sev_rec")) + ' : <strong>' + esc(sev) + '</strong></span></div>';
+        if (parsed.summary) {
+            html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_summary")) + ' :</strong><br>' + esc(parsed.summary) + '</div>';
+        }
+        if (parsed.remediation && parsed.remediation.length) {
+            html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_remediation")) + ' :</strong><ul style="margin:4px 0 0 20px">';
+            parsed.remediation.forEach(function(step) { html += '<li>' + esc(step) + '</li>'; });
+            html += '</ul></div>';
+        }
+        if (parsed.references && parsed.references.length) {
+            html += '<div><strong>' + esc(t("fd.ai_refs")) + ' :</strong><ul style="margin:4px 0 0 20px;font-size:0.82em">';
+            parsed.references.forEach(function(ref) { html += '<li><a href="' + esc(ref) + '" target="_blank" rel="noopener">' + esc(ref) + '</a></li>'; });
+            html += '</ul></div>';
+        }
+        box.innerHTML = html;
+    } catch (e) {
+        box.innerHTML = '<strong style="color:#991b1b">' + esc(t("fd.ai_error")) + '</strong><br>' +
+            '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(e.message || String(e)) + '</span>';
+    }
+};
 
 // ── Triage modals ─────────────────────────────────────────────
 

@@ -176,13 +176,84 @@ async def _tick() -> None:
         await asyncio.gather(*(_scan_one(a.id) for a in batch), return_exceptions=True)
 
 
+async def _maybe_send_weekly_digest() -> None:
+    """Once a day, check whether we should fire the weekly digest. We
+    send at most one per week, tracked via AppSettings `digest.last_sent_at`.
+    No-op when SMTP isn't configured."""
+    try:
+        from src.routes.reports import _aggregate_report, _render_digest_html, _load_smtp
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+    except Exception:
+        return
+    async with async_session() as db:
+        from src.models import AppSettings
+        from sqlalchemy import select as _sel
+        cfg = await _load_smtp(db)
+        if not cfg.get("host") or not cfg.get("sender") or not cfg.get("recipients"):
+            return
+        last_row = (await db.execute(
+            _sel(AppSettings).where(AppSettings.key == "digest.last_sent_at")
+        )).scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        if last_row and last_row.value:
+            try:
+                last = datetime.fromisoformat(last_row.value)
+                if (now - last).total_seconds() < 7 * 24 * 3600:
+                    return
+            except Exception:
+                pass
+        data = await _aggregate_report(db)
+        html = _render_digest_html(data)
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Surface — digest hebdomadaire"
+        msg["From"] = cfg["sender"]
+        recipients = [r.strip() for r in cfg["recipients"].split(",") if r.strip()]
+        msg["To"] = ", ".join(recipients)
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        try:
+            port = int(cfg.get("port") or 587)
+            host = cfg["host"]
+            if cfg.get("use_tls", "1") != "0":
+                with smtplib.SMTP(host, port, timeout=15) as s:
+                    s.ehlo()
+                    s.starttls()
+                    if cfg.get("username") and cfg.get("password"):
+                        s.login(cfg["username"], cfg["password"])
+                    s.sendmail(cfg["sender"], recipients, msg.as_string())
+            else:
+                with smtplib.SMTP(host, port, timeout=15) as s:
+                    if cfg.get("username") and cfg.get("password"):
+                        s.login(cfg["username"], cfg["password"])
+                    s.sendmail(cfg["sender"], recipients, msg.as_string())
+            if last_row is None:
+                db.add(AppSettings(key="digest.last_sent_at", value=now.isoformat()))
+            else:
+                last_row.value = now.isoformat()
+            await db.commit()
+            logger.info("weekly digest sent to %s", recipients)
+        except Exception:
+            logger.exception("weekly digest send failed")
+
+
 async def run_scheduler() -> None:
     """Long-running coroutine started on FastAPI startup."""
     logger.info("scheduler: starting in %ds (tick=%ds)", INITIAL_DELAY, TICK_SECONDS)
     await asyncio.sleep(INITIAL_DELAY)
+    digest_ticks = 0
     while True:
         try:
             await _tick()
         except Exception:
             logger.exception("scheduler: tick crashed")
+        # Check the digest once every 60 ticks (~1 h). _maybe_send_weekly_digest
+        # is a no-op unless a full week has passed since the last send.
+        digest_ticks += 1
+        if digest_ticks >= 60:
+            digest_ticks = 0
+            try:
+                await _maybe_send_weekly_digest()
+            except Exception:
+                logger.exception("scheduler: digest crashed")
         await asyncio.sleep(TICK_SECONDS)

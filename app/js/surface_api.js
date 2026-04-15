@@ -67,7 +67,15 @@ window.SurfaceAPI = {
     createJob: function(data) { return _fetch("/scans/jobs", { method: "POST", body: data }); },
     deleteJob: function(id) { return _fetch("/scans/jobs/" + id, { method: "DELETE" }); },
     listMeasures: function() { return _fetch("/measures"); },
-    updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data }); }
+    updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data }); },
+    // v0.3 — executive report + github + smtp config
+    executiveReport: function() { return _fetch("/reports/executive"); },
+    smtpConfig: function() { return _fetch("/reports/smtp/config"); },
+    smtpSetConfig: function(data) { return _fetch("/reports/smtp/config", { method: "PUT", body: data }); },
+    sendEmailDigest: function() { return _fetch("/reports/email-digest/send", { method: "POST" }); },
+    githubConfig: function() { return _fetch("/scans/github/config"); },
+    githubSetConfig: function(data) { return _fetch("/scans/github/config", { method: "PUT", body: data }); },
+    githubDeleteConfig: function() { return _fetch("/scans/github/config", { method: "DELETE" }); }
 };
 
 // ── Init: check auth ──

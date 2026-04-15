@@ -596,3 +596,67 @@ async def shodan_delete_config(
     await db.commit()
     set_shodan_api_key_cache(None)
     return {"configured": False, "masked": ""}
+
+
+# ═══════════════════════════════════════════════════════════════
+# v0.3 — GitHub org config
+# ═══════════════════════════════════════════════════════════════
+
+class GitHubConfig(BaseModel):
+    org: str = Field("", max_length=100)
+    token: str = Field("", max_length=200)
+
+
+@router.get("/github/config")
+async def github_get_config(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from src.models import AppSettings
+    rows = await db.execute(select(AppSettings).where(AppSettings.key.like("github.%")))
+    cfg = {"org": "", "token_masked": "", "configured": False}
+    for r in rows.scalars():
+        if r.key == "github.org":
+            cfg["org"] = r.value or ""
+        elif r.key == "github.token" and r.value:
+            cfg["token_masked"] = "•" * max(0, len(r.value) - 4) + r.value[-4:]
+            cfg["configured"] = True
+    return cfg
+
+
+@router.put("/github/config")
+async def github_set_config(
+    body: GitHubConfig,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from src.models import AppSettings
+    from src.scanners import set_github_config_cache
+    for k, v in (("github.org", body.org or ""), ("github.token", body.token or "")):
+        existing = (await db.execute(select(AppSettings).where(AppSettings.key == k))).scalar_one_or_none()
+        if existing is None:
+            db.add(AppSettings(key=k, value=v))
+        else:
+            existing.value = v
+    await db.commit()
+    set_github_config_cache(body.org, body.token)
+    return {"org": body.org, "configured": bool(body.token)}
+
+
+@router.delete("/github/config")
+async def github_delete_config(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from src.models import AppSettings
+    from src.scanners import set_github_config_cache
+    for k in ("github.org", "github.token"):
+        row = (await db.execute(select(AppSettings).where(AppSettings.key == k))).scalar_one_or_none()
+        if row:
+            await db.delete(row)
+    await db.commit()
+    set_github_config_cache("", "")
+    return {"org": "", "configured": False}
