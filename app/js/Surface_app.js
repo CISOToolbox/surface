@@ -1093,15 +1093,15 @@ function _dashBanner(stats, recent24) {
 // ── B. Timeline 30 days ───────────────────────────────────────
 function _dashTimeline() {
     var days = _timelineDaily(30);
-    // Vendor-style soft palette — only critical stays vivid, the rest are
-    // pastels so the chart feels calm at first glance and screams only when
-    // there's actually something to scream about.
+    // Match the canonical severity badge palette (Surface.css .sev-*).
+    // Same hues used everywhere in the app — filter pills, badges, host
+    // counters — so the chart reads instantly.
     var colors = {
-        critical: "#ef4444",
-        high:     "#fca5a5",
-        medium:   "#fed7aa",
-        low:      "#fef9c3",
-        info:     "#dcfce7",
+        critical: "#dc2626",
+        high:     "#ea580c",
+        medium:   "#d97706",
+        low:      "#65a30d",
+        info:     "#0284c7",
     };
 
     // Per-severity max for the Y scale (lines, not stacked)
