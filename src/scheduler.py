@@ -23,7 +23,7 @@ from sqlalchemy import select
 from src.database import async_session
 from src.findings_dedup import diff_summary, insert_many
 from src.models import Finding, MonitoredAsset, ScanJob
-from src.scanners import DEFAULT_SCANNERS_BY_KIND, run_enabled_scanners
+from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, resolve_first_ip, run_enabled_scanners
 
 logger = logging.getLogger("surface.scheduler")
 
@@ -89,6 +89,23 @@ async def _scan_one(asset_id) -> None:
                 select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
             )
             existing_values = {v for (v,) in existing_q.all()}
+
+            # v0.2 — newly discovered hosts always get the full host
+            # default profile (nmap_quick, tls, nuclei, takeover, techstack,
+            # cve_lookup...) so operators get immediate value. On top of
+            # that we union with any host-compatible scanner the parent had
+            # explicitly enabled (e.g. shodan_host if the parent ran it).
+            host_defaults = set(DEFAULT_SCANNERS_BY_KIND.get("host", []))
+            parent_extras = {
+                s for s in (asset.enabled_scanners or [])
+                if s in SCANNER_REGISTRY and "host" in SCANNER_REGISTRY[s]["kinds"]
+            }
+            inherited_scanners = sorted(host_defaults | parent_extras)
+            # Inherit business context too — if the parent is "critical"
+            # the discovered subdomain is probably critical too.
+            inherited_crit = asset.criticality or "medium"
+            inherited_tags = list(asset.tags or [])
+
             for value in discovered:
                 if new_hosts_added >= MAX_AUTO_HOSTS_PER_SCAN:
                     logger.warning(
@@ -104,11 +121,22 @@ async def _scan_one(asset_id) -> None:
                     label=f"Decouvert via {asset.value}",
                     notes=f"Auto-decouvert lors du scan de {asset.value} le {datetime.now(timezone.utc).isoformat()[:19]}",
                     enabled=True,
-                    scan_frequency_hours=24,
+                    scan_frequency_hours=asset.scan_frequency_hours or 24,
+                    enabled_scanners=inherited_scanners,
+                    criticality=inherited_crit,
+                    tags=inherited_tags,
                 ))
                 new_hosts_added += 1
 
         asset.last_scan_at = datetime.now(timezone.utc)
+        # Cache the resolved IP so the Hosts view can group aliases
+        if asset.kind in ("host", "domain"):
+            try:
+                ip = await asyncio.to_thread(resolve_first_ip, asset.value)
+                if ip:
+                    asset.resolved_ip = ip
+            except Exception:
+                pass
         job.completed_at = datetime.now(timezone.utc)
         # Count only inserted+reopened (silenced ones are noise)
         effective = dedup_counts.get("inserted", 0) + dedup_counts.get("reopened", 0)

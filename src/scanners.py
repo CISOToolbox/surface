@@ -130,6 +130,32 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
     return locked, t
 
 
+def resolve_first_ip(value: str) -> str | None:
+    """Return the first A/AAAA record for `value`, or None on failure.
+    Used by the scheduler to cache resolved_ip on MonitoredAsset rows so
+    the Hosts view can group aliases that point to the same machine.
+    Skips CIDR ranges and returns the bare IP for literals."""
+    if not value:
+        return None
+    bare = value.strip().lstrip("[").rstrip("]")
+    if "/" in bare:
+        return None
+    # Pure IP? Return as-is.
+    try:
+        ipaddress.ip_address(bare)
+        return bare
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(bare, None)
+    except (socket.gaierror, UnicodeError):
+        return None
+    for info in infos:
+        if info[4]:
+            return info[4][0]
+    return None
+
+
 def _is_ip_literal(value: str) -> bool:
     """True when `value` is a bare IPv4/IPv6 literal (no hostname, no port)."""
     bare = (value or "").strip()
@@ -2378,7 +2404,7 @@ def _match_tech_signatures(probe: dict[str, Any]) -> list[dict[str, str]]:
     return found
 
 
-def scan_host_techstack(target: str) -> tuple[list[dict[str, Any]], list[str]]:
+def scan_host_techstack(target: str) -> list[dict[str, Any]]:
     """Probe HTTP and HTTPS on the standard ports and emit one
     `tech_fingerprint` finding per detected product. The detected
     (product, version) tuples flow into the cve_lookup scanner that
@@ -2419,7 +2445,7 @@ def scan_host_techstack(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                     "http_status": probe.get("status", 0),
                 },
             })
-    return findings, []
+    return findings
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2571,7 +2597,7 @@ def _cvss_to_severity(score: float) -> str:
     return "info"
 
 
-def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """For each tech_fingerprint finding produced earlier in the same
     scanner chain, look up the matching CVEs and emit one `cve_match`
     finding per CVE (capped to top 5 per product). Each finding carries
@@ -2584,17 +2610,48 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
     target = _safe_target(target)
     findings: list[dict[str, Any]] = []
 
-    products: list[tuple[str, str]] = []
+    # Split detected tech into two buckets:
+    #   versioned: ready for a reliable NVD CPE match
+    #   unversioned: keyword-only match would return every CVE ever filed
+    #                against the product (e.g. ASP.NET from 2009) — that
+    #                is noise, so we skip the NVD call and emit a single
+    #                info finding per product instead.
+    versioned: list[tuple[str, str]] = []
+    unversioned: list[str] = []
     for f in prior_findings or []:
         if f.get("type") != "tech_fingerprint":
             continue
         ev = f.get("evidence") or {}
-        p = ev.get("product", "")
-        v = ev.get("version", "")
-        if p and (p, v) not in products:
-            products.append((p, v))
+        p = (ev.get("product") or "").strip()
+        v = (ev.get("version") or "").strip()
+        if not p:
+            continue
+        if v:
+            if (p, v) not in versioned:
+                versioned.append((p, v))
+        else:
+            if p not in unversioned:
+                unversioned.append(p)
 
-    if not products:
+    findings_info: list[dict[str, Any]] = []
+    for p in unversioned:
+        findings_info.append({
+            "scanner": "cve_lookup",
+            "type": "cve_no_version",
+            "severity": "info",
+            "title": f"CVE lookup : {p} detecte sans version sur {target}",
+            "description": (
+                f"Le produit {p} a ete identifie sur {target} mais la version "
+                f"n'est pas exposee. Un lookup NVD sans version retourne toute "
+                f"l'historique du produit — trop bruyant pour etre utile. "
+                f"Verifier manuellement la version (page /server-status, "
+                f"bannieres applicatives, configuration SI) puis relancer."
+            ),
+            "target": target,
+            "evidence": {"product": p, "reason": "missing_version"},
+        })
+
+    if not versioned and not unversioned:
         return [{
             "scanner": "cve_lookup",
             "type": "cve_no_tech",
@@ -2606,12 +2663,14 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
             ),
             "target": target,
             "evidence": {"target": target},
-        }], []
+        }]
+
+    findings.extend(findings_info)
 
     kev = _kev_load()
     all_cve_ids: list[str] = []
     by_product: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for product, version in products:
+    for product, version in versioned:
         cves = _nvd_lookup(product, version)
         if not cves:
             continue
@@ -2660,7 +2719,7 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
                     "nvd_url": f"https://nvd.nist.gov/vuln/detail/{cid}",
                 },
             })
-    return findings, []
+    return findings
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2676,9 +2735,9 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
 # When the dependency is missing the scanner emits a single info finding
 # explaining how to enable it, and never crashes the scan.
 
-def scan_host_screenshot(target: str) -> tuple[list[dict[str, Any]], list[str]]:
+def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
     if os.environ.get("SURFACE_ENABLE_SCREENSHOTS", "") != "1":
-        return [], []
+        return []
     target = _safe_target(target)
     findings: list[dict[str, Any]] = []
     try:
@@ -2693,7 +2752,7 @@ def scan_host_screenshot(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                 "playwright install chromium`) puis relancez le scan."
             ),
             "target": target, "evidence": {"reason": "playwright not installed"},
-        }], []
+        }]
 
     import base64
     for port, scheme in [(443, "https"), (80, "http")]:
@@ -2724,7 +2783,7 @@ def scan_host_screenshot(target: str) -> tuple[list[dict[str, Any]], list[str]]:
             })
         except Exception as e:
             logger.info("screenshot failed for %s: %s", url, e)
-    return findings, []
+    return findings
 
 
 SCANNER_REGISTRY: dict[str, dict[str, Any]] = {

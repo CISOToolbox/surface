@@ -14,8 +14,31 @@ window.AI_APP_CONFIG = {
         var tt = typeof t === "function" ? t : function(k) { return k; };
         var nucleiTitle = tt("nuclei.section") || "Nuclei (DAST scanner)";
         var shodanTitle = tt("shodan.section") || "Shodan API";
+        var tzTitle = tt("tz.section") || "Time zone";
+        var tzHint = tt("tz.hint") || "All dates shown in the UI are rendered in this zone.";
+        var tzBrowser = tt("tz.browser") || "Auto (browser)";
         var loading = tt("common.loading") || "Loading...";
+
+        // TZ picker — talks only to localStorage, no backend round-trip.
+        var currentTz = "";
+        try { currentTz = localStorage.getItem("surface_timezone") || ""; } catch (e) {}
+        var browserTz = "";
+        try { browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+        var zones = (window._TZ_OPTIONS_GLOBAL || [""]);
+        var tzHtml = '<select id="surface-tz-select" style="width:100%;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:0.85em" data-change="_onTimezoneChange" data-pass-value>';
+        zones.forEach(function(z) {
+            var lbl = z === "" ? (tzBrowser + (browserTz ? " — " + browserTz : "")) : z;
+            var sel = (z === currentTz) ? " selected" : "";
+            tzHtml += '<option value="' + z + '"' + sel + '>' + lbl + '</option>';
+        });
+        tzHtml += '</select>';
+        tzHtml += '<div style="font-size:0.78em;color:var(--text-muted);margin-top:4px">' + tzHint + '</div>';
+
         return (
+            '<div class="settings-section" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">' +
+                '<div class="settings-label">' + tzTitle + '</div>' +
+                tzHtml +
+            '</div>' +
             '<div class="settings-section" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">' +
                 '<div class="settings-label">' + nucleiTitle + '</div>' +
                 '<div id="surface-nuclei-section" style="font-size:0.85em">' +
@@ -90,6 +113,100 @@ function _icon(name, size, extraClass) {
         + '</svg>';
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Timezone-aware date formatting
+// ═══════════════════════════════════════════════════════════════
+// Backend timestamps are stored as UTC (datetime.now(tz=UTC)) and
+// serialized as ISO-8601 with explicit offset (e.g.
+// 2026-04-15T14:32:10+00:00). We parse them into a Date object and
+// format in the user's preferred timezone — either the browser's own
+// (default) or an IANA name chosen in Settings and stored in
+// localStorage under `surface_timezone`.
+//
+// The helper accepts both "short" (YYYY-MM-DD HH:MM) and "long"
+// (YYYY-MM-DD HH:MM:SS) modes to match the two granularities currently
+// used across the app.
+
+window._onTimezoneChange = function(value) {
+    try {
+        if (value) localStorage.setItem("surface_timezone", value);
+        else localStorage.removeItem("surface_timezone");
+    } catch (e) {}
+    // Re-render the current panel so every _fmtDate call picks up the
+    // new timezone immediately. No reload required.
+    if (typeof renderPanel === "function") renderPanel();
+    if (typeof showStatus === "function") {
+        showStatus(t("tz.saved") || "Timezone updated");
+    }
+};
+
+function _getTimezone() {
+    try {
+        return localStorage.getItem("surface_timezone") || "";
+    } catch (e) {
+        return "";
+    }
+}
+
+function _fmtDate(iso, mode) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var tz = _getTimezone();
+    var opts = {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+    };
+    if (mode === "long") opts.second = "2-digit";
+    if (tz) opts.timeZone = tz;
+    // Use sv-SE locale — it produces "YYYY-MM-DD HH:MM" which is the
+    // format the rest of the app was using before. Keeps alignment and
+    // is culture-neutral.
+    try {
+        return d.toLocaleString("sv-SE", opts);
+    } catch (e) {
+        // Invalid TZ → fall back to browser TZ
+        delete opts.timeZone;
+        return d.toLocaleString("sv-SE", opts);
+    }
+}
+
+// Default IANA zones offered in the Settings picker. "" = browser auto.
+// Exposed on window so AI_APP_CONFIG.settingsExtraHTML (declared outside
+// the IIFE) can build the select.
+window._TZ_OPTIONS_GLOBAL = [
+    "",                    // auto-detect (browser)
+    "UTC",
+    "Europe/Paris",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Madrid",
+    "Europe/Rome",
+    "Europe/Amsterdam",
+    "Europe/Brussels",
+    "Europe/Lisbon",
+    "Europe/Athens",
+    "Europe/Warsaw",
+    "Europe/Dublin",
+    "Europe/Zurich",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Sao_Paulo",
+    "America/Toronto",
+    "Africa/Casablanca",
+    "Africa/Tunis",
+    "Africa/Algiers",
+    "Asia/Dubai",
+    "Asia/Kolkata",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Asia/Shanghai",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+];
+
 var _panel = "dashboard";
 var _findings = [];
 var _monitored = [];
@@ -108,6 +225,7 @@ var _selectedHost = null;    // MonitoredAsset object, set when user clicks a ho
 var _hostHideFP = true;      // Host detail: hide false-positive findings by default
 var _hostSearch = "";        // free-text filter for the Hosts panel
 var _bulkSelection = {};     // { [finding_id]: true } — checked rows in findings table
+var _monitoredBulkSelection = {}; // { [asset_id]: true } — checked rows in surveillance table
 var _monitoredSearch = "";   // free-text search for the Surveillance panel
 var _findingsSearch = "";    // free-text search for the Findings panel
 
@@ -173,6 +291,9 @@ function _scannerLabel(s) {
         "scheduled-host":       "scanner.scheduled_host",
         "scheduled-domain":     "scanner.scheduled_domain",
         "scheduled-discovery":  "scanner.scheduled_discovery",
+        "manual-host":          "scanner.manual_host",
+        "manual-domain":        "scanner.manual_domain",
+        "manual-discovery":     "scanner.manual_discovery",
     }[s];
     if (key) return t(key);
     // Fall back to the friendly label declared in SCANNER_REGISTRY
@@ -282,7 +403,7 @@ function _renderJobs(c) {
             h += '<div class="job-diff">' + diffParts.join(" ") + '</div>';
         }
         h += '</td>';
-        h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc((j.created_at || "").substring(0, 16).replace("T", " ")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
+        h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(_fmtDate(j.created_at || "")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
         h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur) + '</td>';
         h += '<td style="white-space:nowrap">';
         // Rerun is offered on every completed/failed job. The handler picks
@@ -358,9 +479,9 @@ window._rerunJob = function(id, el) {
         SurfaceAPI.createJob({ target: job.target, profile: job.profile || "quick" }).then(ok).catch(fail);
         return;
     }
-    // Scheduled jobs (scheduled-host / scheduled-domain / scheduled-discovery)
-    // are bound to a MonitoredAsset — find it by value and trigger its
-    // /scan endpoint, which runs the scanner synchronously.
+    // Scheduled AND manual jobs (scheduled-*/manual-*) are bound to a
+    // MonitoredAsset — find it by value and trigger its /scan endpoint,
+    // which kicks off the full scanner chain asynchronously.
     var asset = (_monitored || []).find(function(a) { return a.value === job.target; });
     if (asset) {
         SurfaceAPI.scanMonitored(asset.id).then(ok).catch(fail);
@@ -542,7 +663,16 @@ function _refreshMonitoredTable() {
         return;
     }
 
+    // Drop selections for assets that are no longer in the filtered list
+    var filteredIds = {};
+    filtered.forEach(function(a) { filteredIds[a.id] = true; });
+    Object.keys(_monitoredBulkSelection).forEach(function(id) {
+        if (!filteredIds[id]) delete _monitoredBulkSelection[id];
+    });
+    var allChecked = filtered.length > 0 && filtered.every(function(a) { return _monitoredBulkSelection[a.id]; });
+
     h += '<table class="surface-table"><thead><tr>'
+      + '<th style="width:28px"><input type="checkbox" id="mon-bulk-all"' + (allChecked ? " checked" : "") + ' data-change="_toggleMonBulkAll" data-pass-value></th>'
       + '<th>' + esc(t("monitored.col.type")) + '</th>'
       + '<th>' + esc(t("monitored.col.value")) + '</th>'
       + '<th>' + esc(t("monitored.col.label")) + '</th>'
@@ -571,7 +701,9 @@ function _refreshMonitoredTable() {
         } else {
             nextStr = '<span style="color:var(--text-muted)">' + esc(t("monitored.next.disabled")) + '</span>';
         }
+        var checkedM = _monitoredBulkSelection[a.id] ? " checked" : "";
         h += '<tr style="' + (disabled ? "opacity:0.5;" : "") + '">';
+        h += '<td data-stop><input type="checkbox" class="bulk-check"' + checkedM + ' data-click="_toggleMonBulkOne" data-args=\'' + _da(a.id) + '\' data-stop></td>';
         h += '<td><span class="kind-badge kind-' + esc(a.kind) + '">' + _kindLabel(a.kind) + '</span></td>';
         h += '<td style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(a.value) + '</td>';
         h += '<td style="font-size:0.85em">' + esc(a.label || "-") + '</td>';
@@ -584,7 +716,7 @@ function _refreshMonitoredTable() {
         }
         h += '<td style="font-size:0.82em;color:var(--text-muted)">' + (freq > 0 ? String(t("monitored.frequency_hours")).replace("{n}", freq) : "—") + '</td>';
         h += '<td><label style="cursor:pointer"><input type="checkbox"' + (a.enabled ? " checked" : "") + ' data-change="_toggleMonitored" data-args=\'' + _da(a.id) + '\' data-pass-el></label></td>';
-        h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(a.last_scan_at ? (a.last_scan_at || "").substring(0, 16).replace("T", " ") : t("monitored.last.never")) + '</td>';
+        h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(a.last_scan_at ? _fmtDate(a.last_scan_at || "") : t("monitored.last.never")) + '</td>';
         h += '<td style="font-size:0.78em">' + nextStr + '</td>';
         h += '<td style="white-space:nowrap">';
         h += '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.edit")) + '">' + _icon("edit", 14) + '</button> ';
@@ -594,8 +726,56 @@ function _refreshMonitoredTable() {
     });
     h += '</tbody></table>';
 
+    var selCount = Object.keys(_monitoredBulkSelection).length;
+    if (selCount > 0) {
+        h += '<div class="bulk-action-bar">';
+        h += '<span class="bulk-count">' + selCount + ' ' + esc(t("bulk.selected")) + '</span>';
+        h += '<button class="btn-add btn-icon" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
+        h += '<span style="flex:1"></span>';
+        h += '<button class="btn-add" data-click="_clearMonitoredBulk">' + esc(t("bulk.clear")) + '</button>';
+        h += '</div>';
+    }
+
     wrap.innerHTML = h;
 }
+
+window._toggleMonBulkAll = function() {
+    var el = document.getElementById("mon-bulk-all");
+    var checked = el && el.checked;
+    var q = _monitoredSearch.trim().toLowerCase();
+    var filtered = _monitored.filter(function(a) {
+        if (_monitoredFilterScanners.length) {
+            var scs = a.enabled_scanners || [];
+            var matched = false;
+            for (var i = 0; i < scs.length; i++) {
+                if (_monitoredFilterScanners.indexOf(scs[i]) >= 0) { matched = true; break; }
+            }
+            if (!matched) return false;
+        }
+        if (!q) return true;
+        return ((a.value||"")+(a.label||"")+(a.notes||"")+(a.kind||"")).toLowerCase().indexOf(q) >= 0;
+    });
+    if (checked) filtered.forEach(function(a) { _monitoredBulkSelection[a.id] = true; });
+    else _monitoredBulkSelection = {};
+    _refreshMonitoredTable();
+};
+
+window._toggleMonBulkOne = function(id) {
+    if (_monitoredBulkSelection[id]) delete _monitoredBulkSelection[id];
+    else _monitoredBulkSelection[id] = true;
+    _refreshMonitoredTable();
+};
+
+window._clearMonitoredBulk = function() {
+    _monitoredBulkSelection = {};
+    _refreshMonitoredTable();
+};
+
+window._bulkConfigureScanners = function() {
+    var ids = Object.keys(_monitoredBulkSelection);
+    if (!ids.length) return;
+    _editScannersDialog(ids);
+};
 
 window._setMonitoredSearch = function(v) {
     _monitoredSearch = v || "";
@@ -751,6 +931,82 @@ window._newMonitoredDialog = function() {
         var v = document.getElementById("monitored-value");
         if (v) v.focus();
     }, 50);
+};
+
+// Lightweight scanner-only edit modal — opened from the host card or
+// from the bulk-action bar on the Surveillance page. Patches just the
+// `enabled_scanners` field so the user doesn't have to navigate the full
+// monitored asset modal for the most common adjustment.
+window._editScannersDialog = function(idOrIds) {
+    var ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+    var assets = _monitored.filter(function(a) { return ids.indexOf(a.id) >= 0; });
+    if (!assets.length) return;
+    // Pick the first asset's scanners as the initial state. For bulk
+    // applies, the user explicitly accepts they overwrite every selected
+    // asset's scanners with the same set.
+    var first = assets[0];
+    var kind = first.kind || "host";
+    var entry = (_scannersCatalog && _scannersCatalog[kind]) || { scanners: [], defaults: [] };
+    var current = {};
+    (first.enabled_scanners || []).forEach(function(s) { current[s] = true; });
+
+    var ov = document.getElementById("scanners-overlay");
+    if (!ov) {
+        ov = document.createElement("div");
+        ov.id = "scanners-overlay";
+        ov.className = "ct-modal-overlay";
+        document.body.appendChild(ov);
+        ov.addEventListener("click", function(e) { if (e.target === ov) ov.classList.remove("open"); });
+    }
+    var listH = "";
+    if (entry.scanners && entry.scanners.length) {
+        entry.scanners.forEach(function(s) {
+            var checked = current[s.name] ? " checked" : "";
+            listH += '<label class="scanner-check"><input type="checkbox" value="' + esc(s.name) + '"' + checked + '> <span>' + esc(s.label) + '</span></label>';
+        });
+    } else {
+        listH = '<div class="ct-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
+    }
+    var subtitle = ids.length > 1
+        ? t("hosts.bulk_scanners_subtitle").replace("{n}", ids.length)
+        : esc(first.value);
+    ov.innerHTML =
+        '<div class="ct-modal" style="width:520px">' +
+            '<div class="ct-modal-header"><span>' + esc(t("hosts.configure_scans")) + ' — ' + subtitle + '</span><button class="ct-modal-close" data-click="_closeScannersDialog">' + _icon("x", 18) + '</button></div>' +
+            '<div class="ct-modal-body">' +
+                '<div id="scanners-list" data-ids=\'' + _da.apply(null, ids) + '\'>' + listH + '</div>' +
+            '</div>' +
+            '<div class="ct-modal-footer">' +
+                '<button class="btn-add" data-click="_closeScannersDialog">' + esc(t("action.cancel")) + '</button>' +
+                '<button class="btn-add" style="background:#dc2626;color:white" data-click="_saveScannersDialog">' + esc(t("action.save")) + '</button>' +
+            '</div>' +
+        '</div>';
+    // Stash the ids on the modal so the save handler knows what to patch
+    ov.dataset.ids = JSON.stringify(ids);
+    ov.classList.add("open");
+};
+
+window._closeScannersDialog = function() {
+    var ov = document.getElementById("scanners-overlay");
+    if (ov) ov.classList.remove("open");
+};
+
+window._saveScannersDialog = function() {
+    var ov = document.getElementById("scanners-overlay");
+    if (!ov) return;
+    var ids = JSON.parse(ov.dataset.ids || "[]");
+    var picked = [];
+    ov.querySelectorAll("#scanners-list input[type=checkbox]:checked").forEach(function(cb) {
+        picked.push(cb.value);
+    });
+    Promise.all(ids.map(function(id) {
+        return SurfaceAPI.updateMonitored(id, { enabled_scanners: picked });
+    })).then(function() {
+        ov.classList.remove("open");
+        showStatus(t("hosts.scanners_updated").replace("{n}", ids.length));
+        _bulkSelection = {};
+        _loadAndRender();
+    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
 
 window._editMonitoredDialog = function(id) {
@@ -1518,7 +1774,7 @@ function _dashHealth() {
     h += '</div>';
 
     if (hs.lastJob) {
-        var last = (hs.lastJob.created_at || "").substring(0, 16).replace("T", " ");
+        var last = _fmtDate(hs.lastJob.created_at || "");
         h += '<div class="dash-health-last"><span class="text-muted">' + esc(t("dash.health_last_job")) + '</span> ' + esc(last) + ' <span class="text-muted">(' + esc(_scannerLabel(hs.lastJob.scanner)) + ')</span></div>';
     }
 
@@ -1722,7 +1978,7 @@ function _refreshFindingsBody() {
     h += '<th></th></tr></thead><tbody>';
     filtered.forEach(function(f) {
         var checked = _bulkSelection[f.id] ? " checked" : "";
-        var dateDisplay = f.created_at ? (f.created_at.substring(0, 16).replace("T", " ")) : "-";
+        var dateDisplay = f.created_at ? (_fmtDate(f.created_at)) : "-";
         h += '<tr class="finding-row sev-' + esc(f.severity) + ' status-' + esc(f.status) + '" data-click="_openFinding" data-args=\'' + _da(f.id) + '\'>';
         h += '<td data-stop><input type="checkbox" class="bulk-check"' + checked + ' data-click="_toggleBulkOne" data-args=\'' + _da(f.id) + '\' data-stop></td>';
         h += '<td><span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>';
@@ -1985,9 +2241,9 @@ function _renderFindingDetail(c) {
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.scanner")) + '</div><div>' + esc(f.scanner) + '</div></div>';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.type")) + '</div><div>' + esc(f.type) + '</div></div>';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.target")) + '</div><div>' + esc(f.target || "-") + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.created")) + '</div><div>' + esc((f.created_at || "").substring(0, 19).replace("T", " ")) + '</div></div>';
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.created")) + '</div><div>' + esc(_fmtDate(f.created_at || "", "long")) + '</div></div>';
     if (f.triaged_at) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.triaged")) + '</div><div>' + esc((f.triaged_at || "").substring(0, 19).replace("T", " ")) + ' ' + esc(t("fd.triaged_by")) + ' ' + esc(f.triaged_by || "?") + '</div></div>';
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.triaged")) + '</div><div>' + esc(_fmtDate(f.triaged_at || "", "long")) + ' ' + esc(t("fd.triaged_by")) + ' ' + esc(f.triaged_by || "?") + '</div></div>';
     }
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.description")) + '</div><div style="white-space:pre-wrap">' + esc(f.description || t("fd.description_none")) + '</div></div>';
     if (f.evidence && Object.keys(f.evidence).length) {
@@ -2557,16 +2813,50 @@ function _refreshHostCards() {
             || (a.notes || "").toLowerCase().indexOf(q) >= 0;
     });
 
-    // Sort: hosts with most ACTIVE (non-triaged) findings first, then alpha.
-    // Triaged findings (false_positive / fixed) don't bubble a host up.
-    filtered.sort(function(a, b) {
-        var ca = _countFindingsByHost(a.value).active;
-        var cb = _countFindingsByHost(b.value).active;
-        if (ca !== cb) return cb - ca;
-        return (a.value || "").localeCompare(b.value || "");
+    // v0.2: group filtered hosts by resolved_ip so hostnames pointing to
+    // the same physical machine render as a single card. A group's
+    // "primary" host is the one with the most active findings; the
+    // others are listed as aliases below the card header. Hosts without
+    // a resolved_ip (manual IP-literal entries, unresolvable names) are
+    // still rendered individually.
+    var groups = {};
+    var singletons = [];
+    filtered.forEach(function(a) {
+        var ip = a.resolved_ip || "";
+        // IP literals resolve to themselves — skip grouping for them,
+        // they'd just group to their own value with one alias.
+        if (!ip || ip === a.value) {
+            singletons.push({ primary: a, aliases: [], ip: ip });
+            return;
+        }
+        if (!groups[ip]) groups[ip] = [];
+        groups[ip].push(a);
+    });
+    // Build entries: each group = one card whose primary is the host
+    // with the most active findings
+    var entries = singletons.slice();
+    Object.keys(groups).forEach(function(ip) {
+        var members = groups[ip];
+        if (members.length === 1) {
+            entries.push({ primary: members[0], aliases: [], ip: ip });
+            return;
+        }
+        members.sort(function(x, y) {
+            return _countFindingsByHost(y.value).active - _countFindingsByHost(x.value).active;
+        });
+        entries.push({ primary: members[0], aliases: members.slice(1), ip: ip });
     });
 
-    var h = '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + filtered.length + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + '</div>';
+    // Sort: entries with most ACTIVE (non-triaged) findings first, then alpha.
+    entries.sort(function(a, b) {
+        var ca = _countFindingsByHost(a.primary.value).active;
+        var cb = _countFindingsByHost(b.primary.value).active;
+        if (ca !== cb) return cb - ca;
+        return (a.primary.value || "").localeCompare(b.primary.value || "");
+    });
+
+    var shownHosts = entries.reduce(function(n, e) { return n + 1 + e.aliases.length; }, 0);
+    var h = '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups")) + '</div>';
 
     if (!filtered.length) {
         h += '<div class="empty-state">' + esc(hosts.length ? t("hosts.no_match") : t("hosts.empty")) + '</div>';
@@ -2575,10 +2865,18 @@ function _refreshHostCards() {
     }
 
     h += '<div class="host-cards-grid">';
-    filtered.forEach(function(a) {
+    entries.forEach(function(entry) {
+        var a = entry.primary;
+        // Aggregate counts across primary + aliases so the card reflects
+        // everything that's observable at this IP, even though each alias
+        // keeps its own MonitoredAsset row under the hood.
         var counts = _countFindingsByHost(a.value);
+        entry.aliases.forEach(function(al) {
+            var cc = _countFindingsByHost(al.value);
+            Object.keys(counts).forEach(function(k) { counts[k] = (counts[k]||0) + (cc[k]||0); });
+        });
         var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
-        var last = a.last_scan_at ? a.last_scan_at.substring(0, 16).replace("T", " ") : t("monitored.last.never");
+        var last = a.last_scan_at ? _fmtDate(a.last_scan_at) : t("monitored.last.never");
         var score = _riskScoreFor(a, counts);
         var tier = _riskTier(score);
         h += '<div class="host-card" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
@@ -2593,6 +2891,18 @@ function _refreshHostCards() {
         h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + '</span>';
         h += '</div>';
         if (a.label) h += '<div class="host-card-label">' + esc(a.label) + '</div>';
+        if (entry.ip) {
+            h += '<div class="host-card-ip" title="' + esc(t("hosts.resolved_ip_tooltip")) + '">' + _icon("target", 11) + ' ' + esc(entry.ip) + '</div>';
+        }
+        if (entry.aliases.length) {
+            h += '<div class="host-card-aliases">';
+            h += '<span class="host-card-aliases-lbl">' + esc(t("hosts.aliases").replace("{n}", entry.aliases.length)) + '</span>';
+            entry.aliases.forEach(function(al) {
+                // data-stop so clicking an alias pill doesn't open the primary's detail
+                h += '<button class="host-alias-pill" data-click="_openHost" data-args=\'' + _da(al.id) + '\' data-stop title="' + esc(al.value) + '">' + esc(al.value) + '</button>';
+            });
+            h += '</div>';
+        }
         if (a.tags && a.tags.length) {
             h += '<div class="host-card-tags">';
             a.tags.forEach(function(tag) {
@@ -2613,6 +2923,13 @@ function _refreshHostCards() {
         } else {
             h += '<div class="host-card-findings empty">' + esc(t("hosts.findings.none")) + '</div>';
         }
+        // Footer with a scanner count + quick-edit button. Stops propagation
+        // so the click doesn't bubble to the host-card "open detail" handler.
+        var scs = a.enabled_scanners || [];
+        h += '<div class="host-card-footer">';
+        h += '<span class="host-card-scancount">' + _icon("search", 12) + ' ' + scs.length + ' ' + esc(t("hosts.scanners")) + '</span>';
+        h += '<button class="btn-mini" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
+        h += '</div>';
         h += '</div>';
     });
     h += '</div>';
@@ -2656,7 +2973,7 @@ function _renderHostDetail(c) {
     var a = _selectedHost;
     var counts = _countFindingsByHost(a.value);
     var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
-    var last = a.last_scan_at ? a.last_scan_at.substring(0, 19).replace("T", " ") : t("monitored.last.never");
+    var last = a.last_scan_at ? _fmtDate(a.last_scan_at, "long") : t("monitored.last.never");
 
     var score = _riskScoreFor(a, counts);
     var tier = _riskTier(score);
@@ -2674,6 +2991,21 @@ function _renderHostDetail(c) {
     // Info card
     h += '<div class="surface-card">';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.value")) + '</div><div style="font-family:monospace">' + esc(a.value) + '</div></div>';
+    if (a.resolved_ip && a.resolved_ip !== a.value) {
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.resolved_ip")) + '</div><div style="font-family:monospace">' + esc(a.resolved_ip) + '</div></div>';
+    }
+    // Aliases sharing the same IP — computed at render time from _monitored
+    if (a.resolved_ip) {
+        var aliases = (_monitored || []).filter(function(x) {
+            return x.kind === "host" && x.id !== a.id && x.resolved_ip === a.resolved_ip;
+        });
+        if (aliases.length) {
+            var aliH = aliases.map(function(al) {
+                return '<button class="host-alias-pill" data-click="_openHost" data-args=\'' + _da(al.id) + '\' title="' + esc(al.value) + '">' + esc(al.value) + '</button>';
+            }).join(" ");
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.aliases")) + '</div><div>' + aliH + '</div></div>';
+        }
+    }
     if (a.label) h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.label")) + '</div><div>' + esc(a.label) + '</div></div>';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.enabled")) + '</div><div>' + (a.enabled ? "✓" : "✗") + '</div></div>';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.frequency")) + '</div><div>' + _tn("host.frequency_hours", a.scan_frequency_hours || 0) + '</div></div>';
@@ -2701,7 +3033,7 @@ function _renderHostDetail(c) {
         h += '<h3 style="margin-top:20px">' + esc(t("host.scan_history")) + '</h3>';
         h += '<div class="host-timeline">';
         hostJobs.forEach(function(j) {
-            var dateStr = (j.created_at || "").substring(0, 16).replace("T", " ");
+            var dateStr = _fmtDate(j.created_at || "");
             var diff = j.diff || {};
             h += '<div class="host-timeline-row">';
             h += '<span class="host-timeline-dot"></span>';
@@ -2781,7 +3113,7 @@ function _renderHostDetail(c) {
         h += '<th></th></tr></thead><tbody>';
         hostFindings.forEach(function(f) {
             var checked = _bulkSelection[f.id] ? " checked" : "";
-            var dateDisplay = f.created_at ? (f.created_at.substring(0, 16).replace("T", " ")) : "-";
+            var dateDisplay = f.created_at ? (_fmtDate(f.created_at)) : "-";
             h += '<tr class="finding-row sev-' + esc(f.severity) + ' status-' + esc(f.status) + '" data-click="_openFindingFromHost" data-args=\'' + _da(f.id) + '\'>';
             h += '<td data-stop><input type="checkbox" class="bulk-check"' + checked + ' data-click="_toggleBulkOne" data-args=\'' + _da(f.id) + '\' data-stop></td>';
             h += '<td><span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>';
@@ -2864,10 +3196,43 @@ window._openFindingFromHost = function(id) {
 window._scanHost = function(id) {
     showStatus(t("mon_modal.scan_in_progress"));
     SurfaceAPI.scanMonitored(id).then(function(r) {
-        showStatus(r.findings_created + " finding(s) cree(s) sur " + r.target);
+        // v0.2 — scan is now asynchronous server-side. The POST returns
+        // immediately with a job_id in "running" state. Refresh the
+        // jobs/findings lists right away so the running job is visible,
+        // then poll until the job is no longer running.
         _loadAndRender();
+        if (r && r.job_id) _pollScanJob(r.job_id, r.target);
     }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
+
+// Poll a running ScanJob until it reaches completed/failed, then refresh
+// the findings + jobs lists so the new data shows up without requiring a
+// manual reload.
+function _pollScanJob(jobId, target) {
+    var attempts = 0;
+    var maxAttempts = 120;  // 6 minutes with 3 s interval
+    var iv = setInterval(function() {
+        attempts++;
+        SurfaceAPI.listJobs().then(function(jobs) {
+            var job = (jobs || []).find(function(j) { return j.id === jobId; });
+            if (!job || job.status === "running" || job.status === "pending") {
+                if (attempts >= maxAttempts) {
+                    clearInterval(iv);
+                    showStatus(t("host.scan_timeout").replace("{target}", target || ""), true);
+                }
+                return;
+            }
+            clearInterval(iv);
+            var label = (job.status === "completed") ? "host.scan_done" : "host.scan_failed";
+            showStatus(
+                t(label)
+                    .replace("{target}", target || job.target)
+                    .replace("{n}", job.findings_count || 0)
+            );
+            _loadAndRender();
+        }).catch(function() { /* swallow transient errors */ });
+    }, 3000);
+}
 
 window._deleteHostFromDetail = function(id) {
     if (!confirm(t("host.delete_confirm"))) return;
@@ -2909,7 +3274,7 @@ function _renderNucleiFormInto(holder, cfg) {
     var tuning = cfg.tuning || {};
     var limits = cfg.tuning_limits || {};
     var defaults = cfg.tuning_defaults || {};
-    var last = cfg.last_update ? cfg.last_update.substring(0, 19).replace("T", " ") : t("nuclei.unknown");
+    var last = cfg.last_update ? _fmtDate(cfg.last_update, "long") : t("nuclei.unknown");
 
     function numField(key, labelKey, helpKey) {
         var lim = limits[key] || { min: 0, max: 99999 };
@@ -3036,7 +3401,7 @@ function _renderShodanFormInto(holder, cfg) {
     var tt = typeof t === "function" ? t : function(k) { return k; };
     var isConfigured = cfg && cfg.configured;
     var masked = (cfg && cfg.masked) || "";
-    var lastCheck = (cfg && cfg.last_check_at) ? cfg.last_check_at.substring(0, 19).replace("T", " ") : "";
+    var lastCheck = (cfg && cfg.last_check_at) ? _fmtDate(cfg.last_check_at, "long") : "";
 
     var h = "";
     h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:10px">' + esc(tt("shodan.help")) + '</div>';

@@ -8,18 +8,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user
 from src.database import async_session, get_db
-from src.findings_dedup import insert_many
-from src.models import Finding, MonitoredAsset, User
+from src.findings_dedup import diff_summary, insert_many
+from src.models import Finding, MonitoredAsset, ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.routes.scans import _quick_scan_sync
-from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, available_scanners_for_kind
+from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 
 router = APIRouter(prefix="/api/monitored-assets", tags=["monitored"])
 
@@ -112,6 +112,7 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "enabled_scanners": list(a.enabled_scanners or []),
         "tags": list(a.tags or []),
         "criticality": a.criticality or "medium",
+        "resolved_ip": a.resolved_ip,
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
     }
 
@@ -157,6 +158,12 @@ async def create_asset(
     crit = (body.criticality or "medium").lower()
     if crit not in _VALID_CRITICALITY:
         crit = "medium"
+    resolved_ip = None
+    if body.kind in ("host", "domain"):
+        try:
+            resolved_ip = await asyncio.to_thread(resolve_first_ip, canonical)
+        except Exception:
+            resolved_ip = None
     a = MonitoredAsset(
         kind=body.kind, value=canonical, label=body.label or "",
         notes=body.notes or "", enabled=bool(body.enabled),
@@ -164,6 +171,7 @@ async def create_asset(
         enabled_scanners=scanners,
         tags=_clean_tags(body.tags),
         criticality=crit,
+        resolved_ip=resolved_ip,
     )
     db.add(a)
     await db.commit()
@@ -227,29 +235,125 @@ async def delete_asset(
     await db.commit()
 
 
+async def _run_manual_scan(
+    asset_id: uuid.UUID,
+    job_id: uuid.UUID,
+    kind: str,
+    value: str,
+    enabled_scanners: list[str],
+) -> None:
+    """Background task: run the full scanner chain on a single asset.
+    Lives in its own DB session so we never share a connection with the
+    request that kicked us off. Mirrors scheduler._scan_one."""
+    error_msg: str | None = None
+    try:
+        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners)
+    except Exception as e:
+        findings, discovered = [], []
+        error_msg = str(e)[:1000]
+
+    async with async_session() as db:
+        asset = await db.get(MonitoredAsset, asset_id)
+        job = await db.get(ScanJob, job_id)
+        if asset is None or job is None:
+            return
+
+        counts = await insert_many(db, findings)
+
+        # Auto-enrol discovered hosts like the scheduler.
+        new_hosts_added = 0
+        if discovered:
+            existing_q = await db.execute(
+                select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
+            )
+            existing_values = {v for (v,) in existing_q.all()}
+            # Newly discovered hosts get the full host default suite +
+            # any host-compatible extras the parent had explicitly enabled.
+            host_defaults = set(DEFAULT_SCANNERS_BY_KIND.get("host", []))
+            parent_extras = {
+                s for s in (asset.enabled_scanners or [])
+                if s in SCANNER_REGISTRY and "host" in SCANNER_REGISTRY[s]["kinds"]
+            }
+            inherited_scanners = sorted(host_defaults | parent_extras)
+            for dv in discovered:
+                if new_hosts_added >= 50:
+                    break
+                if dv in existing_values:
+                    continue
+                existing_values.add(dv)
+                db.add(MonitoredAsset(
+                    kind="host", value=dv,
+                    label=f"Decouvert via {asset.value}",
+                    notes=f"Auto-decouvert lors du scan manuel de {asset.value} le {datetime.now(timezone.utc).isoformat()[:19]}",
+                    enabled=True,
+                    scan_frequency_hours=asset.scan_frequency_hours or 24,
+                    enabled_scanners=inherited_scanners,
+                    criticality=asset.criticality or "medium",
+                    tags=list(asset.tags or []),
+                ))
+                new_hosts_added += 1
+
+        asset.last_scan_at = datetime.now(timezone.utc)
+        if asset.kind in ("host", "domain"):
+            try:
+                ip = await asyncio.to_thread(resolve_first_ip, asset.value)
+                if ip:
+                    asset.resolved_ip = ip
+            except Exception:
+                pass
+        job.completed_at = datetime.now(timezone.utc)
+        job.diff = diff_summary(counts)
+        job.findings_count = counts.get("inserted", 0) + counts.get("reopened", 0)
+        if error_msg:
+            job.status = "failed"
+            job.error = error_msg
+        else:
+            job.status = "completed"
+        await db.commit()
+
+
 @router.post("/{asset_id}/scan")
 async def scan_asset(
     asset_id: uuid.UUID,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Run a quick scan on a single monitored asset (domain or IP)."""
+    """Kick off a full scan on a single monitored asset as a background
+    task. Returns immediately with the `job_id` so the frontend can show
+    the job in its list and poll for completion."""
     check_scan_quota(str(user.id) if user else "anonymous")
     a = await db.get(MonitoredAsset, asset_id)
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if a.kind == "ip_range":
-        raise HTTPException(status_code=400, detail="Quick scan on IP ranges not supported. Use external scanner + bulk-import.")
 
-    try:
-        finding_dicts = await asyncio.to_thread(_quick_scan_sync, a.value)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Scan failed: {e}")
+    kind = a.kind
+    value = a.value
+    enabled_scanners = list(a.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
 
-    counts = await insert_many(db, finding_dicts)
-    a.last_scan_at = datetime.now(timezone.utc)
+    # Manual scan → distinct tag so the Scans page shows it as "manual"
+    # not "scheduled" (even though it uses the same pipeline)
+    scanner_tag = {
+        "domain": "manual-domain",
+        "host": "manual-host",
+        "ip_range": "manual-discovery",
+    }.get(kind, "manual")
+    job = ScanJob(
+        target=value, profile="manual", scanner=scanner_tag,
+        status="running", started_at=datetime.now(timezone.utc),
+        triggered_by=(user.email if user else "manual"),
+    )
+    db.add(job)
     await db.commit()
-    return {"target": a.value, "findings_created": counts.get("inserted", 0) + counts.get("reopened", 0), "dedup": counts}
+    await db.refresh(job)
+
+    background.add_task(_run_manual_scan, asset_id, job.id, kind, value, enabled_scanners)
+
+    return {
+        "target": value,
+        "job_id": str(job.id),
+        "status": "running",
+    }
 
 
 @router.post("/scan-all")
@@ -257,29 +361,30 @@ async def scan_all(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Scan every enabled monitored domain/IP in parallel (bounded). Skips ip_range entries."""
+    """Scan every enabled monitored asset in parallel. Runs the full
+    scanner chain (same as the scheduler tick) on each asset so the
+    result mirrors what the background scheduler would produce."""
     check_scan_quota(str(user.id) if user else "anonymous")
     result = await db.execute(select(MonitoredAsset).where(MonitoredAsset.enabled == True))
-    assets = [a for a in result.scalars().all() if a.kind != "ip_range"]
+    assets = list(result.scalars().all())
     total_findings = 0
     scanned = 0
     errors = []
 
-    # Concurrency cap: 3 parallel scans at most to avoid overloading the scheduler
     sem = asyncio.Semaphore(3)
 
-    async def _scan_one(asset_id: uuid.UUID, value: str) -> tuple[uuid.UUID, str, dict | None, str | None]:
-        """Run the scan + write findings in a dedicated DB session per coroutine,
-        so two concurrent scans never share a SQLAlchemy session (which is not
-        coroutine-safe)."""
+    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str]) -> tuple[uuid.UUID, str, dict | None, str | None]:
+        """Run the configured scanners on one asset in a dedicated DB
+        session (SQLAlchemy async sessions are not coroutine-safe)."""
         async with sem:
+            scanners = list(enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
             try:
-                fds = await asyncio.to_thread(_quick_scan_sync, value)
+                findings, _discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, scanners)
             except Exception as e:
                 return asset_id, value, None, str(e)
             try:
                 async with async_session() as own_db:
-                    counts = await insert_many(own_db, fds)
+                    counts = await insert_many(own_db, findings)
                     asset = await own_db.get(MonitoredAsset, asset_id)
                     if asset is not None:
                         asset.last_scan_at = datetime.now(timezone.utc)
@@ -288,7 +393,10 @@ async def scan_all(
             except Exception as e:
                 return asset_id, value, None, f"persist: {e}"
 
-    results = await asyncio.gather(*(_scan_one(a.id, a.value) for a in assets))
+    results = await asyncio.gather(*(
+        _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []))
+        for a in assets
+    ))
     for _, value, counts, err in results:
         if err is not None:
             errors.append({"value": value, "error": err})

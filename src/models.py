@@ -153,6 +153,10 @@ class MonitoredAsset(Base):
     # per-asset risk score.
     tags = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     criticality = Column(String(20), nullable=False, default="medium", server_default=text("'medium'"))
+    # v0.2: cached DNS resolution — the IP the hostname resolved to at the
+    # last scan. Used by the Hosts view to group aliases that point to the
+    # same machine. NULL until the first scan resolves successfully.
+    resolved_ip = Column(String(64), nullable=True)
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
