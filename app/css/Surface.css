@@ -16,11 +16,20 @@
 .surface-stat-val {
     font-size: 1.8em;
     font-weight: 700;
-    color: #dc2626;
+    color: var(--text);
     line-height: 1.1;
 }
-.surface-stat-val.warning { color: #d97706; }
-.surface-stat-val.critical { color: #dc2626; }
+/* Severity-aware stat tile values — match the chart and badge palette. */
+.surface-stat-val.stat-critical { color: #b91c1c; }
+.surface-stat-val.stat-high     { color: #f97316; }
+.surface-stat-val.stat-medium   { color: #eab308; }
+.surface-stat-val.stat-low      { color: #65a30d; }
+.surface-stat-val.stat-info     { color: #0284c7; }
+.surface-stat-val.stat-muted    { color: var(--text-muted); }
+/* Legacy aliases kept for the dashboard summary tiles that still pass
+   "warning" / "critical" — they pre-date the per-severity palette. */
+.surface-stat-val.warning  { color: #eab308; }
+.surface-stat-val.critical { color: #b91c1c; }
 .surface-stat-lbl {
     font-size: 0.74em;
     color: var(--text-muted);
@@ -103,11 +112,15 @@
     color: white;
     letter-spacing: 0.3px;
 }
-.sev-critical { background: #dc2626; }
-.sev-high     { background: #ea580c; }
-.sev-medium   { background: #d97706; }
-.sev-low      { background: #65a30d; }
-.sev-info     { background: #0284c7; }
+/* Severity colors are scoped to .sev-badge so they don't accidentally
+   paint any other element marked with sev-* (e.g. <tr class="finding-row sev-critical">
+   in the host detail view). The pill / count-tile rules below stay
+   scoped on their own selectors. */
+.sev-badge.sev-critical { background: #b91c1c; }
+.sev-badge.sev-high     { background: #f97316; }
+.sev-badge.sev-medium   { background: #eab308; }
+.sev-badge.sev-low      { background: #65a30d; }
+.sev-badge.sev-info     { background: #0284c7; }
 
 .status-badge {
     display: inline-block;
@@ -449,9 +462,9 @@
     color: white;
     border-color: var(--blue, #1e40af);
 }
-.filter-pill.sev-critical.active { background: #dc2626; border-color: #dc2626; }
-.filter-pill.sev-high.active     { background: #ea580c; border-color: #ea580c; }
-.filter-pill.sev-medium.active   { background: #d97706; border-color: #d97706; }
+.filter-pill.sev-critical.active { background: #b91c1c; border-color: #b91c1c; }
+.filter-pill.sev-high.active     { background: #f97316; border-color: #f97316; }
+.filter-pill.sev-medium.active   { background: #eab308; border-color: #eab308; }
 .filter-pill.sev-low.active      { background: #65a30d; border-color: #65a30d; }
 .filter-pill.sev-info.active     { background: #0284c7; border-color: #0284c7; }
 .filter-pill-clear {
@@ -813,8 +826,8 @@
     font-weight: 700;
     line-height: 1;
 }
-.dash-count-tile.sev-critical .dash-count-val { color: #dc2626; }
-.dash-count-tile.sev-high     .dash-count-val { color: #ea580c; }
+.dash-count-tile.sev-critical .dash-count-val { color: #b91c1c; }
+.dash-count-tile.sev-high     .dash-count-val { color: #f97316; }
 .dash-count-tile.dash-count-recent .dash-count-val { color: #2563eb; }
 .dash-count-lbl {
     font-size: 0.72em;

@@ -2197,13 +2197,13 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "returns_discovered": True,
     },
     "ct_logs": {
-        "label": "Certificate Transparency (crt.sh)",
+        "label": "Subdomain discovery (CT logs)",
         "kinds": {"domain"},
         "callable": scan_domain_ct_logs,
         "returns_discovered": True,
     },
     "dns_brute": {
-        "label": "DNS brute-force (wordlist)",
+        "label": "Subdomain brute-force",
         "kinds": {"domain"},
         "callable": scan_domain_dns_brute,
         "returns_discovered": True,

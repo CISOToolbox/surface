@@ -179,10 +179,13 @@ if (typeof _registerTranslations === "function") {
         "dash.gaps_stale_list":      "Détail hosts obsolètes",
 
         // ── Severity labels ────────────────────────────────
-        "sev.critical": "Critique",
-        "sev.high":     "Haute",
-        "sev.medium":   "Moyenne",
-        "sev.low":      "Basse",
+        // Severity labels are kept in English on purpose — security
+        // vulnerability levels (CVSS, OWASP, vendor advisories) are
+        // canonically named in English and operators expect them that way.
+        "sev.critical": "Critical",
+        "sev.high":     "High",
+        "sev.medium":   "Medium",
+        "sev.low":      "Low",
         "sev.info":     "Info",
 
         // ── Status labels ──────────────────────────────────
@@ -204,6 +207,7 @@ if (typeof _registerTranslations === "function") {
         "monitored.add":              "Ajouter une cible",
         "monitored.empty":            "Aucun périmètre défini. Cliquez sur + Ajouter pour commencer (domaine, IP ou CIDR).",
         "monitored.search.placeholder": "Rechercher par valeur, libellé, type, scanner...",
+        "monitored.filter.scanner": "Type de scan :",
         "monitored.no_match":         "Aucune cible ne correspond à la recherche.",
         "monitored.count":            "cible(s)",
         "monitored.col.type":         "Type",
@@ -334,7 +338,8 @@ if (typeof _registerTranslations === "function") {
         "jobs.empty":           "Aucun scan n'a ete lance. Cliquez sur + Nouveau scan pour commencer.",
         "jobs.no_match":        "Aucun scan ne correspond aux filtres.",
         "jobs.rerun":           "Relancer",
-        "jobs.rerun_started":   "Nouveau scan lancé sur {target}",
+        "jobs.rerun_in_progress":"Scan en cours sur {target}…",
+        "jobs.rerun_done":      "Scan terminé sur {target} — {n} finding(s)",
         "jobs.source.manual":   "manuel",
         "jobs.source.auto":     "auto",
         "jobs.new_title":       "Nouveau scan manuel (nmap)",

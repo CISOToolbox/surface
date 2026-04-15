@@ -102,6 +102,7 @@ var _measures = [];
 var _filterStatus = "new";  // default: only show findings that need triage
 var _filterSeverities = [];  // multi-select; empty = all
 var _filterScanners = [];    // multi-select; empty = all
+var _monitoredFilterScanners = []; // multi-select scanner filter on Surveillance page
 var _selectedFinding = null;
 var _selectedHost = null;    // MonitoredAsset object, set when user clicks a host card
 var _hostHideFP = true;      // Host detail: hide false-positive findings by default
@@ -166,13 +167,27 @@ window._initDataAndRender = function() { _panel = "dashboard"; _loadAndRender();
 // SCAN JOBS (real nmap scans, async background tasks)
 // ═══════════════════════════════════════════════════════════════
 function _scannerLabel(s) {
+    if (!s) return "";
     var key = {
         "nmap":                 "scanner.nmap",
         "scheduled-host":       "scanner.scheduled_host",
         "scheduled-domain":     "scanner.scheduled_domain",
         "scheduled-discovery":  "scanner.scheduled_discovery",
     }[s];
-    return key ? t(key) : s;
+    if (key) return t(key);
+    // Fall back to the friendly label declared in SCANNER_REGISTRY
+    // (returned via /api/monitored-assets/scanners-catalog) so the UI
+    // never shows raw scanner IDs like "ct_logs" / "dns_brute".
+    if (_scannersCatalog) {
+        for (var kind in _scannersCatalog) {
+            var entry = _scannersCatalog[kind];
+            var list = entry && entry.scanners ? entry.scanners : [];
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].name === s && list[i].label) return list[i].label;
+            }
+        }
+    }
+    return s;
 }
 
 function _renderJobs(c) {
@@ -267,7 +282,7 @@ function _renderJobs(c) {
         // the right path: manual nmap → POST /scans/jobs, scheduled jobs →
         // POST /monitored-assets/{id}/scan based on target match.
         if (j.status !== "pending" && j.status !== "running") {
-            h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
+            h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' data-pass-el title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
         }
         h += '<button class="btn-mini" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
         h += '</td>';
@@ -305,24 +320,40 @@ window._deleteJob = function(id) {
     }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
 
-window._rerunJob = function(id) {
+window._rerunJob = function(id, el) {
     var job = _jobs.find(function(j) { return j.id === id; });
     if (!job) return;
-    var ok = function() {
-        showStatus(t("jobs.rerun_started").replace("{target}", job.target));
+    // Disable the button to prevent double-clicks while the scan runs.
+    var btn = el && el.tagName === "BUTTON" ? el : (el ? el.closest("button") : null);
+    if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; }
+
+    // Immediate feedback — the scheduled-* endpoint is synchronous and can
+    // take 30s+ to return, so the user needs to see something happen NOW.
+    showStatus(t("jobs.rerun_in_progress").replace("{target}", job.target));
+
+    var ok = function(r) {
+        var n = (r && (r.findings_created != null ? r.findings_created : r.findings_count)) || 0;
+        showStatus(
+            t("jobs.rerun_done")
+                .replace("{target}", job.target)
+                .replace("{n}", n)
+        );
         _loadAndRender();
     };
-    var fail = function(e) { showStatus(e.message || t("common.error"), true); };
+    var fail = function(e) {
+        if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
+        showStatus(e.message || t("common.error"), true);
+    };
 
-    // Manual nmap jobs replay through the create-job endpoint.
+    // Manual nmap jobs replay through the create-job endpoint (async,
+    // returns immediately with a pending job).
     if (job.scanner === "nmap") {
         SurfaceAPI.createJob({ target: job.target, profile: job.profile || "quick" }).then(ok).catch(fail);
         return;
     }
     // Scheduled jobs (scheduled-host / scheduled-domain / scheduled-discovery)
     // are bound to a MonitoredAsset — find it by value and trigger its
-    // /scan endpoint, which kicks off the same scanner pipeline as the
-    // scheduler tick.
+    // /scan endpoint, which runs the scanner synchronously.
     var asset = (_monitored || []).find(function(a) { return a.value === job.target; });
     if (asset) {
         SurfaceAPI.scanMonitored(asset.id).then(ok).catch(fail);
@@ -445,6 +476,26 @@ function _renderMonitored(c) {
     h += '<button class="btn-add" id="monitored-search-clear" data-click="_clearMonitoredSearch"' + (_monitoredSearch ? '' : ' style="display:none"') + '>x</button>';
     h += '</div>';
 
+    // Scanner-type filter pills — the union of every scanner declared on
+    // any monitored asset, sorted alphabetically. Multi-select.
+    var scannerSet = {};
+    _monitored.forEach(function(a) { (a.enabled_scanners || []).forEach(function(s) { if (s) scannerSet[s] = true; }); });
+    var scannerList = Object.keys(scannerSet).sort();
+    if (scannerList.length) {
+        h += '<div class="filter-pills-row" style="margin-bottom:12px">';
+        h += '<span class="filter-pills-lbl">' + esc(t("monitored.filter.scanner")) + '</span>';
+        scannerList.forEach(function(s) {
+            var on = _monitoredFilterScanners.indexOf(s) >= 0;
+            h += '<button type="button" class="filter-pill' + (on ? " active" : "") + '" data-click="_toggleMonitoredScanner" data-args=\'' + _da(s) + '\'>' + esc(_scannerLabel(s)) + '</button>';
+        });
+        if (_monitoredFilterScanners.length) {
+            h += '<button type="button" class="filter-pill filter-pill-clear" data-click="_clearMonitoredScannerFilter">' + esc(t("findings.filter.reset")) + '</button>';
+        } else {
+            h += '<span class="filter-pills-hint">' + esc(t("findings.filter.hint_m")) + '</span>';
+        }
+        h += '</div>';
+    }
+
     h += '<div id="monitored-table-wrap"></div>';
 
     c.innerHTML = h;
@@ -457,6 +508,16 @@ function _refreshMonitoredTable() {
 
     var q = _monitoredSearch.trim().toLowerCase();
     var filtered = _monitored.filter(function(a) {
+        // Scanner filter pills (ANY-match — show the asset if at least one
+        // of its scanners matches at least one selected pill).
+        if (_monitoredFilterScanners.length) {
+            var scs = a.enabled_scanners || [];
+            var matched = false;
+            for (var i = 0; i < scs.length; i++) {
+                if (_monitoredFilterScanners.indexOf(scs[i]) >= 0) { matched = true; break; }
+            }
+            if (!matched) return false;
+        }
         if (!q) return true;
         if ((a.value || "").toLowerCase().indexOf(q) >= 0) return true;
         if ((a.label || "").toLowerCase().indexOf(q) >= 0) return true;
@@ -509,8 +570,8 @@ function _refreshMonitoredTable() {
         h += '<td style="font-size:0.85em">' + esc(a.label || "-") + '</td>';
         var scs = a.enabled_scanners || [];
         if (scs.length) {
-            var badges = scs.map(function(s) { return '<span class="scanner-mini">' + esc(s) + '</span>'; }).join("");
-            h += '<td style="max-width:200px">' + badges + '</td>';
+            var badges = scs.map(function(s) { return '<span class="scanner-mini" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join("");
+            h += '<td style="max-width:240px">' + badges + '</td>';
         } else {
             h += '<td><span class="scanner-mini scanner-mini-none">aucun</span></td>';
         }
@@ -859,27 +920,52 @@ function _topScanners(n) {
 
 function _timelineDaily(days) {
     // Returns [{key, label, critical, high, medium, low, info, triaged}]
-    // for the last `days` days, inclusive of today.
-    var buckets = {};
+    // for the last `days` days, inclusive of today. The severity columns are
+    // CUMULATIVE — each entry reflects the total number of findings of that
+    // severity that existed at the end of the day, not just the ones created
+    // that day. That way the curve never drops on a quiet day.
+    // `triaged` stays a daily count: the line overlay accumulates it
+    // separately to show triage velocity.
     var out = [];
     var now = new Date();
-    now.setHours(0, 0, 0, 0);
+    now.setHours(23, 59, 59, 999);
+    var msPerDay = _DAY_MS;
+    var dayLabels = [];
+    var dayEnds = [];
     for (var i = days - 1; i >= 0; i--) {
-        var d = new Date(now.getTime() - i * _DAY_MS);
-        var k = _dayKey(d);
-        buckets[k] = { key: k, label: d.getDate() + "/" + (d.getMonth() + 1),
-            critical: 0, high: 0, medium: 0, low: 0, info: 0, triaged: 0 };
-        out.push(buckets[k]);
+        var d = new Date(now.getTime() - i * msPerDay);
+        dayLabels.push({
+            key: _dayKey(d),
+            label: d.getDate() + "/" + (d.getMonth() + 1),
+            endTs: d.getTime(),
+        });
+        dayEnds.push(d.getTime());
     }
-    _findings.forEach(function(f) {
-        if (f.created_at) {
-            var b = buckets[(f.created_at || "").substring(0, 10)];
-            if (b && b[f.severity] != null) b[f.severity]++;
-        }
-        if (f.triaged_at) {
-            var bt = buckets[(f.triaged_at || "").substring(0, 10)];
-            if (bt) bt.triaged++;
-        }
+
+    // Pre-extract finding timestamps once so the loop stays O(N + days)
+    var prepped = _findings.map(function(f) {
+        return {
+            sev: f.severity,
+            created: f.created_at ? new Date(f.created_at).getTime() : 0,
+            triaged: f.triaged_at ? new Date(f.triaged_at).getTime() : 0,
+        };
+    });
+
+    dayLabels.forEach(function(slot, idx) {
+        var bucket = { key: slot.key, label: slot.label,
+            critical: 0, high: 0, medium: 0, low: 0, info: 0, triaged: 0 };
+        var end = slot.endTs;
+        prepped.forEach(function(f) {
+            if (f.created && f.created <= end && bucket[f.sev] != null) {
+                bucket[f.sev]++;
+            }
+            // Daily triaged count: only triaged_at falling on this day
+            if (f.triaged) {
+                var dayStart = end - msPerDay + 1;
+                if (f.triaged >= dayStart && f.triaged <= end) bucket.triaged++;
+            }
+        });
+        out.push(bucket);
     });
     return out;
 }
@@ -1096,10 +1182,13 @@ function _dashTimeline() {
     // Match the canonical severity badge palette (Surface.css .sev-*).
     // Same hues used everywhere in the app — filter pills, badges, host
     // counters — so the chart reads instantly.
+    // Shifted from the badge palette to give critical/high more chromatic
+    // distance — at 1.4px stroke #dc2626 and #ea580c looked nearly identical.
+    // Critical stays the deepest red, high jumps to a clearly brighter orange.
     var colors = {
-        critical: "#dc2626",
-        high:     "#ea580c",
-        medium:   "#d97706",
+        critical: "#b91c1c",
+        high:     "#f97316",
+        medium:   "#eab308",
         low:      "#65a30d",
         info:     "#0284c7",
     };
@@ -1112,8 +1201,7 @@ function _dashTimeline() {
         });
     });
 
-    // Match Vendor exactly (W=600 H=200 ML=30 MR=10 MT=10 MB=40)
-    var W = 600, H = 200, ML = 30, MR = 10, MT = 10, MB = 40;
+    var W = 800, H = 260, ML = 32, MR = 12, MT = 14, MB = 44;
     var cW = W - ML - MR, cH = H - MT - MB;
 
     function xFor(i) { return ML + (i / Math.max(1, days.length - 1)) * cW; }
@@ -1140,13 +1228,13 @@ function _dashTimeline() {
 
     // Cap the rendered height so the chart never dominates the dashboard,
     // even on very wide cards. width:100% keeps it responsive horizontally.
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;max-height:200px;display:block">';
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;max-height:280px;display:block">';
 
     // Grid lines + Y labels (5 levels)
     for (var g = 0; g <= 4; g++) {
         var gy = MT + cH - (g / 4 * cH);
-        svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="#e2e8f0" stroke-width="0.5"/>';
-        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 3) + '" text-anchor="end" font-size="8" fill="#94a3b8">' + Math.round(g / 4 * maxVal) + '</text>';
+        svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="#e2e8f0" stroke-width="0.6"/>';
+        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 4) + '" text-anchor="end" font-size="10" fill="#94a3b8">' + Math.round(g / 4 * maxVal) + '</text>';
     }
 
     // One smooth thin line per severity, painted from low → critical so
@@ -1157,7 +1245,8 @@ function _dashTimeline() {
             return { x: xFor(i), y: yFor(d[sev] || 0) };
         });
         if (pts.length < 2) return;
-        svg += '<path d="' + smoothPath(pts) + '" fill="none" stroke="' + colors[sev] + '" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>';
+        var sw = sev === "critical" ? 1.8 : 1.4;
+        svg += '<path d="' + smoothPath(pts) + '" fill="none" stroke="' + colors[sev] + '" stroke-width="' + sw + '" stroke-linecap="round" stroke-linejoin="round"/>';
     });
 
     // Triaged cumulative — distinct from severities (dashed gray-blue)
@@ -1167,21 +1256,22 @@ function _dashTimeline() {
         var linePts = triagedPoints.map(function(y, i) {
             return { x: xFor(i), y: MT + cH - (y / maxCum) * cH };
         });
-        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#94a3b8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,2"/>';
+        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3"/>';
     }
 
     // X axis labels (every ~5 days)
     days.forEach(function(d, i) {
         if (i % 5 !== 0 && i !== days.length - 1) return;
-        svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 14) + '" text-anchor="middle" font-size="8" fill="#94a3b8">' + esc(d.label) + '</text>';
+        svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 16) + '" text-anchor="middle" font-size="10" fill="#94a3b8">' + esc(d.label) + '</text>';
     });
 
     svg += '</svg>';
 
-    var legend = '<div class="dash-timeline-legend" style="display:flex;gap:10px;justify-content:center;margin-top:4px;font-size:0.7em;flex-wrap:wrap">';
+    var legend = '<div class="dash-timeline-legend" style="display:flex;gap:10px;justify-content:center;margin-top:4px;font-size:0.72em;flex-wrap:wrap">';
     _SEV_ORDER.forEach(function(sev) {
-        legend += '<span style="display:flex;align-items:center;gap:3px">' +
-            '<span style="width:14px;height:2px;border-radius:1px;background:' + colors[sev] + '"></span>' +
+        var h = sev === "critical" ? 3 : 2;
+        legend += '<span style="display:flex;align-items:center;gap:4px">' +
+            '<span style="width:16px;height:' + h + 'px;border-radius:1px;background:' + colors[sev] + '"></span>' +
             esc(t("sev." + sev)) +
             '</span>';
     });
@@ -1530,7 +1620,7 @@ function _refreshFindingsBody() {
         h += '<span class="filter-pills-lbl">' + esc(t("findings.filter.scanner")) + '</span>';
         scannerList.forEach(function(s) {
             var on = _filterScanners.indexOf(s) >= 0;
-            h += '<button type="button" class="filter-pill' + (on ? " active" : "") + '" data-click="_toggleScanner" data-args=\'' + _da(s) + '\'>' + esc(s) + '</button>';
+            h += '<button type="button" class="filter-pill' + (on ? " active" : "") + '" data-click="_toggleScanner" data-args=\'' + _da(s) + '\'>' + esc(_scannerLabel(s)) + '</button>';
         });
         if (_filterScanners.length) {
             h += '<button type="button" class="filter-pill filter-pill-clear" data-click="_clearScannerFilter">' + esc(t("findings.filter.reset")) + '</button>';
@@ -2518,7 +2608,7 @@ function _renderHostDetail(c) {
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.frequency")) + '</div><div>' + _tn("host.frequency_hours", a.scan_frequency_hours || 0) + '</div></div>';
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.last_scan")) + '</div><div>' + esc(last) + '</div></div>';
     if (a.enabled_scanners && a.enabled_scanners.length) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.scanners")) + '</div><div>' + a.enabled_scanners.map(function(s) { return '<span class="host-badge host-badge-scanner">' + esc(s) + '</span>'; }).join(" ") + '</div></div>';
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.scanners")) + '</div><div>' + a.enabled_scanners.map(function(s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ") + '</div></div>';
     }
     if (a.notes) h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.notes")) + '</div><div style="white-space:pre-wrap;font-size:0.85em;color:var(--text-muted)">' + esc(a.notes) + '</div></div>';
     h += '</div>';
@@ -2538,13 +2628,13 @@ function _renderHostDetail(c) {
     if (counts.total) {
         h += '<div class="surface-stats" style="margin-bottom:12px">';
         h += _statCard(counts.active, t("dash.findings_total"), "");
-        h += _statCard(counts.critical, t("sev.critical"), counts.critical ? "critical" : "");
-        h += _statCard(counts.high, t("sev.high"), counts.high ? "warning" : "");
-        h += _statCard(counts.medium, t("sev.medium"), "");
-        h += _statCard(counts.low, t("sev.low"), "");
-        h += _statCard(counts.info, t("sev.info"), "");
-        if (counts.false_positive) h += _statCard(counts.false_positive, t("dash.false_positive"), "");
-        if (counts.fixed) h += _statCard(counts.fixed, t("status.fixed"), "");
+        h += _statCard(counts.critical, t("sev.critical"), counts.critical ? "stat-critical" : "stat-muted");
+        h += _statCard(counts.high,     t("sev.high"),     counts.high     ? "stat-high"     : "stat-muted");
+        h += _statCard(counts.medium,   t("sev.medium"),   counts.medium   ? "stat-medium"   : "stat-muted");
+        h += _statCard(counts.low,      t("sev.low"),      counts.low      ? "stat-low"      : "stat-muted");
+        h += _statCard(counts.info,     t("sev.info"),     counts.info     ? "stat-info"     : "stat-muted");
+        if (counts.false_positive) h += _statCard(counts.false_positive, t("dash.false_positive"), "stat-muted");
+        if (counts.fixed) h += _statCard(counts.fixed, t("status.fixed"), "stat-muted");
         h += '</div>';
     }
 
@@ -2623,6 +2713,17 @@ function _renderHostDetail(c) {
 
     c.innerHTML = h;
 }
+
+window._toggleMonitoredScanner = function(s) {
+    var i = _monitoredFilterScanners.indexOf(s);
+    if (i >= 0) _monitoredFilterScanners.splice(i, 1);
+    else _monitoredFilterScanners.push(s);
+    renderPanel();
+};
+window._clearMonitoredScannerFilter = function() {
+    _monitoredFilterScanners = [];
+    renderPanel();
+};
 
 window._toggleHostHideFP = function() {
     _hostHideFP = !_hostHideFP;
