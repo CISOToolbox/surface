@@ -9,6 +9,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://surface:${DB_PASSWORD:-ciso2026}@surface-db:5432/surface
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
       - APP_URL=${APP_URL:-http://localhost:8087}
+      - AUTH_MODE=standalone
+      - MODULE_NAME=surface
     ports:
       - "8087:8080"
     depends_on:
