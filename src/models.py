@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -87,6 +87,13 @@ class Finding(Base):
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
+
+    __table_args__ = (
+        Index("ix_findings_status_severity", "status", "severity"),
+        Index("ix_findings_scanner", "scanner"),
+        Index("ix_findings_target", "target"),
+        Index("ix_findings_created_at", "created_at"),
+    )
 
     measure = relationship("Measure", back_populates="finding", uselist=False, cascade="all, delete-orphan")
 

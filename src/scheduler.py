@@ -181,10 +181,10 @@ async def _maybe_send_weekly_digest() -> None:
     send at most one per week, tracked via AppSettings `digest.last_sent_at`.
     No-op when SMTP isn't configured."""
     try:
-        from src.routes.reports import _aggregate_report, _render_digest_html, _load_smtp
-        import smtplib
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
+        from src.routes.reports import (
+            _aggregate_report, _build_digest_message, _load_smtp,
+            _smtp_send_blocking,
+        )
     except Exception:
         return
     async with async_session() as db:
@@ -205,28 +205,21 @@ async def _maybe_send_weekly_digest() -> None:
             except Exception:
                 pass
         data = await _aggregate_report(db)
-        html = _render_digest_html(data)
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Surface — digest hebdomadaire"
-        msg["From"] = cfg["sender"]
-        recipients = [r.strip() for r in cfg["recipients"].split(",") if r.strip()]
-        msg["To"] = ", ".join(recipients)
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        try:
+            msg, sender, recipients = _build_digest_message(cfg, data)
+        except ValueError:
+            logger.exception("weekly digest: invalid SMTP config, skipping")
+            return
         try:
             port = int(cfg.get("port") or 587)
             host = cfg["host"]
-            if cfg.get("use_tls", "1") != "0":
-                with smtplib.SMTP(host, port, timeout=15) as s:
-                    s.ehlo()
-                    s.starttls()
-                    if cfg.get("username") and cfg.get("password"):
-                        s.login(cfg["username"], cfg["password"])
-                    s.sendmail(cfg["sender"], recipients, msg.as_string())
-            else:
-                with smtplib.SMTP(host, port, timeout=15) as s:
-                    if cfg.get("username") and cfg.get("password"):
-                        s.login(cfg["username"], cfg["password"])
-                    s.sendmail(cfg["sender"], recipients, msg.as_string())
+            use_tls = cfg.get("use_tls", "1") != "0"
+            await asyncio.to_thread(
+                _smtp_send_blocking,
+                host, port, use_tls,
+                cfg.get("username", ""), cfg.get("password", ""),
+                sender, recipients, msg.as_string(),
+            )
             if last_row is None:
                 db.add(AppSettings(key="digest.last_sent_at", value=now.isoformat()))
             else:

@@ -39,6 +39,10 @@ if (typeof _registerTranslations === "function") {
             '<ul>' +
                 '<li><strong>Port scans</strong> via nmap (quick/standard/deep profiles)</li>' +
                 '<li><strong>TLS analysis</strong>: validity, chain, expiry, self-signed, hostname mismatch</li>' +
+                '<li><strong>TLS grade (A-F)</strong> — probes TLS 1.0/1.1/1.2/1.3 and SSL 3.0, inspects the negotiated cipher, flags weak suites (RC4, 3DES, NULL, EXPORT, MD5). A single letter grade captures the distance to Mozilla\'s recommended baseline.</li>' +
+                '<li><strong>Security headers grade (A-F)</strong> — grades HSTS, Content-Security-Policy (penalized if it allows <code>unsafe-inline/eval</code>), X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. A Mozilla Observatory-lite check with zero external dependency.</li>' +
+                '<li><strong>Tech stack fingerprinting</strong> — 30+ HTTP signatures (Server, X-Powered-By, Set-Cookie, meta tags, characteristic paths) to identify nginx / Apache / IIS / WordPress / Drupal / Django / Rails / Spring Boot and their version.</li>' +
+                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — the <code>cve_lookup</code> scanner consumes the versioned tech output, queries the NVD 2.0 API, enriches each CVE with its EPSS probability and a CISA KEV flag. Unversioned detections are dropped to avoid 2009-era noise.</li>' +
                 '<li><strong>Nuclei DAST</strong>: 12 000+ community templates from ProjectDiscovery, rate-limitable to avoid blacklisting</li>' +
             '</ul>' +
             '<h3>4. Specific risk detection</h3>' +
@@ -47,8 +51,16 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Dangling DNS records</strong> — CNAMEs pointing to abandoned resources</li>' +
                 '<li><strong>Sensitive exposed ports</strong> — databases, RDP, SSH without strong authentication, etc.</li>' +
             '</ul>' +
-            '<h3>5. Triage and action plan</h3>' +
-            '<p>Every finding must be classified as a <strong>false positive</strong> (with a mandatory justification kept for audit) or <strong>to fix</strong>. A <em>to fix</em> finding automatically generates a <strong>corrective measure</strong> that feeds the action plan tracked in the <strong>Measures</strong> tab.</p>' +
+            '<h3>5. Secrets, misconfigurations and leaks</h3>' +
+            '<p>A fourth, post-discovery phase inspects known assets for directly exploitable leaks:</p>' +
+            '<ul>' +
+                '<li><strong>Sensitive file exposure (<code>sensitive_files</code>)</strong> — probes 28 critical paths (<code>/.git/config</code>, <code>/.env</code>, <code>/backup.sql</code>, <code>/wp-config.php</code>, <code>/.aws/credentials</code>, <code>/phpinfo.php</code>, <code>/docker-compose.yml</code>, <code>/swagger.json</code>…) and only flags HTTP 200 responses whose body matches the expected signature (low false-positive rate).</li>' +
+                '<li><strong>JS bundle analysis (<code>js_analysis</code>)</strong> — downloads every <code>&lt;script src&gt;</code> (capped at 512 KB × 20 files) on the target domain and greps 12 secret patterns: AWS Access/Secret Key, Google API, Slack webhook, Stripe live, Sentry DSN, JWT, private IP, S3/Azure/GCS buckets, Firebase. Critical/high secrets are stored masked (<code>abcd…wxyz</code>) so that we never re-leak them in the database.</li>' +
+                '<li><strong>Cloud bucket enumeration (<code>cloud_buckets</code>)</strong> — generates 80 candidate names (<em>static-/cdn-/backup-</em> prefixes, <em>-prod/-staging/-dev/-backup</em> suffixes) and probes S3, Azure Blob, GCS, DigitalOcean Spaces. A 200 with <code>&lt;ListBucketResult&gt;</code> is flagged high (listable content), a 403 medium (bucket exists but ACLs are OK).</li>' +
+            '</ul>' +
+            '<div class="help-tip"><strong>Anti-SSRF:</strong> all of these scanners go through <code>_resolve_safe_target</code> (blocklist: loopback, sensitive RFC1918, cloud metadata, docker siblings) and re-validate each secondary URL (JS scripts, redirects) before fetching. A hostile HTML page cannot pivot <code>js_analysis</code> onto an internal resource.</div>' +
+            '<h3>6. Triage and action plan</h3>' +
+            '<p>Every finding must be classified as a <strong>false positive</strong> (with a mandatory justification kept for audit) or <strong>to fix</strong>. A <em>to fix</em> finding automatically generates a <strong>corrective measure</strong> that feeds the action plan tracked in the <strong>Measures</strong> tab. An <strong>AI triage</strong> button calls the locally-configured LLM provider (Anthropic or OpenAI) with a structured prompt and returns: probable false-positive flag, confidence, severity recommendation, summary, remediation steps, references. Human triage remains sovereign — AI proposes, you decide.</p>' +
             '<h2>"Continuous discovery" philosophy</h2>' +
             '<p>ASM is not a point-in-time scan but <strong>continuous monitoring</strong>. Surface runs scanners via a scheduler that re-executes checks at a configurable frequency per asset (24h by default). Auto-discovered hosts are enrolled as <code>MonitoredAsset</code> and scanned in turn — a snowball effect controlled by the scope.</p>' +
             '<div class="help-tip"><strong>Scope:</strong> All scanners that discover hostnames filter results to the parent monitored domain. A DNS brute-force on <code>example.com</code> only keeps <code>*.example.com</code>, not external domains that might appear in a CT log.</div>' +
@@ -118,13 +130,33 @@ if (typeof _registerTranslations === "function") {
             '<p>The "Import JSON" button lets you push findings produced by external scanners (manual nmap, Shodan, Burp, Trivy, SBOM, pentest...). Expected format: an array of objects <code>{scanner, type, severity, title, description, target, evidence}</code>. Standard dedup logic applies.</p>' +
             '<h2>Measures</h2>' +
             '<p>Corrective measures created from findings marked "to fix". Each measure has a short ID (<code>SRF-XXXXXXXX</code>), a title, a status (To do / In progress / Done), an owner, a deadline. Editable in place. Measures form the local action plan — their status and fields are persisted inside Surface.</p>' +
-            '<h2>Settings (gear icon at the top)</h2>' +
-            '<p>Three sections:</p>' +
+            '<h2>Executive report</h2>' +
+            '<p>The <strong>Executive report</strong> toolbar button opens a new tab with a print-ready page suitable for browser-side PDF export (Cmd/Ctrl+P → "Save as PDF"). Zero server dependency, no Python PDF library — everything is rendered client-side from the <code>/api/reports/executive</code> endpoint, which aggregates: severity totals, new findings over 7d / 30d, top 10 active findings, top 10 exposed hosts, scheduler health (7-day success/failure), measure burn-down. Aggregation runs as SQL GROUP BY + LIMIT, so it stays responsive even on a database with tens of thousands of findings.</p>' +
+            '<div class="help-tip"><strong>Use it for:</strong> monthly status to management, feeding a security committee, archiving a posture snapshot before and after a remediation campaign.</div>' +
+            '<h2>Weekly email digest</h2>' +
+            '<p>Once SMTP is configured (see Settings), Surface <strong>automatically</strong> sends a weekly HTML digest: aggregated counters, top 10 findings to triage, top 10 exposed hosts, scan and measure stats. The scheduler checks hourly whether 7 days have elapsed since the last send (<code>digest.last_sent_at</code> in DB). A <strong>Send now</strong> button in the SMTP section lets you push an ad-hoc digest manually without waiting for the weekly tick.</p>' +
+            '<div class="help-tip"><strong>Security:</strong> the SMTP host is validated against the same anti-SSRF blocklist as scanners (no <code>localhost</code>, no <code>surface-db</code>). Sender / recipient addresses are filtered against header injection (CRLF). The SMTP password is stored server-side and never returned in GET responses.</div>' +
+            '<h2>AI triage</h2>' +
+            '<p>On every finding, an <strong>AI triage</strong> button (lightning icon) ships the finding context to the LLM provider configured under <em>Settings → AI assistant</em>. The system prompt is structured to return a JSON payload:</p>' +
             '<ul>' +
-                '<li><strong>Language</strong>: instant FR/EN toggle for the whole UI</li>' +
-                '<li><strong>AI assistant</strong>: configure provider (Anthropic / OpenAI), model and API key (stored locally in the browser, never sent to the backend)</li>' +
-                '<li><strong>Nuclei</strong>: version, template count, last update date, <strong>editable tuning</strong> (rate-limit, concurrency, bulk-size, timeout, retries) which applies immediately on the next scan. "Update templates" button to refresh the templates database from upstream.</li>' +
+                '<li><code>is_probable_false_positive</code> — boolean</li>' +
+                '<li><code>confidence</code> — AI confidence level</li>' +
+                '<li><code>severity_recommendation</code> — suggested severity if different</li>' +
+                '<li><code>summary</code> — 2-3 line executive summary</li>' +
+                '<li><code>remediation[]</code> — remediation steps</li>' +
+                '<li><code>references[]</code> — reference URLs (CVE, CWE, vendor docs)</li>' +
             '</ul>' +
+            '<p>The API call flies directly from the browser to Anthropic/OpenAI — the API key never transits the Surface backend. The final decision remains manual: the AI does not click "False positive" or "To fix" for you.</p>' +
+            '<h2>Settings (gear icon at the top) — 6 accordion sections</h2>' +
+            '<p>The <strong>Settings</strong> page uses a native HTML accordion: opening one section automatically collapses the previous one. Every section is collapsed by default.</p>' +
+            '<ol>' +
+                '<li><strong>Language</strong> — instant FR/EN toggle for the whole UI</li>' +
+                '<li><strong>AI assistant</strong> — provider (Anthropic / OpenAI / custom), model and API key (browser localStorage, never sent to the backend)</li>' +
+                '<li><strong>Timezone</strong> — picker of 30 IANA zones. The default follows the browser-detected timezone. Every date (findings, scans, measures) renders in the chosen zone.</li>' +
+                '<li><strong>Nuclei</strong> — version, template count, last update date, <strong>editable tuning</strong> (rate-limit, concurrency, bulk-size, timeout, retries). "Update templates" button.</li>' +
+                '<li><strong>Shodan API</strong> — API key stored server-side (masked on display). Enables <code>shodan_domain</code> and <code>shodan_host</code>.</li>' +
+                '<li><strong>Email digest (SMTP)</strong> — full SMTP configuration: host, port, username/password, sender, recipients, STARTTLS toggle, "Send now" button.</li>' +
+            '</ol>' +
             '<div class="help-tip"><strong>Nuclei tuning tip:</strong> on client targets or WAF-protected environments, lower the rate-limit to 5-10 req/s to avoid blacklisting. For your own assets, 20-50 req/s is comfortable.</div>' +
             '<h2>Typical workflow</h2>' +
             '<ol style="font-size:0.9em;line-height:1.8">' +
@@ -237,6 +269,7 @@ if (typeof _registerTranslations === "function") {
 
         // ── Host detail ────────────────────────────────────
         "host.back":               "Hosts",
+        "host.back_to_host":       "Back to host",
         "host.col.value":          "Value",
         "host.col.label":          "Label",
         "host.col.enabled":        "Enabled",
@@ -422,6 +455,23 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_remediation":          "Remediation",
         "fd.ai_refs":                 "References",
         "fd.ai_error":                "AI analysis error",
+        "smtp.section":               "Email sending (weekly digest)",
+        "smtp.help":                  "Configure the SMTP server used to send the weekly digest and the executive report by email.",
+        "smtp.host":                  "Host",
+        "smtp.port":                  "Port",
+        "smtp.user":                  "Username",
+        "smtp.password":              "Password",
+        "smtp.password_ph":           "••••",
+        "smtp.already_set":           "already set",
+        "smtp.sender":                "Sender",
+        "smtp.recipients":            "Recipients",
+        "smtp.use_tls":               "STARTTLS (recommended)",
+        "smtp.save":                  "Save",
+        "smtp.saved":                 "SMTP config saved",
+        "smtp.send_now":              "Send now",
+        "smtp.sending":               "Sending digest…",
+        "smtp.sent":                  "Digest sent to {n} recipient(s)",
+        "smtp.load_error":            "Could not load SMTP config",
         "tz.section":                 "Time zone",
         "tz.hint":                    "All dates shown in the UI are rendered in this zone.",
         "tz.browser":                 "Auto (browser)",
@@ -449,6 +499,8 @@ if (typeof _registerTranslations === "function") {
         "fd.description":            "Description",
         "fd.description_none":       "(none)",
         "fd.evidence":               "Evidence",
+        "fd.screenshot":             "Screenshot",
+        "fd.screenshot_open":        "Open full size",
         "fd.notes":                  "Notes",
         "fd.triage":                 "Triage",
         "fd.triage_notes_ph":        "Notes (optional)...",

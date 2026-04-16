@@ -234,21 +234,23 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
     try:
         proc = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
+        # Operational signal, not a security issue — keep it as info so
+        # it doesn't bump dashboard severity counters or trigger alerts.
         return [{
-            "scanner": "nmap", "type": "error", "severity": "medium",
+            "scanner": "nmap", "type": "scanner_timeout", "severity": "info",
             "title": f"Scan nmap timeout pour {target}",
             "description": f"Le scan a depasse {timeout}s.", "target": target, "evidence": {},
         }]
     except Exception as e:
         return [{
-            "scanner": "nmap", "type": "error", "severity": "medium",
+            "scanner": "nmap", "type": "scanner_error", "severity": "info",
             "title": f"Scan nmap echoue pour {target}",
             "description": str(e), "target": target, "evidence": {},
         }]
 
     if proc.returncode not in (0, None):
         return [{
-            "scanner": "nmap", "type": "error", "severity": "medium",
+            "scanner": "nmap", "type": "scanner_error", "severity": "info",
             "title": f"nmap exit {proc.returncode} pour {target}",
             "description": (proc.stderr.decode(errors="replace") or "")[:500],
             "target": target, "evidence": {},
@@ -959,6 +961,67 @@ NUCLEI_SEVERITY_MAP = {
     "unknown": "info",
 }
 
+# Many nuclei community templates classify security-relevant findings
+# as "info" because they are *detections*, not active exploits. But
+# from a CISO's perspective, running an EOL Exchange or exposing NTLM
+# directories IS a real risk that deserves triage. This map upgrades
+# specific template IDs to a minimum severity — the original nuclei
+# severity is kept if it is already higher.
+_SEV_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+_NUCLEI_SEVERITY_OVERRIDES: dict[str, str] = {
+    # End-of-life / unsupported software — real patch-gap risk
+    "msexchange-eol":               "high",
+    "iis-eol":                      "high",
+    "apache-eol":                   "high",
+    "nginx-eol":                    "high",
+    "php-eol":                      "high",
+    "wordpress-eol":                "high",
+    "drupal-eol":                   "high",
+    "tomcat-eol":                   "high",
+    "openssh-eol":                  "high",
+    "debian-eol":                   "high",
+    "ubuntu-eol":                   "high",
+    "centos-eol":                   "high",
+    "windows-eol":                  "high",
+    # Information leakage exploitable for lateral movement
+    "ntlm-directories":             "medium",
+    "ms-exchange-local-domain":     "medium",
+    "ms-exchange-server":           "low",
+    "ms-exchange-web-service":      "low",
+    # File / path enumeration
+    "iis-shortname-detect":         "medium",
+    "directory-listing":            "medium",
+    # Admin panels exposed to the Internet
+    "microsoft-exchange-panel":     "medium",
+    "phpmyadmin-panel":             "high",
+    "adminer-panel":                "high",
+    "grafana-panel":                "low",
+    "kibana-panel":                 "low",
+    "jenkins-panel":                "medium",
+    "gitlab-panel":                 "low",
+    "portainer-panel":              "medium",
+    "traefik-panel":                "low",
+    "rancher-panel":                "medium",
+    # Misconfigured or dangerous features
+    "graphql-alias-batching":       "low",
+    "graphql-directive-overloading":"low",
+    "cors-misconfig":               "medium",
+    "open-redirect":                "medium",
+    "google-floc-disabled":         "info",  # keep info, not actionable
+}
+
+
+def _apply_severity_override(template_id: str, nuclei_sev: str) -> str:
+    """Return the effective severity, upgrading if Surface's override
+    map assigns a higher floor than the template's native severity."""
+    override = _NUCLEI_SEVERITY_OVERRIDES.get(template_id)
+    if not override:
+        return nuclei_sev
+    if _SEV_RANK.get(override, 0) > _SEV_RANK.get(nuclei_sev, 0):
+        return override
+    return nuclei_sev
+
 
 def _int_env(name: str, default: int, minv: int = 1, maxv: int = 10000) -> int:
     """Read an integer env var, clamped to [minv, maxv]."""
@@ -988,10 +1051,15 @@ _nuclei_tuning_lock = threading.Lock()
 
 def _nuclei_env_defaults() -> dict[str, int]:
     return {
-        "rate_limit":  _int_env("SURFACE_NUCLEI_RATE_LIMIT", 20, 1, 5000),
-        "concurrency": _int_env("SURFACE_NUCLEI_CONCURRENCY", 25, 1, 500),
-        "bulk_size":   _int_env("SURFACE_NUCLEI_BULK_SIZE", 25, 1, 500),
-        "timeout":     _int_env("SURFACE_NUCLEI_TIMEOUT", 10, 1, 300),
+        # Defaults bumped in v0.3.1 after live benchmarking: the v0.2
+        # values (rate=20, c=25) were so low that a single well-populated
+        # host hit the 15-min subprocess timeout with < 2 % template
+        # coverage and produced zero findings. Current defaults complete
+        # a typical host in 2-3 minutes at ~60 rps.
+        "rate_limit":  _int_env("SURFACE_NUCLEI_RATE_LIMIT", 150, 1, 5000),
+        "concurrency": _int_env("SURFACE_NUCLEI_CONCURRENCY", 50, 1, 500),
+        "bulk_size":   _int_env("SURFACE_NUCLEI_BULK_SIZE", 50, 1, 500),
+        "timeout":     _int_env("SURFACE_NUCLEI_TIMEOUT", 15, 1, 300),
         "retries":     _int_env("SURFACE_NUCLEI_RETRIES", 1, 0, 10),
     }
 
@@ -2027,7 +2095,7 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
 # ═══════════════════════════════════════════════════════════════
 
 
-def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") -> list[dict[str, Any]]:
+def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critical") -> list[dict[str, Any]]:
     """Run nuclei against the target with default templates.
 
     Tries https:// then http:// if the target has no scheme. Streams JSONL output
@@ -2046,8 +2114,16 @@ def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") 
     url = target if target.startswith(("http://", "https://")) else f"https://{target}"
     tuning = _nuclei_tuning()
 
+    # v0.3.1 — run in automatic-scan mode (`-as`). Nuclei first runs
+    # wappalyzer-style tech detection on the target and then executes
+    # only the templates that match the detected stack. On a typical
+    # host this drops ~25 500 planned requests to ~1 500, and the
+    # remaining templates are actually *relevant* to the technologies
+    # behind the URL — so scans complete 10-15x faster AND yield more
+    # meaningful findings than the brute-force mode we used in v0.2/v0.3.
     args = [
         nuclei_path, "-target", url, "-jsonl", "-silent",
+        "-as",
         "-severity", severity_filter,
         "-rate-limit", str(tuning["rate_limit"]),
         "-concurrency", str(tuning["concurrency"]),
@@ -2063,14 +2139,16 @@ def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") 
     try:
         proc = subprocess.run(args, capture_output=True, timeout=900)
     except subprocess.TimeoutExpired:
+        # Operational signal, not a vulnerability — info severity so the
+        # dashboard doesn't treat a slow target as a high-severity alert.
         return [{
-            "scanner": "nuclei", "type": "timeout", "severity": "medium",
+            "scanner": "nuclei", "type": "scanner_timeout", "severity": "info",
             "title": f"Nuclei timeout sur {url}",
             "description": "Le scan nuclei a depasse 15 minutes.", "target": target, "evidence": {},
         }]
     except Exception as e:
         return [{
-            "scanner": "nuclei", "type": "error", "severity": "medium",
+            "scanner": "nuclei", "type": "scanner_error", "severity": "info",
             "title": f"Nuclei echoue sur {url}",
             "description": str(e), "target": target, "evidence": {},
         }]
@@ -2085,10 +2163,25 @@ def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") 
         except json.JSONDecodeError:
             continue
         info = r.get("info", {}) or {}
-        sev = NUCLEI_SEVERITY_MAP.get((info.get("severity") or "info").lower(), "info")
-        name = info.get("name") or r.get("template-id") or "Nuclei finding"
+        template_id = r.get("template-id") or ""
+        raw_sev = NUCLEI_SEVERITY_MAP.get((info.get("severity") or "info").lower(), "info")
+        sev = _apply_severity_override(template_id, raw_sev)
+        name = info.get("name") or template_id or "Nuclei finding"
         matched = r.get("matched-at") or r.get("host") or url
         tags = info.get("tags") or []
+        # Normalize target to "host" or "host:port" so it matches the
+        # format used by every other scanner. Nuclei stores the full
+        # matched URL (https://host/path) which breaks per-host lookup
+        # in the frontend and reports. Keep the full URL in evidence.
+        norm_target = target
+        try:
+            from urllib.parse import urlparse as _up
+            _pu = _up(matched)
+            _h = _pu.hostname or target
+            _p = _pu.port
+            norm_target = f"{_h}:{_p}" if _p and _p not in (80, 443) else _h
+        except Exception:
+            pass
         findings.append({
             "scanner": "nuclei",
             "type": (info.get("classification", {}) or {}).get("cve-id") or r.get("template-id") or "nuclei",
@@ -2096,7 +2189,7 @@ def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") 
             "title": f"{name} on {matched}",
             "description": (info.get("description") or "").strip()[:1000] +
                            (f"\n\nTemplate: {r.get('template-id')}" if r.get("template-id") else ""),
-            "target": matched,
+            "target": norm_target,
             "evidence": {
                 "template_id": r.get("template-id"),
                 "matched_at": matched,
@@ -2107,13 +2200,9 @@ def scan_nuclei(target: str, severity_filter: str = "low,medium,high,critical") 
             },
         })
 
-    if not findings:
-        findings.append({
-            "scanner": "nuclei", "type": "scan_clean", "severity": "info",
-            "title": f"Nuclei : aucun finding sur {url}",
-            "description": f"Aucune detection avec les templates par defaut (severite >= {severity_filter}).",
-            "target": target, "evidence": {"url": url, "severity_filter": severity_filter},
-        })
+    # No "scan_clean" info finding — a scan that finds nothing is expected
+    # behavior, not something to persist and triage. The ScanJob record
+    # (findings_count=0) already conveys the information.
     return findings
 
 
@@ -2414,10 +2503,11 @@ def _match_tech_signatures(probe: dict[str, Any]) -> list[dict[str, str]]:
 # existence, we do not try to list content (that would be intrusive).
 
 _CLOUD_BUCKET_PROBES: list[tuple[str, str]] = [
-    # (template, provider)
-    ("http://{name}.s3.amazonaws.com",          "AWS S3"),
-    ("http://s3.amazonaws.com/{name}",          "AWS S3 (path-style)"),
-    ("https://{name}.s3.amazonaws.com",         "AWS S3 (HTTPS)"),
+    # (template, provider) — HTTPS only. Plain-http probes were removed
+    # in the v0.3 hardening pass to avoid leaking requests to on-path
+    # interceptors or internal HTTP services.
+    ("https://{name}.s3.amazonaws.com",         "AWS S3"),
+    ("https://s3.amazonaws.com/{name}",         "AWS S3 (path-style)"),
     ("https://{name}.blob.core.windows.net",    "Azure Blob"),
     ("https://storage.googleapis.com/{name}",   "Google Cloud Storage"),
     ("https://{name}.storage.googleapis.com",   "Google Cloud Storage (subdomain)"),
@@ -2512,168 +2602,7 @@ def scan_domain_cloud_buckets(domain: str) -> tuple[list[dict[str, Any]], list[s
     return findings, []
 
 
-# ═══════════════════════════════════════════════════════════════
-# v0.3 — GitHub organization enumeration
-# ═══════════════════════════════════════════════════════════════
-#
-# Given an org name configured in AppSettings (key `github.org`),
-# list public repos via the GitHub REST API and grep commits/files
-# for obvious secret patterns. An optional `github.token` (PAT) can
-# be configured for higher rate limits and access to private repos.
 
-def _get_github_config() -> dict[str, str]:
-    """Read GitHub settings from the scanner cache (mirrored from
-    AppSettings on startup)."""
-    return {
-        "org": os.environ.get("SURFACE_GITHUB_ORG", "") or _GITHUB_CACHE.get("org", ""),
-        "token": os.environ.get("SURFACE_GITHUB_TOKEN", "") or _GITHUB_CACHE.get("token", ""),
-    }
-
-
-_GITHUB_CACHE: dict[str, str] = {}
-
-
-def set_github_config_cache(org: str | None, token: str | None) -> None:
-    if org is not None:
-        _GITHUB_CACHE["org"] = org
-    if token is not None:
-        _GITHUB_CACHE["token"] = token
-
-
-def scan_domain_github_enum(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
-    """List public repos of the configured GitHub org and grep the
-    default branch tree for obvious secret patterns. The org is global
-    (not per-domain) — this scanner is only useful when the operator
-    runs a single org's surface."""
-    import httpx
-
-    cfg = _get_github_config()
-    org = cfg.get("org", "").strip()
-    if not org:
-        return [{
-            "scanner": "github_enum",
-            "type": "github_not_configured",
-            "severity": "info",
-            "title": "GitHub org non configuree",
-            "description": (
-                "Pour activer la decouverte GitHub, renseignez le nom "
-                "d'organisation dans Parametres > GitHub. Un token PAT est "
-                "optionnel mais evite les limites de taux anonymes (60/h)."
-            ),
-            "target": domain,
-            "evidence": {"reason": "missing github.org"},
-        }], []
-
-    token = cfg.get("token", "").strip()
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Surface/0.3 (CISO Toolbox)",
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    findings: list[dict[str, Any]] = []
-    repos: list[dict[str, Any]] = []
-    try:
-        with httpx.Client(timeout=10.0, headers=headers) as client:
-            # Page 1 only — cap to 100 repos to stay fast
-            r = client.get(f"https://api.github.com/orgs/{org}/repos",
-                           params={"per_page": 100, "type": "public"})
-            if r.status_code == 404:
-                return [{
-                    "scanner": "github_enum",
-                    "type": "github_org_not_found",
-                    "severity": "info",
-                    "title": f"Organisation GitHub '{org}' introuvable",
-                    "description": f"L'API GitHub a renvoye 404 pour l'organisation {org}.",
-                    "target": domain,
-                    "evidence": {"org": org},
-                }], []
-            if r.status_code != 200:
-                return [{
-                    "scanner": "github_enum",
-                    "type": "github_api_error",
-                    "severity": "info",
-                    "title": f"GitHub API erreur {r.status_code}",
-                    "description": f"Impossible de lister les repos de {org}: {r.text[:200]}",
-                    "target": domain,
-                    "evidence": {"status": r.status_code},
-                }], []
-            repos = r.json() or []
-    except Exception as e:
-        return [{
-            "scanner": "github_enum",
-            "type": "github_api_error",
-            "severity": "info",
-            "title": "GitHub API injoignable",
-            "description": f"Erreur de connexion a l'API GitHub : {e}",
-            "target": domain,
-            "evidence": {"error": str(e)[:200]},
-        }], []
-
-    findings.append({
-        "scanner": "github_enum",
-        "type": "github_repo_inventory",
-        "severity": "info",
-        "title": f"GitHub : {len(repos)} repos publics pour {org}",
-        "description": (
-            f"L'organisation {org} expose {len(repos)} repositories publics. "
-            + "Top repos : " + ", ".join(r.get("name", "") for r in repos[:10])
-        ),
-        "target": domain,
-        "evidence": {
-            "org": org,
-            "repo_count": len(repos),
-            "repos": [{"name": r.get("name"), "url": r.get("html_url"),
-                       "pushed_at": r.get("pushed_at")} for r in repos[:50]],
-        },
-    })
-
-    # Light secret grep: fetch README/package.json/env.example of each repo
-    # via raw.githubusercontent.com and look for obvious patterns
-    secrets_found: list[dict[str, Any]] = []
-    probe_files = ["README.md", ".env.example", "config.yml", "docker-compose.yml"]
-    with httpx.Client(timeout=8.0, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"}) as client:
-        for repo in repos[:30]:  # cap to 30 repos for secret grep
-            default_branch = repo.get("default_branch", "main")
-            name = repo.get("name", "")
-            if not name:
-                continue
-            for path in probe_files:
-                url = f"https://raw.githubusercontent.com/{org}/{name}/{default_branch}/{path}"
-                try:
-                    r = client.get(url)
-                    if r.status_code != 200:
-                        continue
-                    body = r.text[:16384]
-                except Exception:
-                    continue
-                for label, pattern, sev in _JS_SECRET_PATTERNS:
-                    for m in _re.finditer(pattern, body):
-                        match = (m.group(1) if m.groups() else m.group(0))[:200]
-                        secrets_found.append({
-                            "repo": name,
-                            "file": path,
-                            "pattern": label,
-                            "match": match,
-                            "severity": sev,
-                            "url": url,
-                        })
-
-    for s in secrets_found[:50]:
-        findings.append({
-            "scanner": "github_enum",
-            "type": "github_secret_leak",
-            "severity": s["severity"],
-            "title": f"GitHub {s['repo']}/{s['file']} : {s['pattern']}",
-            "description": (
-                f"Pattern '{s['pattern']}' trouve dans {s['repo']}/{s['file']} "
-                f"(branche par defaut). Extrait : {s['match'][:100]}"
-            ),
-            "target": domain,
-            "evidence": s,
-        })
-    return findings, []
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -2729,7 +2658,9 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     stops after 3 connection errors in a row to stay fast on dead hosts."""
     import httpx
 
-    target = _safe_target(target)
+    # Full re-validation via _resolve_safe_target (same allowlist path as
+    # _safe_target, with explicit lock of the resolved IP at call time).
+    _, target = _resolve_safe_target(target)
     findings: list[dict[str, Any]] = []
     schemes = [(443, "https"), (80, "http")]
 
@@ -2882,7 +2813,7 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     """Fetch the HTTPS root and grade its security headers."""
     import httpx
 
-    target = _safe_target(target)
+    _, target = _resolve_safe_target(target)
     url = f"https://{target}/"
     try:
         with httpx.Client(verify=False, follow_redirects=True, timeout=5.0) as client:
@@ -3066,7 +2997,7 @@ _JS_SECRET_PATTERNS: list[tuple[str, str, str]] = [
     ("Slack webhook",       r"https://hooks\.slack\.com/services/T[A-Z0-9]{8,}/B[A-Z0-9]{8,}/[A-Za-z0-9]{24}", "high"),
     ("Stripe live key",     r"sk_live_[A-Za-z0-9]{24,}",                        "critical"),
     ("Sentry DSN",          r"https://[a-f0-9]+@[a-z0-9.-]+sentry\.io/[0-9]+",  "medium"),
-    ("JWT",                 r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", "medium"),
+    ("JWT",                 r"eyJ[A-Za-z0-9_\-]{10,2000}\.[A-Za-z0-9_\-]{10,2000}\.[A-Za-z0-9_\-]{10,2000}", "medium"),
     ("Private IP",          r"\b(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.(?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3})\b", "low"),
     ("S3 bucket",           r"[a-z0-9][a-z0-9\-.]{1,61}[a-z0-9]\.s3(?:\.[a-z0-9\-]+)?\.amazonaws\.com", "low"),
     ("Azure Blob",          r"[a-z0-9][a-z0-9\-]{1,61}\.blob\.core\.windows\.net", "low"),
@@ -3075,26 +3006,63 @@ _JS_SECRET_PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 
+def _mask_secret(value: str, severity: str) -> str:
+    """Never persist the full match for critical/high-sev secrets.
+    Keep enough to identify the hit without leaking exploitable material."""
+    if not value:
+        return ""
+    if severity not in ("critical", "high"):
+        return value[:200]
+    if len(value) <= 10:
+        return "***"
+    return f"{value[:4]}…{value[-4:]}"
+
+
 def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     """Fetch / on the target, extract <script src> URLs, download each
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
     import httpx
 
-    target = _safe_target(target)
+    _, target = _resolve_safe_target(target)
     base_url = f"https://{target}/"
     try:
-        with httpx.Client(verify=False, follow_redirects=True, timeout=5.0) as client:
+        # follow_redirects=False — a 3xx on the HTML root could otherwise
+        # redirect us off-domain before script-src extraction.
+        with httpx.Client(verify=False, follow_redirects=False, timeout=5.0) as client:
             r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
             if r.status_code != 200:
                 return []
             html = r.text or ""
             # Extract every script src
             src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
-            urls = src_re.findall(html)[:_JS_MAX_FILES]
+            raw_urls = src_re.findall(html)[:_JS_MAX_FILES]
             # Resolve relative URLs
-            from urllib.parse import urljoin
-            urls = [urljoin(str(r.url), u) for u in urls]
+            from urllib.parse import urljoin, urlparse
+            resolved = [urljoin(str(r.url), u) for u in raw_urls]
+
+            # SSRF guard: reject any script URL that (a) is not http(s),
+            # (b) has a hostname that fails _resolve_safe_target (internal
+            # IP / loopback / docker sibling / metadata), or (c) lives on
+            # a different registrable domain than the target. The attacker
+            # controls the HTML so we cannot trust src values.
+            target_reg = _registrable(target) or target
+            urls: list[str] = []
+            for u in resolved:
+                try:
+                    parsed = urlparse(u)
+                    if parsed.scheme not in ("http", "https"):
+                        continue
+                    host = parsed.hostname or ""
+                    if not host:
+                        continue
+                    _resolve_safe_target(host)  # raises on unsafe
+                    host_reg = _registrable(host) or host
+                    if host_reg != target_reg:
+                        continue
+                    urls.append(u)
+                except Exception:
+                    continue
 
             js_bodies: list[tuple[str, str]] = []
             for u in urls:
@@ -3122,8 +3090,9 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     for url, body in js_bodies:
         for label, pattern, sev in _JS_SECRET_PATTERNS:
             for m in _re.finditer(pattern, body):
-                match = (m.group(1) if m.groups() else m.group(0))[:200]
-                key = (label, match)
+                raw = (m.group(1) if m.groups() else m.group(0))[:200]
+                masked = _mask_secret(raw, sev)
+                key = (label, masked)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -3134,13 +3103,13 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
                     "title": f"{label} trouve dans un bundle JS de {target}",
                     "description": (
                         f"Un pattern de type '{label}' a ete trouve dans le bundle "
-                        f"JS {url}. Extrait : {match[:100]}"
+                        f"JS {url}. Extrait : {masked}"
                     ),
                     "target": target,
                     "evidence": {
                         "js_url": url,
                         "pattern": label,
-                        "match": match,
+                        "match": masked,
                     },
                 })
     return findings
@@ -3269,6 +3238,20 @@ def _epss_lookup(cve_ids: list[str]) -> dict[str, float]:
     return out
 
 
+# NVD keywordSearch needs the right wording — product names from nuclei
+# don't always match the terms NVD uses in CVE descriptions. This map
+# normalizes to NVD-friendly keywords.
+_NVD_KEYWORD_MAP: dict[str, str] = {
+    "microsoft iis": "Internet Information Services",
+    "microsoft exchange server": "Exchange Server",
+    "asp.net": "ASP.NET",
+    "apache http server": "Apache HTTP Server",
+    "apache tomcat": "Apache Tomcat",
+    "ruby on rails": "Rails",
+    "node.js": "Node.js",
+}
+
+
 def _nvd_lookup(product: str, version: str) -> list[dict[str, Any]]:
     """Query NVD 2.0 for CVEs affecting `product` (optionally version).
     Returns up to 25 entries sorted by CVSS v3 score desc. Cached 24h."""
@@ -3280,13 +3263,20 @@ def _nvd_lookup(product: str, version: str) -> list[dict[str, Any]]:
         if cached and (_time.monotonic() - cached[0]) < _CVE_CACHE_TTL:
             return cached[1]
 
+    # Normalize product name to NVD-friendly keyword
+    nvd_product = _NVD_KEYWORD_MAP.get(product.lower(), product)
+    # Truncate overly-specific build numbers (e.g. 15.1.2507.39 → 15.1)
+    # to improve NVD keyword matching. Minor/patch builds are too specific
+    # for description-based search.
+    if version and version.count(".") >= 2:
+        version = ".".join(version.split(".")[:2])
+
     cves: list[dict[str, Any]] = []
     try:
         import httpx
-        # NVD CPE-name search is more accurate when we have a version
-        params: dict[str, Any] = {"keywordSearch": product, "resultsPerPage": 25}
+        params: dict[str, Any] = {"keywordSearch": nvd_product, "resultsPerPage": 25}
         if version:
-            params["keywordSearch"] = f"{product} {version}"
+            params["keywordSearch"] = f"{nvd_product} {version}"
         with httpx.Client(timeout=15.0) as c:
             r = c.get("https://services.nvd.nist.gov/rest/json/cves/2.0", params=params)
             if r.status_code != 200:
@@ -3339,41 +3329,152 @@ def _cvss_to_severity(score: float) -> str:
     return "info"
 
 
-def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """For each tech_fingerprint finding produced earlier in the same
-    scanner chain, look up the matching CVEs and emit one `cve_match`
-    finding per CVE (capped to top 5 per product). Each finding carries
-    EPSS + KEV enrichment in its evidence.
+# Mapping from nuclei matcher-name / template-id to an NVD-compatible
+# product keyword. Nuclei's wappalyzer uses short slugs (e.g. "ms-iis")
+# while NVD expects "Internet Information Services" or "iis". Only the
+# most common products need a mapping — others fall back to the slug.
+_NUCLEI_TO_NVD_PRODUCT: dict[str, str] = {
+    "ms-iis": "Microsoft IIS",
+    "iis": "Microsoft IIS",
+    "microsoft-iis-version": "Microsoft IIS",
+    "microsoft-exchange": "Microsoft Exchange Server",
+    "msexchange-eol": "Microsoft Exchange Server",
+    "ms-exchange-server": "Microsoft Exchange Server",
+    "ms-exchange-web-service": "Microsoft Exchange Server",
+    "apache": "Apache HTTP Server",
+    "nginx": "nginx",
+    "openssl": "OpenSSL",
+    "php": "PHP",
+    "wordpress": "WordPress",
+    "drupal": "Drupal",
+    "joomla": "Joomla",
+    "tomcat": "Apache Tomcat",
+    "spring-boot": "Spring Boot",
+    "django": "Django",
+    "rails": "Ruby on Rails",
+    "node.js": "Node.js",
+    "express": "Express",
+    "react": "React",
+    "angular": "Angular",
+    "jquery": "jQuery",
+    "aspnet-version-detect": "ASP.NET",
+    "openssh": "OpenSSH",
+    "grafana-panel": "Grafana",
+    "jenkins-panel": "Jenkins",
+    "gitlab-panel": "GitLab",
+    "kibana-panel": "Kibana",
+    "elasticsearch": "Elasticsearch",
+    "redis": "Redis",
+    "mongodb": "MongoDB",
+    "postgresql": "PostgreSQL",
+    "mysql": "MySQL",
+    "mariadb": "MariaDB",
+    "phpmyadmin-panel": "phpMyAdmin",
+    "adminer-panel": "Adminer",
+    "portainer-panel": "Portainer",
+    "traefik-panel": "Traefik",
+}
 
-    The `prior_findings` list is supplied by `run_enabled_scanners` —
-    it contains every finding emitted by the scanners that ran before
-    cve_lookup on the same target. We pull (product, version) out of
-    each tech_fingerprint evidence and feed the lookups."""
+
+def _extract_tech_from_prior(prior_findings: list[dict[str, Any]]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Extract (product, version) tuples from prior scanner output.
+
+    Reads two sources:
+      1. techstack's `tech_fingerprint` (legacy, kept for backward compat)
+      2. nuclei's tech-detect / version-detect / fingerprint templates
+
+    Returns (versioned, unversioned) buckets."""
+    versioned: list[tuple[str, str]] = []
+    unversioned: list[str] = []
+    seen_products: set[str] = set()
+
+    for f in prior_findings or []:
+        ev = f.get("evidence") or {}
+
+        # Source 1: techstack findings (legacy)
+        if f.get("type") == "tech_fingerprint":
+            p = (ev.get("product") or "").strip()
+            v = (ev.get("version") or "").strip()
+            if p and p.lower() not in seen_products:
+                seen_products.add(p.lower())
+                if v:
+                    versioned.append((p, v))
+                else:
+                    unversioned.append(p)
+            continue
+
+        # Source 2: nuclei findings with tech/version data
+        if f.get("scanner") != "nuclei":
+            continue
+        template_id = ev.get("template_id") or f.get("type") or ""
+        matcher = ev.get("matcher_name") or ""
+        extracted = ev.get("extracted") or []
+
+        # Map to NVD product name
+        product = (
+            _NUCLEI_TO_NVD_PRODUCT.get(template_id)
+            or _NUCLEI_TO_NVD_PRODUCT.get(matcher)
+            or ""
+        )
+        if not product:
+            # For unknown matchers from tech-detect, use the matcher as-is
+            # (cleaned up). Skip generic templates that don't identify a product.
+            if template_id in ("tech-detect", "fingerprinthub-web-fingerprints") and matcher:
+                product = matcher.replace("-", " ").title()
+            else:
+                continue
+
+        # Extract version from extracted-results if available.
+        # Nuclei templates return versions in various formats:
+        #   "15.1.2507.39"       (ms-exchange-server, msexchange-eol)
+        #   "Microsoft-IIS/10.0" (microsoft-iis-version)
+        #   "4.0.30319"          (aspnet-version-detect)
+        version = ""
+        if isinstance(extracted, list) and extracted:
+            for ex in extracted:
+                if not isinstance(ex, str):
+                    continue
+                slash = _re.search(r"/(\d[\d.]+)", ex)
+                if slash:
+                    version = slash.group(1)
+                    break
+                if _re.match(r"^\d+[\d.]+", ex):
+                    version = ex.strip()
+                    break
+
+        pkey = product.lower()
+        if version:
+            # Upgrade: if we already saw this product as unversioned,
+            # promote it to versioned now that we have a version.
+            if pkey in seen_products:
+                if product in unversioned:
+                    unversioned.remove(product)
+                # Check not already in versioned with same product
+                if not any(p.lower() == pkey for p, _ in versioned):
+                    versioned.append((product, version))
+            else:
+                versioned.append((product, version))
+            seen_products.add(pkey)
+        else:
+            if pkey not in seen_products:
+                unversioned.append(product)
+                seen_products.add(pkey)
+
+    return versioned, unversioned
+
+
+def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """For each detected technology (from nuclei or techstack), look up
+    matching CVEs and emit one `cve_match` finding per CVE (capped to
+    top 5 per product). Each finding carries EPSS + KEV enrichment.
+
+    Since v0.3.1, the primary tech source is nuclei's wappalyzer output
+    (tech-detect, fingerprinthub, version-detect templates). The legacy
+    techstack findings are still consumed for backward compatibility."""
     target = _safe_target(target)
     findings: list[dict[str, Any]] = []
 
-    # Split detected tech into two buckets:
-    #   versioned: ready for a reliable NVD CPE match
-    #   unversioned: keyword-only match would return every CVE ever filed
-    #                against the product (e.g. ASP.NET from 2009) — that
-    #                is noise, so we skip the NVD call and emit a single
-    #                info finding per product instead.
-    versioned: list[tuple[str, str]] = []
-    unversioned: list[str] = []
-    for f in prior_findings or []:
-        if f.get("type") != "tech_fingerprint":
-            continue
-        ev = f.get("evidence") or {}
-        p = (ev.get("product") or "").strip()
-        v = (ev.get("version") or "").strip()
-        if not p:
-            continue
-        if v:
-            if (p, v) not in versioned:
-                versioned.append((p, v))
-        else:
-            if p not in unversioned:
-                unversioned.append(p)
+    versioned, unversioned = _extract_tech_from_prior(prior_findings)
 
     findings_info: list[dict[str, Any]] = []
     for p in unversioned:
@@ -3400,8 +3501,8 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
             "severity": "info",
             "title": f"CVE lookup : aucune tech detectee sur {target}",
             "description": (
-                f"Aucun finding de type tech_fingerprint trouve pour {target}. "
-                f"Activez le scanner techstack pour amorcer le matching CVE."
+                f"Aucun produit versionne identifie pour {target}. "
+                f"Le scanner nuclei (mode auto) doit tourner avant cve_lookup."
             ),
             "target": target,
             "evidence": {"target": target},
@@ -3465,21 +3566,19 @@ def scan_host_cve_lookup(target: str, prior_findings: list[dict[str, Any]] | Non
 
 
 # ═══════════════════════════════════════════════════════════════
-# v0.2 — HTTP screenshot capture (optional, env-gated)
+# v0.2 — HTTP screenshot capture (optional)
 # ═══════════════════════════════════════════════════════════════
 #
 # Visual recon: grab a PNG screenshot of every reachable HTTP root and
 # attach it to a finding so the operator can see what the asset actually
-# looks like without leaving Surface. OFF by default because chromium is
-# a 250 MB dependency — turn on with `SURFACE_ENABLE_SCREENSHOTS=1` after
-# adding `playwright` + `playwright install chromium` to the image.
-#
-# When the dependency is missing the scanner emits a single info finding
-# explaining how to enable it, and never crashes the scan.
+# looks like without leaving Surface. Opt-in per asset via the scanner
+# toggle (not in default scanners) because chromium is a ~250 MB image
+# dependency. If playwright + chromium aren't installed, the scanner
+# emits a single info finding explaining how to enable it and never
+# crashes the scan — so enabling the scanner on an asset without the
+# deps installed is safe.
 
 def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
-    if os.environ.get("SURFACE_ENABLE_SCREENSHOTS", "") != "1":
-        return []
     target = _safe_target(target)
     findings: list[dict[str, Any]] = []
     try:
@@ -3638,12 +3737,6 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "callable": scan_domain_cloud_buckets,
         "returns_discovered": True,
     },
-    "github_enum": {
-        "label": "GitHub org enumeration + secret scan",
-        "kinds": {"domain"},
-        "callable": scan_domain_github_enum,
-        "returns_discovered": True,
-    },
     "shodan_host": {
         "label": "Shodan host lookup (ports/CVE, 1 credit/req)",
         "kinds": {"host"},
@@ -3663,7 +3756,7 @@ DEFAULT_SCANNERS_BY_KIND = {
     "domain": ["email_security", "typosquatting", "tls", "ct_logs", "dns_brute", "takeover"],
     "host": [
         "nmap_quick", "tls", "tls_grade", "nuclei", "takeover",
-        "techstack", "cve_lookup", "sensitive_files", "security_headers",
+        "cve_lookup", "sensitive_files", "security_headers",
         "js_analysis",
     ],
     "ip_range": ["discovery"],

@@ -39,6 +39,10 @@ if (typeof _registerTranslations === "function") {
             '<ul>' +
                 '<li><strong>Scans de ports</strong> via nmap (profils quick / standard / deep)</li>' +
                 '<li><strong>Analyse TLS</strong> : validité, chaîne, expiration, self-signed, hostname mismatch</li>' +
+                '<li><strong>TLS grade (A-F)</strong> — probe des versions TLS 1.0/1.1/1.2/1.3 et SSL 3.0, inspection du cipher négocié, détection des suites faibles (RC4, 3DES, NULL, EXPORT, MD5). Une note globale matérialise l\'écart par rapport aux recommandations Mozilla.</li>' +
+                '<li><strong>Security headers grade (A-F)</strong> — note HSTS, Content-Security-Policy (pénalisée si <code>unsafe-inline/eval</code>), X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. Produit un diagnostic Mozilla Observatory-lite sans dépendance externe.</li>' +
+                '<li><strong>Tech stack fingerprinting</strong> — 30+ signatures HTTP (Server header, X-Powered-By, Set-Cookie, balises meta, paths caractéristiques) pour identifier nginx / Apache / IIS / WordPress / Drupal / Django / Rails / Spring Boot et leur version.</li>' +
+                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — le scanner <code>cve_lookup</code> consomme la sortie versionnée du techstack, interroge l\'API NVD 2.0, enrichit chaque CVE avec sa probabilité EPSS et un flag CISA KEV. Les détections sans version sont écartées pour éviter le bruit 2009.</li>' +
                 '<li><strong>Nuclei DAST</strong> : 12 000+ templates de la communauté ProjectDiscovery, rate-limitable pour ne pas être blacklisté</li>' +
             '</ul>' +
             '<h3>4. Détection des risques spécifiques</h3>' +
@@ -47,8 +51,16 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Dangling records DNS</strong> — CNAME pointant vers des ressources abandonnées</li>' +
                 '<li><strong>Ports sensibles exposés</strong> — bases de données, RDP, SSH sans authentification forte, etc.</li>' +
             '</ul>' +
-            '<h3>5. Triage et plan d\'action</h3>' +
-            '<p>Chaque finding doit être classé en <strong>faux positif</strong> (avec justification obligatoire, conservée pour audit) ou <strong>à corriger</strong>. Un finding <em>à corriger</em> génère automatiquement une <strong>mesure corrective</strong> qui alimente le plan d\'action suivi dans l\'onglet <strong>Mesures</strong>.</p>' +
+            '<h3>5. Secrets, misconfigurations et fuites</h3>' +
+            '<p>Une 4<sup>ème</sup> phase orientée <em>post-découverte</em> examine les assets déjà connus à la recherche de fuites directement exploitables :</p>' +
+            '<ul>' +
+                '<li><strong>Fichiers sensibles exposés (<code>sensitive_files</code>)</strong> — probe 28 chemins critiques (<code>/.git/config</code>, <code>/.env</code>, <code>/backup.sql</code>, <code>/wp-config.php</code>, <code>/.aws/credentials</code>, <code>/phpinfo.php</code>, <code>/docker-compose.yml</code>, <code>/swagger.json</code>…) et ne flag que les réponses HTTP 200 dont le corps contient la signature attendue (réduction du bruit).</li>' +
+                '<li><strong>Analyse de bundles JS (<code>js_analysis</code>)</strong> — télécharge chaque <code>&lt;script src&gt;</code> (borné 512 KB × 20 fichiers) du domaine cible et grep 12 patterns de secrets : AWS Access/Secret Key, Google API, Slack webhook, Stripe live, Sentry DSN, JWT, IP privée, buckets S3/Azure/GCS, Firebase. Les secrets critical/high sont stockés masqués (<code>abcd…wxyz</code>) pour ne pas les reproduire côté base.</li>' +
+                '<li><strong>Énumération de buckets cloud (<code>cloud_buckets</code>)</strong> — génère 80 candidats de nom (préfixes <em>static-/cdn-/backup-</em>, suffixes <em>-prod/-staging/-dev/-backup</em>) et probe S3, Azure Blob, GCS, DigitalOcean Spaces. Un 200 sur <code>&lt;ListBucketResult&gt;</code> est flaggé high (contenu listable), un 403 medium (bucket existe).</li>' +
+            '</ul>' +
+            '<div class="help-tip"><strong>Anti-SSRF :</strong> chacun de ces scanners passe par <code>_resolve_safe_target</code> (blocklist loopback / RFC1918 sensibles / metadata cloud / docker siblings) et re-valide chaque URL secondaire (scripts JS, redirects) avant fetch. Une page HTML hostile ne peut pas détourner <code>js_analysis</code> vers une ressource interne.</div>' +
+            '<h3>6. Triage et plan d\'action</h3>' +
+            '<p>Chaque finding doit être classé en <strong>faux positif</strong> (avec justification obligatoire, conservée pour audit) ou <strong>à corriger</strong>. Un finding <em>à corriger</em> génère automatiquement une <strong>mesure corrective</strong> qui alimente le plan d\'action suivi dans l\'onglet <strong>Mesures</strong>. Un bouton <strong>Triage IA</strong> fait appel au provider LLM configuré localement (Anthropic ou OpenAI) avec un prompt structuré et renvoie : probabilité de faux positif, confiance, recommandation de sévérité, résumé, étapes de remédiation et références. Le triage humain reste souverain — l\'IA propose, vous décidez.</p>' +
             '<h2>Philosophie « continuous discovery »</h2>' +
             '<p>L\'ASM n\'est pas un scan ponctuel mais une <strong>surveillance continue</strong>. Surface exécute les scanners via un scheduler qui relance les checks selon une fréquence configurable par asset (par défaut 24 h). Les hosts découverts automatiquement sont enrôlés comme <code>MonitoredAsset</code> et scannés à leur tour — c\'est un effet boule de neige contrôlé par le scope.</p>' +
             '<div class="help-tip"><strong>Scope :</strong> tous les scanners qui découvrent des hostnames filtrent les résultats selon le domaine parent surveillé. Une brute-force DNS sur <code>example.com</code> ne retiendra que <code>*.example.com</code>, pas les domaines externes qui pourraient apparaître dans un CT log.</div>' +
@@ -118,13 +130,33 @@ if (typeof _registerTranslations === "function") {
             '<p>Le bouton « Importer JSON » permet de pousser des findings produits par des scanners externes (nmap manuel, Shodan, Burp, Trivy, SBOM, pentest...). Format attendu : tableau d\'objets <code>{scanner, type, severity, title, description, target, evidence}</code>. La dedup logic standard s\'applique.</p>' +
             '<h2>Mesures</h2>' +
             '<p>Les mesures correctives créées depuis les findings à corriger. Chaque mesure a un ID court (<code>SRF-XXXXXXXX</code>), un titre, un statut (À faire / En cours / Terminé), un responsable, une échéance. Éditable en place. Les mesures constituent le plan d\'action local — leur statut et leurs champs sont persistés dans Surface.</p>' +
-            '<h2>Paramètres (roue crantée en haut)</h2>' +
-            '<p>Trois sections :</p>' +
+            '<h2>Rapport exécutif</h2>' +
+            '<p>Bouton <strong>Rapport exécutif</strong> dans la barre d\'outils — ouvre un nouvel onglet avec une page imprimable prête pour un export PDF via le navigateur (Cmd/Ctrl+P → « Enregistrer au format PDF »). Zéro dépendance serveur, aucune librairie PDF Python — tout est rendu côté client à partir de l\'endpoint <code>/api/reports/executive</code> qui agrège : totaux par sévérité, nouveaux 7 j / 30 j, top 10 findings actifs, top 10 hosts exposés, santé scheduler (succès / échecs 7 j), burn-down mesures. L\'agrégation est faite côté SQL (GROUP BY + LIMIT) donc elle reste performante même sur une base de plusieurs dizaines de milliers de findings.</p>' +
+            '<div class="help-tip"><strong>À utiliser pour :</strong> envoyer un état mensuel à la direction, alimenter un comité sécurité, archiver un snapshot de la posture avant et après une opération de remédiation.</div>' +
+            '<h2>Digest hebdomadaire par email</h2>' +
+            '<p>Une fois SMTP configuré (voir Paramètres), Surface envoie <strong>automatiquement</strong> un digest HTML chaque semaine : résumé des compteurs, top 10 findings à traiter, top 10 hosts exposés, statistiques scans et mesures. Le scheduler vérifie toutes les heures si 7 jours se sont écoulés depuis le dernier envoi (<code>digest.last_sent_at</code> en base). Un bouton <strong>Envoyer maintenant</strong> dans la section SMTP permet d\'envoyer un digest ad-hoc (manuel) sans attendre le prochain tick hebdomadaire.</p>' +
+            '<div class="help-tip"><strong>Sécurité :</strong> le host SMTP est validé par la même blocklist anti-SSRF que les scanners (pas de <code>localhost</code>, pas de <code>surface-db</code>). Les adresses sender / recipients sont filtrées contre l\'injection d\'en-têtes (CRLF). Le mot de passe SMTP est stocké en base côté serveur et n\'est jamais renvoyé dans les réponses GET.</div>' +
+            '<h2>Triage IA</h2>' +
+            '<p>Sur chaque finding, un bouton <strong>Triage IA</strong> (icône éclair) envoie le contexte au provider LLM configuré dans <em>Paramètres → Assistant IA</em>. Le prompt système est structuré pour obtenir un JSON :</p>' +
             '<ul>' +
-                '<li><strong>Langue</strong> : bascule FR/EN instantanée de toute l\'interface</li>' +
-                '<li><strong>Assistant IA</strong> : configuration du provider (Anthropic / OpenAI), modèle et clé API (stockée localement dans le navigateur, jamais envoyée au backend)</li>' +
-                '<li><strong>Nuclei</strong> : version, nombre de templates, date de mise à jour, <strong>tuning éditable</strong> (rate-limit, concurrency, bulk-size, timeout, retries) qui s\'applique immédiatement au prochain scan. Bouton « Mettre à jour les templates » pour rafraîchir la base des templates depuis upstream.</li>' +
+                '<li><code>is_probable_false_positive</code> — booléen</li>' +
+                '<li><code>confidence</code> — niveau de confiance de l\'IA</li>' +
+                '<li><code>severity_recommendation</code> — sévérité suggérée si elle diverge</li>' +
+                '<li><code>summary</code> — résumé exécutif en 2-3 lignes</li>' +
+                '<li><code>remediation[]</code> — étapes de correction</li>' +
+                '<li><code>references[]</code> — URLs de référence (CVE, CWE, docs vendor)</li>' +
             '</ul>' +
+            '<p>L\'appel part directement du navigateur vers Anthropic/OpenAI — la clé API ne transite jamais par le backend Surface. La décision finale reste manuelle : l\'IA ne clique pas sur « Faux positif » ou « À corriger » à votre place.</p>' +
+            '<h2>Paramètres (roue crantée en haut) — 6 sections accordéon</h2>' +
+            '<p>La page <strong>Paramètres</strong> utilise un accordéon natif HTML : ouvrir une section referme automatiquement la précédente. Toutes les sections sont repliées par défaut.</p>' +
+            '<ol>' +
+                '<li><strong>Langue</strong> — bascule FR/EN instantanée de toute l\'interface</li>' +
+                '<li><strong>Assistant IA</strong> — provider (Anthropic / OpenAI / custom), modèle et clé API (localStorage navigateur, jamais envoyée au backend)</li>' +
+                '<li><strong>Fuseau horaire</strong> — picker de 30 zones IANA. La valeur par défaut suit le fuseau détecté par le navigateur. Toutes les dates (findings, scans, mesures) sont affichées dans le fuseau choisi.</li>' +
+                '<li><strong>Nuclei</strong> — version, nombre de templates, date de mise à jour, <strong>tuning éditable</strong> (rate-limit, concurrency, bulk-size, timeout, retries). Bouton « Mettre à jour les templates ».</li>' +
+                '<li><strong>Shodan API</strong> — clé API stockée côté backend (masquée à l\'affichage). Active les scanners <code>shodan_domain</code> et <code>shodan_host</code>.</li>' +
+                '<li><strong>Envoi email (digest hebdomadaire)</strong> — configuration SMTP complète : host, port, username/password, sender, recipients, toggle STARTTLS, bouton « Envoyer maintenant ».</li>' +
+            '</ol>' +
             '<div class="help-tip"><strong>Conseil tuning Nuclei :</strong> sur des cibles clients ou des environnements surveillés par un WAF, baissez le rate-limit à 5-10 req/s pour éviter le blacklistage. Pour vos propres assets, 20-50 req/s est confortable.</div>' +
             '<h2>Workflow typique</h2>' +
             '<ol style="font-size:0.9em;line-height:1.8">' +
@@ -240,6 +272,7 @@ if (typeof _registerTranslations === "function") {
 
         // ── Host detail ────────────────────────────────────
         "host.back":               "Hosts",
+        "host.back_to_host":       "Retour au host",
         "host.col.value":          "Valeur",
         "host.col.label":          "Libellé",
         "host.col.enabled":        "Actif",
@@ -425,6 +458,23 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_remediation":          "Remédiation",
         "fd.ai_refs":                 "Références",
         "fd.ai_error":                "Erreur analyse IA",
+        "smtp.section":               "Envoi email (digest hebdo)",
+        "smtp.help":                  "Configure le serveur SMTP pour l'envoi automatique du digest hebdomadaire et du rapport exécutif par email.",
+        "smtp.host":                  "Serveur",
+        "smtp.port":                  "Port",
+        "smtp.user":                  "Login",
+        "smtp.password":              "Mot de passe",
+        "smtp.password_ph":           "••••",
+        "smtp.already_set":           "déjà configuré",
+        "smtp.sender":                "Expéditeur",
+        "smtp.recipients":            "Destinataires",
+        "smtp.use_tls":               "STARTTLS (recommandé)",
+        "smtp.save":                  "Enregistrer",
+        "smtp.saved":                 "Config SMTP enregistrée",
+        "smtp.send_now":              "Envoyer maintenant",
+        "smtp.sending":               "Envoi du digest en cours…",
+        "smtp.sent":                  "Digest envoyé à {n} destinataire(s)",
+        "smtp.load_error":            "Erreur de chargement de la config SMTP",
         "tz.section":                 "Fuseau horaire",
         "tz.hint":                    "Toutes les dates affichées dans l'interface sont rendues dans ce fuseau.",
         "tz.browser":                 "Auto (navigateur)",
@@ -452,6 +502,8 @@ if (typeof _registerTranslations === "function") {
         "fd.description":            "Description",
         "fd.description_none":       "(aucune)",
         "fd.evidence":               "Evidence",
+        "fd.screenshot":             "Capture d'écran",
+        "fd.screenshot_open":        "Ouvrir en grand",
         "fd.notes":                  "Notes",
         "fd.triage":                 "Triage",
         "fd.triage_notes_ph":        "Notes (optionnel)...",

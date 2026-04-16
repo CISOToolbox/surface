@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import auth_enabled, get_current_user, require_admin
 from src.database import get_db
 from src.models import AppSettings, User
-from src.schemas import AICompleteRequest, AICompleteResponse, AIConfigResponse
+from src.schemas import AICompleteRequest, AICompleteResponse, AIConfigResponse, AIRuntimeResponse
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -183,6 +183,44 @@ async def ai_complete(body: AICompleteRequest, user: User = Depends(get_current_
     return AICompleteResponse(text=text)
 
 
+def _ai_managed() -> bool:
+    return os.getenv("AI_MANAGED_BY_PILOT", "false").lower() in ("1", "true", "yes")
+
+
+async def _runtime_provider_model(db: AsyncSession) -> tuple[str, str]:
+    async def _get(key: str) -> str:
+        r = await db.execute(select(AppSettings).where(AppSettings.key == key))
+        s = r.scalar_one_or_none()
+        return (s.value if s and s.value else "") or ""
+    provider = await _get("ai_provider") or "anthropic"
+    model = await _get("ai_model") or AI_PROVIDERS.get(provider, AI_PROVIDERS["anthropic"])["defaultModel"]
+    return provider, model
+
+
+@router.get("/runtime", response_model=AIRuntimeResponse)
+async def get_ai_runtime(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    managed = _ai_managed()
+    if not auth_enabled() or user is None:
+        can_use = True
+    else:
+        can_use = (user.role == "admin") or (user.ai_enabled == "true")
+    provider, model = await _runtime_provider_model(db)
+    try:
+        custom = await _get_custom_llm(db)
+        custom_configured = bool(custom.get("endpoint"))
+    except Exception:
+        custom_configured = False
+    return AIRuntimeResponse(
+        managed=managed,
+        can_use=can_use,
+        provider=provider,
+        model=model,
+        anthropic_configured=bool(await _get_api_key("anthropic", db)),
+        openai_configured=bool(await _get_api_key("openai", db)),
+        custom_configured=custom_configured,
+    )
+
+
 @router.get("/config", response_model=AIConfigResponse)
 async def get_ai_config(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     custom = await _get_custom_llm(db)
@@ -202,21 +240,29 @@ async def get_ai_config(user: User = Depends(get_current_user), db: AsyncSession
 
 
 @router.put("/keys")
-async def set_ai_keys(body: dict, request: Request = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def set_ai_keys(body: dict, request: Request, db: AsyncSession = Depends(get_db)):
+    """Set API keys. Authorized via service token (from Pilot) or admin user."""
     service_token = request.headers.get("X-Service-Token", "")
-    if service_token and service_token == os.getenv("SERVICE_TOKEN", ""):
-        pass
-    else:
+    if not (service_token and service_token == os.getenv("SERVICE_TOKEN", "")):
+        try:
+            user = await get_current_user(request, db)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         require_admin(user)
-    for provider in ("anthropic", "openai"):
-        key_val = body.get(provider, "")
-        key_name = f"ai_key_{provider}"
-        result = await db.execute(select(AppSettings).where(AppSettings.key == key_name))
-        setting = result.scalar_one_or_none()
-        if setting:
-            setting.value = key_val
+    async def _upsert(key: str, value: str) -> None:
+        r = await db.execute(select(AppSettings).where(AppSettings.key == key))
+        s = r.scalar_one_or_none()
+        if s:
+            s.value = value
         else:
-            db.add(AppSettings(key=key_name, value=key_val))
+            db.add(AppSettings(key=key, value=value))
+    for provider in ("anthropic", "openai"):
+        if provider in body:
+            await _upsert(f"ai_key_{provider}", body.get(provider, ""))
+    if "provider" in body:
+        await _upsert("ai_provider", body.get("provider", ""))
+    if "model" in body:
+        await _upsert("ai_model", body.get("model", ""))
     await db.commit()
     return {"ok": True}
 

@@ -43,14 +43,33 @@ RUN git clone --depth 1 --branch ${NUCLEI_TEMPLATES_TAG} https://github.com/proj
 
 WORKDIR /app
 COPY --from=builder /install /usr/local
-COPY src/ src/
-COPY app/ app/
-COPY alembic/ alembic/
-COPY alembic.ini .
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+# Playwright + Chromium for the `screenshot` scanner.
+# We install the chromium runtime libraries manually rather than via
+# `playwright install --with-deps` because the latter tries to pull a
+# few legacy ttf-* packages that have been dropped from Debian trixie.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+        libatspi2.0-0 libx11-6 libxcb1 libxext6 \
+        fonts-liberation fonts-unifont \
+    && playwright install chromium \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd -r -m -u 1000 surface \
+    && mkdir -p /app /data/wordlists \
+    && chown -R surface:surface /app /data /root/nuclei-templates /ms-playwright
+
+COPY --chown=surface:surface src/ src/
+COPY --chown=surface:surface app/ app/
+COPY --chown=surface:surface alembic/ alembic/
+COPY --chown=surface:surface alembic.ini .
+COPY --chown=surface:surface docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
+USER surface
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

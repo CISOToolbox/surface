@@ -183,7 +183,6 @@
     letter-spacing: 0.3px;
 }
 .kind-domain   { background: #dbeafe; color: #1e40af; }
-.kind-ip       { background: #f3e8ff; color: #6b21a8; }
 .kind-ip_range { background: #fef3c7; color: #92400e; }
 
 /* Update kind badge for new "host" type */
@@ -513,6 +512,24 @@
     flex: 1;
     min-width: 0;
 }
+.host-card-thumb {
+    margin: 6px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    background: #fff;
+    aspect-ratio: 16 / 9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.host-card-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top;
+    display: block;
+}
 .host-card-label {
     font-size: 0.82em;
     color: var(--text-muted);
@@ -590,6 +607,109 @@
     align-items: center;
     gap: 4px;
 }
+/* v0.3 — Settings panel accordion */
+.surface-settings-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 16px;
+}
+.surface-settings-accordion {
+    border-top: 1px solid var(--border);
+    padding: 4px 0;
+}
+.surface-settings-accordion[open] {
+    padding-bottom: 12px;
+}
+.surface-settings-summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 12px 4px;
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}
+.surface-settings-summary::-webkit-details-marker { display: none; }
+.surface-settings-summary::marker { content: ""; }
+.surface-settings-summary:hover { color: var(--blue); }
+.surface-settings-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s;
+    color: var(--text-muted);
+    font-size: 1.3em;
+    line-height: 1;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.surface-settings-accordion[open] .surface-settings-chevron {
+    transform: rotate(90deg);
+    color: var(--blue);
+}
+.surface-settings-body {
+    padding: 4px 4px 4px 20px;
+    font-size: 0.85em;
+}
+.surface-settings-inner {
+    font-size: inherit;
+}
+.surface-settings-muted {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.surface-settings-help {
+    font-size: 0.78em;
+    color: var(--text-muted);
+    margin: 4px 0 8px;
+    line-height: 1.4;
+}
+.surface-settings-label {
+    display: block;
+    font-size: 0.78em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin: 8px 0 3px;
+    font-weight: 600;
+}
+.surface-settings-input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    font-size: 0.85em;
+    font-family: inherit;
+    background: white;
+    box-sizing: border-box;
+}
+.surface-settings-input:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.surface-settings-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.surface-settings-grid .surface-settings-label { margin: 0; }
+.surface-settings-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    cursor: pointer;
+    margin-top: 8px;
+}
+
 .host-card-ip {
     display: inline-flex;
     align-items: center;
@@ -1051,7 +1171,6 @@
 }
 .dash-legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .dash-legend-sq { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-.dash-legend-line { width: 14px; height: 2px; display: inline-block; }
 
 /* ── Surface inventory bars ── */
 .dash-surface-bars {

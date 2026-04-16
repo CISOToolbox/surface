@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.orm import selectinload
@@ -18,12 +18,21 @@ from src.schemas import FindingCreate, FindingResponse, FindingTriage
 router = APIRouter(prefix="/api/findings", tags=["findings"])
 
 
-def _to_dict(f: Finding) -> dict:
+def _to_dict(f: Finding, *, include_evidence: bool = True) -> dict:
     measure_id = f.measure.id if f.measure else None
+    ev = f.evidence or {}
+    if include_evidence:
+        evidence = ev
+    else:
+        # Strip heavy blobs (base64 screenshots) from list responses.
+        # The frontend fetches full evidence via GET /findings/{id}.
+        evidence = {k: v for k, v in ev.items() if k != "png_b64"} if ev else {}
+        if "png_b64" in ev:
+            evidence["has_screenshot"] = True
     return {
         "id": f.id, "scanner": f.scanner, "type": f.type, "severity": f.severity,
         "title": f.title, "description": f.description or "", "target": f.target or "",
-        "evidence": f.evidence or {}, "status": f.status,
+        "evidence": evidence, "status": f.status,
         "triaged_at": f.triaged_at, "triaged_by": f.triaged_by, "triage_notes": f.triage_notes or "",
         "created_at": f.created_at, "measure_id": measure_id,
     }
@@ -39,20 +48,43 @@ async def list_findings(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Cap limit to avoid OOM on large datasets
+    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed"}
+    _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
     limit = max(1, min(limit, 2000))
     offset = max(0, offset)
     q = select(Finding).options(selectinload(Finding.measure)).order_by(Finding.created_at.desc())
-    if status:
+    if status and status in _VALID_STATUSES:
         q = q.where(Finding.status == status)
-    if severity:
+    if severity and severity in _VALID_SEVERITIES:
         q = q.where(Finding.severity == severity)
     if scanner:
         q = q.where(Finding.scanner == scanner)
     q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     findings = result.scalars().all()
-    return [_to_dict(f) for f in findings]
+    return [_to_dict(f, include_evidence=False) for f in findings]
+
+
+@router.get("/screenshots")
+async def list_screenshots(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a lightweight {target → png_b64} map of all screenshot
+    findings. Used by the host-cards grid to render thumbnails without
+    loading every finding's full evidence blob."""
+    result = await db.execute(
+        select(Finding.target, Finding.evidence, Finding.created_at)
+        .where(Finding.scanner == "screenshot")
+        .where(Finding.evidence.op("?")("png_b64"))
+        .order_by(Finding.created_at.desc())
+    )
+    by_host: dict[str, str] = {}
+    for target, evidence, _ts in result.all():
+        host = (target or "").split(":")[0]
+        if host and host not in by_host:
+            by_host[host] = (evidence or {}).get("png_b64", "")
+    return by_host
 
 
 @router.post("", status_code=201)
@@ -295,9 +327,9 @@ async def bulk_delete(
 ):
     """Delete N findings at once (and their linked measures via cascade)."""
     check_scan_quota(str(user.id) if user else "anonymous")
-    result = await db.execute(select(Finding).where(Finding.id.in_(body.ids)))
-    findings = result.scalars().all()
-    for f in findings:
-        await db.delete(f)
+    # Cascade: delete linked measures first, then findings, in two
+    # batch statements instead of N individual DELETEs.
+    await db.execute(sa_delete(Measure).where(Measure.finding_id.in_(body.ids)))
+    result = await db.execute(sa_delete(Finding).where(Finding.id.in_(body.ids)))
     await db.commit()
-    return {"deleted": len(findings)}
+    return {"deleted": result.rowcount}

@@ -115,3 +115,13 @@ class AIConfigResponse(BaseModel):
     anthropic_configured: bool
     openai_configured: bool
     providers: dict[str, dict[str, Any]]
+
+
+class AIRuntimeResponse(BaseModel):
+    managed: bool
+    can_use: bool
+    provider: str
+    model: str
+    anthropic_configured: bool
+    openai_configured: bool
+    custom_configured: bool = False

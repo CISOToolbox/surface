@@ -20,6 +20,7 @@
     var cfg = window.AI_APP_CONFIG || { storagePrefix: "ct" };
     var pfx = cfg.storagePrefix || "ct";
 
+
     // ═══════════════════════════════════════════════════════════════════
     // PROVIDERS
     // ═══════════════════════════════════════════════════════════════════
@@ -44,8 +45,55 @@
             defaultModel: "gpt-4o",
             placeholder: "sk-...",
             endpoint: "https://api.openai.com/v1/chat/completions"
+        },
+        bedrock: {
+            label: "AWS Bedrock",
+            models: [
+                { id: "anthropic.claude-sonnet-4-6-20250514-v1:0", label: "Claude Sonnet 4.6 (Bedrock)" },
+                { id: "anthropic.claude-haiku-4-5-20251001-v1:0", label: "Claude Haiku 4.5 (Bedrock)" },
+                { id: "anthropic.claude-opus-4-6-20250515-v1:0", label: "Claude Opus 4.6 (Bedrock)" }
+            ],
+            defaultModel: "anthropic.claude-sonnet-4-6-20250514-v1:0",
+            placeholder: "AKIAIOSFODNN7EXAMPLE",
+            endpoint: "https://bedrock-runtime.eu-west-3.amazonaws.com"
         }
     };
+
+    // ── AWS SigV4 signing (minimal, for Bedrock) ─────────────────────
+    async function _hmac(key, msg) {
+        var k = (typeof key === "string") ? new TextEncoder().encode(key) : key;
+        var cryptoKey = await crypto.subtle.importKey("raw", k, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(msg)));
+    }
+    async function _sha256(msg) {
+        var buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
+        return Array.from(new Uint8Array(buf)).map(function(b) { return b.toString(16).padStart(2, "0"); }).join("");
+    }
+    async function _signV4(method, url, body, accessKey, secretKey, region, service) {
+        var u = new URL(url);
+        var now = new Date();
+        var dateStamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z/, "Z");
+        var shortDate = dateStamp.substring(0, 8);
+        var payloadHash = await _sha256(body || "");
+        var headers = {
+            "host": u.host,
+            "x-amz-date": dateStamp,
+            "x-amz-content-sha256": payloadHash,
+            "content-type": "application/json"
+        };
+        var signedHeaders = Object.keys(headers).sort().join(";");
+        var canonicalHeaders = Object.keys(headers).sort().map(function(k) { return k + ":" + headers[k] + "\n"; }).join("");
+        var canonicalRequest = method + "\n" + u.pathname + "\n" + (u.search ? u.search.substring(1) : "") + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
+        var credentialScope = shortDate + "/" + region + "/" + service + "/aws4_request";
+        var stringToSign = "AWS4-HMAC-SHA256\n" + dateStamp + "\n" + credentialScope + "\n" + (await _sha256(canonicalRequest));
+        var kDate = await _hmac("AWS4" + secretKey, shortDate);
+        var kRegion = await _hmac(kDate, region);
+        var kService = await _hmac(kRegion, service);
+        var kSigning = await _hmac(kService, "aws4_request");
+        var sig = Array.from(await _hmac(kSigning, stringToSign)).map(function(b) { return b.toString(16).padStart(2, "0"); }).join("");
+        headers["authorization"] = "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + credentialScope + ", SignedHeaders=" + signedHeaders + ", Signature=" + sig;
+        return headers;
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // STORAGE HELPERS (prefixed per app)
@@ -59,6 +107,22 @@
 
     window._aiGetProvider = function() { return localStorage.getItem(_k("provider")) || "anthropic"; };
     window._aiSetProvider = function(p) { localStorage.setItem(_k("provider"), p); };
+
+    window._aiGetEndpoint = function() { return localStorage.getItem(_k("endpoint")) || ""; };
+    window._aiSetEndpoint = function(url) { if (url) localStorage.setItem(_k("endpoint"), url); else localStorage.removeItem(_k("endpoint")); };
+
+    window._aiGetSecretKey = function() { return localStorage.getItem(_k("secretkey")) || ""; };
+    window._aiSetSecretKey = function(key) { if (key) localStorage.setItem(_k("secretkey"), key); else localStorage.removeItem(_k("secretkey")); };
+
+    window._aiGetRegion = function() { return localStorage.getItem(_k("region")) || "eu-west-3"; };
+    window._aiSetRegion = function(r) { if (r) localStorage.setItem(_k("region"), r); else localStorage.removeItem(_k("region")); };
+
+    function _resolveEndpoint(provider) {
+        var custom = _aiGetEndpoint();
+        if (custom) return custom;
+        var p = AI_PROVIDERS[provider] || AI_PROVIDERS.anthropic;
+        return p.endpoint;
+    }
 
     window._aiGetModel = function() {
         var stored = localStorage.getItem(_k("model"));
@@ -93,9 +157,11 @@
     async function _aiValidateKey(provider, apiKey, model) {
         var providerConf = AI_PROVIDERS[provider] || AI_PROVIDERS.anthropic;
         try {
+            // Bedrock: skip validation (SigV4 makes it complex, will fail on first real call)
+            if (provider === "bedrock") return true;
             var resp;
             if (provider === "anthropic") {
-                resp = await fetch(providerConf.endpoint, {
+                resp = await fetch(_resolveEndpoint(provider), {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -111,7 +177,7 @@
                 });
             } else {
                 // OpenAI-compatible providers (openai, mistral)
-                resp = await fetch(providerConf.endpoint, {
+                resp = await fetch(_resolveEndpoint(provider), {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -133,14 +199,14 @@
     }
 
     window._aiCallAPI = async function(systemPrompt, userPrompt) {
-        var apiKey = _aiGetApiKey();
-        if (!apiKey) return null;
-
         // Append user context file if present
         var ctx = _aiGetContext();
         if (ctx) {
             systemPrompt += "\n\n--- METHODOLOGY INSTRUCTIONS (provided by the user) ---\n" + ctx;
         }
+
+        var apiKey = _aiGetApiKey();
+        if (!apiKey) return null;
 
         var provider = _aiGetProvider();
         var providerConf = AI_PROVIDERS[provider] || AI_PROVIDERS.anthropic;
@@ -148,11 +214,29 @@
         var resp, data, text;
 
         try {
-            if (provider === "anthropic") {
+            if (provider === "bedrock") {
+                // AWS Bedrock — SigV4 signed request
+                var region = _aiGetRegion();
+                var secretKey = _aiGetSecretKey();
+                var bedrockEndpoint = _resolveEndpoint(provider);
+                var bedrockUrl = bedrockEndpoint + "/model/" + encodeURIComponent(model) + "/invoke";
+                var bedrockBody = JSON.stringify({
+                    anthropic_version: "bedrock-2023-05-31",
+                    max_tokens: 4096,
+                    system: systemPrompt,
+                    messages: [{ role: "user", content: userPrompt }]
+                });
+                var sigHeaders = await _signV4("POST", bedrockUrl, bedrockBody, apiKey, secretKey, region, "bedrock");
+                resp = await fetch(bedrockUrl, {
+                    method: "POST",
+                    headers: sigHeaders,
+                    body: bedrockBody
+                });
+            } else if (provider === "anthropic") {
                 // anthropic-dangerous-direct-browser-access: required by Anthropic
                 // for direct browser API calls (no backend proxy). Acceptable for
                 // internal/local tools. API key is exposed to browser extensions.
-                resp = await fetch(providerConf.endpoint, {
+                resp = await fetch(_resolveEndpoint(provider), {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -169,7 +253,7 @@
                 });
             } else {
                 // OpenAI-compatible providers (openai, mistral)
-                resp = await fetch(providerConf.endpoint, {
+                resp = await fetch(_resolveEndpoint(provider), {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -200,7 +284,7 @@
         }
 
         data = await resp.json();
-        if (provider === "anthropic") {
+        if (provider === "anthropic" || provider === "bedrock") {
             text = data.content && data.content[0] ? data.content[0].text : "";
         } else {
             // OpenAI-compatible (openai, mistral)
@@ -237,7 +321,8 @@
         var key = _aiGetApiKey();
         var curProvider = _aiGetProvider();
         var aiEnabled = localStorage.getItem(_k("enabled")) === "true";
-        var placeholder = (AI_PROVIDERS[curProvider] || AI_PROVIDERS.anthropic).placeholder;
+        var providerConf = AI_PROVIDERS[curProvider] || AI_PROVIDERS.anthropic;
+        var placeholder = providerConf.placeholder;
 
         var provOpts = "";
         for (var pid in AI_PROVIDERS) {
@@ -259,7 +344,6 @@
                 '</div>' +
             '</div>';
 
-        // AI section (unless hidden)
         if (!_hideAI) {
             _settingsHTML +=
             '<div class="settings-section">' +
@@ -278,6 +362,17 @@
                     '<button class="settings-btn-eye" id="settings-toggle-key" title="' + t("settings.show_key") + '">👁</button>' +
                 '</div>' +
                 '<p class="fs-xs text-muted" style="margin-top:6px">' + t("settings.api_key_note") + '</p>' +
+                // Bedrock-specific fields (secret key + region)
+                '<div id="settings-bedrock-fields" style="' + (curProvider === "bedrock" ? "" : "display:none") + '">' +
+                    '<div class="settings-label fs-sm" style="margin-top:12px;margin-bottom:4px">' + t("settings.secret_key") + '</div>' +
+                    '<input type="password" class="settings-input" id="settings-secret-key" value="' + esc(_aiGetSecretKey()) + '" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" style="width:100%">' +
+                    '<div class="settings-label fs-sm" style="margin-top:8px;margin-bottom:4px">' + t("settings.region") + '</div>' +
+                    '<input type="text" class="settings-input" id="settings-region" value="' + esc(_aiGetRegion()) + '" placeholder="eu-west-3" style="width:100%">' +
+                '</div>' +
+                // Custom endpoint
+                '<div class="settings-label fs-sm" style="margin-top:12px;margin-bottom:4px">' + t("settings.endpoint") + '</div>' +
+                '<input type="url" class="settings-input" id="settings-endpoint" value="' + esc(_aiGetEndpoint()) + '" placeholder="' + esc(providerConf.endpoint) + '" style="width:100%">' +
+                '<p class="fs-xs text-muted" style="margin-top:4px">' + t("settings.endpoint_note") + '</p>' +
                 '<div class="settings-label fs-sm" style="margin-top:12px;margin-bottom:4px">' + t("settings.context_file") + '</div>' +
                 '<div style="display:flex;gap:6px;align-items:center">' +
                     '<input type="file" class="settings-input" id="settings-context-file" accept=".md,.txt,.markdown" style="flex:1;font-family:inherit">' +
@@ -370,9 +465,14 @@
         var provSelect = document.getElementById("settings-provider");
         if (provSelect) provSelect.onchange = function() {
             var p = this.value;
-            document.getElementById("settings-api-key").placeholder = (AI_PROVIDERS[p] || AI_PROVIDERS.anthropic).placeholder;
+            var pConf = AI_PROVIDERS[p] || AI_PROVIDERS.anthropic;
+            document.getElementById("settings-api-key").placeholder = pConf.placeholder;
             document.getElementById("settings-api-key").value = "";
             document.getElementById("settings-model").innerHTML = _buildModelOptions(p);
+            var epEl = document.getElementById("settings-endpoint");
+            if (epEl) epEl.placeholder = pConf.endpoint;
+            var bFields = document.getElementById("settings-bedrock-fields");
+            if (bFields) bFields.style.display = (p === "bedrock") ? "" : "none";
         };
         document.getElementById("settings-save").onclick = async function() {
             var aiToggle = document.getElementById("settings-ai-toggle").checked;
@@ -411,6 +511,12 @@
             _aiSetProvider(newProvider);
             _aiSetModel(newModel);
             if (newKey !== _aiGetApiKey()) _aiSetApiKey(newKey);
+            var endpointEl = document.getElementById("settings-endpoint");
+            _aiSetEndpoint(endpointEl ? endpointEl.value.trim() : "");
+            var secretEl = document.getElementById("settings-secret-key");
+            _aiSetSecretKey(secretEl ? secretEl.value.trim() : "");
+            var regionEl = document.getElementById("settings-region");
+            _aiSetRegion(regionEl ? regionEl.value.trim() : "");
             if (_pendingContext !== null) {
                 _aiSetContext(_pendingContext);
                 _aiSetContextName(_pendingContextName);
@@ -498,6 +604,10 @@
         "settings.api_key": "Clé API",
         "settings.show_key": "Afficher / masquer la clé",
         "settings.api_key_note": "La clé est stockée dans votre navigateur (localStorage) et n'est jamais incluse dans les fichiers sauvegardés. Elle est transmise directement à l'API du fournisseur depuis votre navigateur — elle peut être visible dans les DevTools et par les extensions installées.",
+        "settings.endpoint": "Endpoint API (optionnel)",
+        "settings.endpoint_note": "Laissez vide pour utiliser l'API officielle du fournisseur. Renseignez une URL custom pour utiliser un proxy ou un endpoint compatible (ex: Azure OpenAI, Ollama, LiteLLM).",
+        "settings.secret_key": "Secret Access Key (AWS)",
+        "settings.region": "Region AWS",
         "settings.demo_section": "Démonstration",
         "settings.demo_note": "Chargez un fichier d'exemple complet (société fictive MedSecure — IoMT) pour découvrir les fonctionnalités de l'application.",
         "settings.demo_load": "Charger la démonstration",
@@ -534,6 +644,10 @@
         "settings.api_key": "API Key",
         "settings.show_key": "Show / hide key",
         "settings.api_key_note": "The key is stored in your browser (localStorage) and never included in saved files. It is transmitted directly to the provider's API from your browser — it may be visible in DevTools and to installed browser extensions.",
+        "settings.endpoint": "API Endpoint (optional)",
+        "settings.endpoint_note": "Leave empty to use the official provider API. Enter a custom URL for a proxy or compatible endpoint (e.g.: Azure OpenAI, Ollama, LiteLLM).",
+        "settings.secret_key": "Secret Access Key (AWS)",
+        "settings.region": "AWS Region",
         "settings.demo_section": "Demonstration",
         "settings.demo_note": "Load a complete example file (fictional company MedSecure — IoMT) to explore the application features.",
         "settings.demo_load": "Load demonstration",

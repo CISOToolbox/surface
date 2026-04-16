@@ -9,47 +9,64 @@ window.AI_APP_CONFIG = {
     storagePrefix: "surface",
     hideDemo: true,
     settingsExtraHTML: function() {
-        // Nuclei + Shodan sections rendered inside the shared side panel.
-        // Called at user-click time (t() is available).
+        // Surface settings are rendered as a list of <details> accordions
+        // so the panel stays scannable as the number of sections grows.
+        // Each section is a self-contained block the user expands only
+        // when they need it. `ai_common.js` builds the AI + language
+        // blocks ABOVE this extra HTML — we cannot wrap those.
         var tt = typeof t === "function" ? t : function(k) { return k; };
-        var nucleiTitle = tt("nuclei.section") || "Nuclei (DAST scanner)";
-        var shodanTitle = tt("shodan.section") || "Shodan API";
-        var tzTitle = tt("tz.section") || "Time zone";
-        var tzHint = tt("tz.hint") || "All dates shown in the UI are rendered in this zone.";
-        var tzBrowser = tt("tz.browser") || "Auto (browser)";
-        var loading = tt("common.loading") || "Loading...";
 
-        // TZ picker — talks only to localStorage, no backend round-trip.
+        // ── Timezone picker ──────────────────────────────────
         var currentTz = "";
         try { currentTz = localStorage.getItem("surface_timezone") || ""; } catch (e) {}
         var browserTz = "";
         try { browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
         var zones = (window._TZ_OPTIONS_GLOBAL || [""]);
-        var tzHtml = '<select id="surface-tz-select" style="width:100%;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:0.85em" data-change="_onTimezoneChange" data-pass-value>';
+        var tzBrowser = tt("tz.browser") || "Auto (browser)";
+        var tzHtml = '<select id="surface-tz-select" class="surface-settings-input" data-change="_onTimezoneChange" data-pass-value>';
         zones.forEach(function(z) {
             var lbl = z === "" ? (tzBrowser + (browserTz ? " — " + browserTz : "")) : z;
             var sel = (z === currentTz) ? " selected" : "";
             tzHtml += '<option value="' + z + '"' + sel + '>' + lbl + '</option>';
         });
         tzHtml += '</select>';
-        tzHtml += '<div style="font-size:0.78em;color:var(--text-muted);margin-top:4px">' + tzHint + '</div>';
+        tzHtml += '<div class="surface-settings-help">' + (tt("tz.hint") || "") + '</div>';
+
+        var loading = tt("common.loading") || "Loading...";
+        var tzTitle = tt("tz.section") || "Time zone";
+        var nucleiTitle = tt("nuclei.section") || "Nuclei (DAST scanner)";
+        var shodanTitle = tt("shodan.section") || "Shodan API";
+        var smtpTitle = tt("smtp.section") || "Email digest (SMTP)";
+
+        // Small helper: accordion wrapper. `name="surface-settings"` on
+        // every <details> gives us the native exclusive-accordion behaviour
+        // — opening one auto-closes any other one in the same group.
+        function section(title, body, open) {
+            return (
+                '<details class="surface-settings-accordion" name="surface-settings"' + (open ? " open" : "") + '>' +
+                    '<summary class="surface-settings-summary">' +
+                        '<span class="surface-settings-chevron">▸</span>' +
+                        '<span>' + title + '</span>' +
+                    '</summary>' +
+                    '<div class="surface-settings-body">' + body + '</div>' +
+                '</details>'
+            );
+        }
+
+        // Nuclei / Shodan / GitHub / SMTP all render via async JS in
+        // their own container div. `_surfaceWireSettings()` is called
+        // after the panel is inserted so each accordion hydrates lazily
+        // when the user expands it.
+        var nucleiBody  = '<div id="surface-nuclei-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
+        var shodanBody  = '<div id="surface-shodan-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
+        var smtpBody    = '<div id="surface-smtp-section"   class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
 
         return (
-            '<div class="settings-section" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">' +
-                '<div class="settings-label">' + tzTitle + '</div>' +
-                tzHtml +
-            '</div>' +
-            '<div class="settings-section" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">' +
-                '<div class="settings-label">' + nucleiTitle + '</div>' +
-                '<div id="surface-nuclei-section" style="font-size:0.85em">' +
-                    '<div style="color:var(--text-muted)">' + loading + '</div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="settings-section" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">' +
-                '<div class="settings-label">' + shodanTitle + '</div>' +
-                '<div id="surface-shodan-section" style="font-size:0.85em">' +
-                    '<div style="color:var(--text-muted)">' + loading + '</div>' +
-                '</div>' +
+            '<div class="surface-settings-wrap">' +
+                section(tzTitle,     tzHtml) +
+                section(nucleiTitle, nucleiBody) +
+                section(shodanTitle, shodanBody) +
+                section(smtpTitle,   smtpBody) +
             '</div>'
         );
     },
@@ -222,6 +239,7 @@ var _filterScanners = [];    // multi-select; empty = all
 var _monitoredFilterScanners = []; // multi-select scanner filter on Surveillance page
 var _selectedFinding = null;
 var _selectedHost = null;    // MonitoredAsset object, set when user clicks a host card
+var _hostSelectedFinding = null; // Finding shown inline in host detail view
 var _hostHideFP = true;      // Host detail: hide false-positive findings by default
 var _hostSearch = "";        // free-text filter for the Hosts panel
 var _bulkSelection = {};     // { [finding_id]: true } — checked rows in findings table
@@ -2223,8 +2241,14 @@ window._clearScannerFilter = function() { _filterScanners = []; _refreshFindings
 window._openFinding = function(id) {
     var f = _findings.find(function(x) { return x.id === id; });
     if (!f) return;
-    _selectedFinding = f;
-    renderPanel();
+    // Fetch full evidence (includes png_b64 stripped from list responses)
+    SurfaceAPI.get("/api/findings/" + id).then(function(full) {
+        _selectedFinding = full;
+        renderPanel();
+    }).catch(function() {
+        _selectedFinding = f;
+        renderPanel();
+    });
 };
 
 window._backToFindings = function() { _selectedFinding = null; renderPanel(); };
@@ -2248,7 +2272,20 @@ function _renderFindingDetail(c) {
     }
     h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.description")) + '</div><div style="white-space:pre-wrap">' + esc(f.description || t("fd.description_none")) + '</div></div>';
     if (f.evidence && Object.keys(f.evidence).length) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.evidence")) + '</div><div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">' + esc(JSON.stringify(f.evidence, null, 2)) + '</pre></div></div>';
+        // Screenshot preview: when the scanner embeds a base64 PNG in
+        // evidence.png_b64, render it inline. Strip the blob from the
+        // JSON dump so the evidence block stays readable.
+        var evDisplay = f.evidence;
+        if (f.evidence.png_b64 && typeof f.evidence.png_b64 === "string") {
+            var b64 = f.evidence.png_b64;
+            var src = "data:image/png;base64," + b64;
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.screenshot") || "Screenshot") + '</div>'
+              +  '<div><a href="' + esc(src) + '" target="_blank" rel="noopener" title="' + esc(t("fd.screenshot_open") || "Open full size") + '">'
+              +  '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
+              +  '</a></div></div>';
+            evDisplay = Object.assign({}, f.evidence, { png_b64: "[" + Math.round(b64.length * 0.75 / 1024) + " KB PNG — affiché au-dessus]" });
+        }
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.evidence")) + '</div><div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">' + esc(JSON.stringify(evDisplay, null, 2)) + '</pre></div></div>';
     }
     if (f.triage_notes) {
         h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.notes")) + '</div><div style="white-space:pre-wrap">' + esc(f.triage_notes) + '</div></div>';
@@ -2264,7 +2301,7 @@ function _renderFindingDetail(c) {
     if (f.status !== "new") {
         h += '<button class="btn-add" data-click="_triageDetail" data-args=\'["new"]\'>' + esc(t("fd.triage_reset")) + '</button>';
     }
-    h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
+    if (window._aiIsEnabled && window._aiIsEnabled()) h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
     h += '<span style="flex:1"></span>';
     h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteFindingDetail">' + esc(t("fd.delete")) + '</button>';
     h += '</div>';
@@ -2428,7 +2465,7 @@ window._aiTriageFinding = async function() {
         }
         if (parsed.references && parsed.references.length) {
             html += '<div><strong>' + esc(t("fd.ai_refs")) + ' :</strong><ul style="margin:4px 0 0 20px;font-size:0.82em">';
-            parsed.references.forEach(function(ref) { html += '<li><a href="' + esc(ref) + '" target="_blank" rel="noopener">' + esc(ref) + '</a></li>'; });
+            parsed.references.forEach(function(ref) { if (/^https?:\/\//i.test(ref)) html += '<li><a href="' + esc(ref) + '" target="_blank" rel="noopener">' + esc(ref) + '</a></li>'; });
             html += '</ul></div>';
         }
         box.innerHTML = html;
@@ -2901,6 +2938,31 @@ window._updMeasure = function(id, field, val) {
 // ═══════════════════════════════════════════════════════════════
 // HOSTS (all MonitoredAsset of kind=host, search + detail view)
 // ═══════════════════════════════════════════════════════════════
+
+// Cached {host → png_b64} map fetched once from /api/findings/screenshots.
+// Populated lazily when the Hosts tab renders for the first time.
+var _screenshotCache = null;
+
+function _loadScreenshotsForHostCards() {
+    if (_screenshotCache) return Promise.resolve(_screenshotCache);
+    return SurfaceAPI.get("/api/findings/screenshots").then(function(map) {
+        _screenshotCache = map || {};
+        return _screenshotCache;
+    }).catch(function() {
+        _screenshotCache = {};
+        return _screenshotCache;
+    });
+}
+
+function _screenshotB64ForHost(values) {
+    if (!_screenshotCache) return null;
+    var vs = Array.isArray(values) ? values : [values];
+    for (var i = 0; i < vs.length; i++) {
+        if (_screenshotCache[vs[i]]) return _screenshotCache[vs[i]];
+    }
+    return null;
+}
+
 function _countFindingsByHost(hostValue) {
     // `total`          — all findings on this host (audit)
     // `active`         — new/to_fix + not info (actionable work)
@@ -2953,7 +3015,14 @@ function _renderHosts(c) {
     h += '<div id="host-cards-wrap"></div>';
 
     c.innerHTML = h;
+    // Render the card grid immediately (without thumbnails), then
+    // lazy-load screenshots and re-render only the cards that need them.
     _refreshHostCards();
+    if (!_screenshotCache) {
+        _loadScreenshotsForHostCards().then(function(map) {
+            if (map && Object.keys(map).length) _refreshHostCards();
+        });
+    }
 }
 
 function _refreshHostCards() {
@@ -2977,12 +3046,14 @@ function _refreshHostCards() {
     // still rendered individually.
     var groups = {};
     var singletons = [];
+    // First pass: bucket every host that has a resolved_ip into groups.
+    // IP-literal entries (value === resolved_ip) are NOT excluded — they
+    // must join the same bucket as any hostname that resolved to them.
+    // Only hosts with NO resolved_ip go to singletons.
     filtered.forEach(function(a) {
         var ip = a.resolved_ip || "";
-        // IP literals resolve to themselves — skip grouping for them,
-        // they'd just group to their own value with one alias.
-        if (!ip || ip === a.value) {
-            singletons.push({ primary: a, aliases: [], ip: ip });
+        if (!ip) {
+            singletons.push({ primary: a, aliases: [], ip: "" });
             return;
         }
         if (!groups[ip]) groups[ip] = [];
@@ -3046,6 +3117,12 @@ function _refreshHostCards() {
         }
         h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + '</span>';
         h += '</div>';
+        // Screenshot thumbnail from the cached /api/findings/screenshots map.
+        var shotValues = [a.value].concat(entry.aliases.map(function(al){ return al.value; }));
+        var shotB64 = _screenshotB64ForHost(shotValues);
+        if (shotB64) {
+            h += '<div class="host-card-thumb"><img src="data:image/png;base64,' + shotB64 + '" alt="" loading="lazy"/></div>';
+        }
         if (a.label) h += '<div class="host-card-label">' + esc(a.label) + '</div>';
         if (entry.ip) {
             h += '<div class="host-card-ip" title="' + esc(t("hosts.resolved_ip_tooltip")) + '">' + _icon("target", 11) + ' ' + esc(entry.ip) + '</div>';
@@ -3121,11 +3198,65 @@ window._openHost = function(id) {
 
 window._backToHosts = function() {
     _selectedHost = null;
+    _hostSelectedFinding = null;
     _bulkSelection = {};
     renderPanel();
 };
 
+function _renderHostFindingInline(c, hostValue) {
+    var f = _hostSelectedFinding;
+    var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    h += '<button class="btn-add btn-icon" data-click="_backToHostFromFinding">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back_to_host") || "Retour au host") + '</button>';
+    h += '<h2 style="margin:0;flex:1">' + esc(f.title) + '</h2>';
+    h += '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(t("sev." + f.severity)) + '</span>';
+    h += '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>';
+    h += '</div>';
+
+    h += '<div class="surface-card">';
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.scanner")) + '</div><div>' + esc(f.scanner) + '</div></div>';
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.type")) + '</div><div>' + esc(f.type) + '</div></div>';
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.target")) + '</div><div>' + esc(f.target || "-") + '</div></div>';
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.created")) + '</div><div>' + esc(_fmtDate(f.created_at || "", "long")) + '</div></div>';
+    if (f.triaged_at) {
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.triaged")) + '</div><div>' + esc(_fmtDate(f.triaged_at || "", "long")) + ' ' + esc(t("fd.triaged_by")) + ' ' + esc(f.triaged_by || "?") + '</div></div>';
+    }
+    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.description")) + '</div><div style="white-space:pre-wrap">' + esc(f.description || t("fd.description_none")) + '</div></div>';
+    if (f.evidence && Object.keys(f.evidence).length) {
+        var evDisplay = f.evidence;
+        if (f.evidence.png_b64 && typeof f.evidence.png_b64 === "string") {
+            var b64 = f.evidence.png_b64;
+            var src = "data:image/png;base64," + b64;
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.screenshot") || "Screenshot") + '</div>'
+              +  '<div><a href="' + esc(src) + '" target="_blank" rel="noopener" title="' + esc(t("fd.screenshot_open") || "Open full size") + '">'
+              +  '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
+              +  '</a></div></div>';
+            evDisplay = Object.assign({}, f.evidence, { png_b64: "[" + Math.round(b64.length * 0.75 / 1024) + " KB PNG]" });
+        }
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.evidence")) + '</div><div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">' + esc(JSON.stringify(evDisplay, null, 2)) + '</pre></div></div>';
+    }
+    if (f.triage_notes) {
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.notes")) + '</div><div style="white-space:pre-wrap">' + esc(f.triage_notes) + '</div></div>';
+    }
+    h += '</div>';
+
+    // Triage actions
+    h += '<div class="surface-card">';
+    h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(t("fd.triage")) + '</h3>';
+    h += '<textarea id="triage-notes" placeholder="' + esc(t("fd.triage_notes_ph")) + '" style="width:100%;min-height:60px;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:0.85em;margin-bottom:8px">' + esc(f.triage_notes || "") + '</textarea>';
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    h += '<button class="btn-add btn-fix btn-icon" data-click="_triageHostFinding" data-args=\'["to_fix"]\'>' + _icon("check", 14) + ' ' + esc(t("fd.triage_to_fix")) + '</button>';
+    h += '<button class="btn-add btn-fp btn-icon" data-click="_triageHostFinding" data-args=\'["false_positive"]\'>' + _icon("x", 14) + ' ' + esc(t("fd.triage_fp")) + '</button>';
+    if (f.status !== "new") {
+        h += '<button class="btn-add" data-click="_triageHostFinding" data-args=\'["new"]\'>' + esc(t("fd.triage_reset")) + '</button>';
+    }
+    if (window._aiIsEnabled && window._aiIsEnabled()) h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
+    h += '</div></div>';
+
+    c.innerHTML = h;
+}
+
 function _renderHostDetail(c) {
+    if (_hostSelectedFinding) { _renderHostFindingInline(c); return; }
     var a = _selectedHost;
     var counts = _countFindingsByHost(a.value);
     var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
@@ -3312,6 +3443,38 @@ window._clearMonitoredScannerFilter = function() {
     renderPanel();
 };
 
+window._backToHostFromFinding = function() {
+    _hostSelectedFinding = null;
+    renderPanel();
+};
+
+window._triageHostFinding = function(newStatus) {
+    var f = _hostSelectedFinding;
+    if (!f) return;
+    var notes = (document.getElementById("triage-notes") || {}).value || "";
+
+    if (newStatus === "false_positive" && !notes.trim()) {
+        showStatus(t("fd.fp_justif_required") || "Justification obligatoire", true);
+        return;
+    }
+
+    var body = { status: newStatus, notes: notes };
+    if (newStatus === "to_fix") {
+        var title = prompt(t("fd.measure_title_prompt") || "Nom de la mesure corrective :");
+        if (!title) return;
+        body.measure_title = title;
+    }
+
+    SurfaceAPI.post("/api/findings/" + f.id + "/triage", body).then(function(updated) {
+        // Refresh finding in local array
+        var idx = _findings.findIndex(function(x) { return x.id === f.id; });
+        if (idx >= 0) Object.assign(_findings[idx], updated);
+        _hostSelectedFinding = null;
+        showStatus(t("fd.triage_ok") || "Triage enregistré");
+        renderPanel();
+    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+};
+
 window._toggleHostHideFP = function() {
     _hostHideFP = !_hostHideFP;
     _bulkSelection = {};
@@ -3338,15 +3501,14 @@ window._toggleHostBulkAll = function() {
 window._openFindingFromHost = function(id) {
     var f = _findings.find(function(x) { return x.id === id; });
     if (!f) return;
-    _panel = "findings";
-    _selectedFinding = f;
-    _selectedHost = null;
-    _bulkSelection = {};  // clear any bulk selection carried from the host view
-    document.querySelectorAll(".sidebar-item").forEach(function(el) {
-        var args = el.getAttribute("data-args");
-        if (args) try { el.classList.toggle("active", JSON.parse(args)[0] === "findings"); } catch(e) {}
+    // Fetch full evidence (with png_b64) then render inline in host detail
+    SurfaceAPI.get("/api/findings/" + id).then(function(full) {
+        _hostSelectedFinding = full;
+        renderPanel();
+    }).catch(function() {
+        _hostSelectedFinding = f;
+        renderPanel();
     });
-    renderPanel();
 };
 
 window._scanHost = function(id) {
@@ -3531,6 +3693,11 @@ document.addEventListener("DOMContentLoaded", function() {
             var r = original.apply(this, arguments);
             setTimeout(_surfaceWireNucleiSection, 0);
             setTimeout(_surfaceWireShodanSection, 0);
+            setTimeout(_surfaceWireSmtpSection, 0);
+            // Wrap the ai_common.js sections (Language, Assistant IA) in
+            // the same accordion style as our extra sections so the whole
+            // panel reads consistently.
+            setTimeout(_wrapSharedSettingsSections, 0);
             return r;
         };
     }
@@ -3657,5 +3824,108 @@ function _shodanSaveKey() {
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t("shodan.save"); }
     });
 }
+
+// Convert each top-level .settings-section produced by ai_common.js
+// (Language, Assistant IA, Demo when visible) into a <details> accordion
+// matching the style we use for our own extra sections. Collapsed by
+// default so the panel opens clean.
+function _wrapSharedSettingsSections() {
+    // ai_common.js creates <div class="ai-panel"> with a nested
+    // .ai-panel-body where the HTML ends up. Both are CLASSES, not ids.
+    var panel = document.querySelector(".ai-panel .ai-panel-body");
+    if (!panel) return;
+    var sections = panel.querySelectorAll(".settings-section");
+    sections.forEach(function(sec) {
+        // Skip sections already wrapped or placed inside our extra wrap
+        if (sec.dataset.surfaceWrapped === "1") return;
+        if (sec.closest(".surface-settings-wrap")) return;
+        var labelEl = sec.querySelector(".settings-label");
+        if (!labelEl) return;
+        var title = labelEl.textContent.trim();
+
+        var details = document.createElement("details");
+        details.className = "surface-settings-accordion";
+        details.setAttribute("name", "surface-settings");  // exclusive accordion
+        // Collapsed by default per the UX request.
+        var summary = document.createElement("summary");
+        summary.className = "surface-settings-summary";
+        summary.innerHTML = '<span class="surface-settings-chevron">▸</span><span>' + esc(title) + '</span>';
+        details.appendChild(summary);
+
+        // Move the rest of the section content (without the original
+        // label) inside a body div
+        labelEl.remove();
+        var body = document.createElement("div");
+        body.className = "surface-settings-body";
+        while (sec.firstChild) body.appendChild(sec.firstChild);
+        details.appendChild(body);
+
+        sec.replaceWith(details);
+        details.dataset.surfaceWrapped = "1";
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SMTP / EMAIL DIGEST SETTINGS SECTION
+// ═══════════════════════════════════════════════════════════════
+
+function _surfaceWireSmtpSection() {
+    var holder = document.getElementById("surface-smtp-section");
+    if (!holder) return;
+    SurfaceAPI.smtpConfig().then(function(cfg) {
+        _renderSmtpFormInto(holder, cfg || {});
+    }).catch(function() {
+        holder.innerHTML = '<div class="surface-settings-muted">' + esc(t("smtp.load_error")) + '</div>';
+    });
+}
+
+function _renderSmtpFormInto(holder, cfg) {
+    var h = '';
+    h += '<div class="surface-settings-help">' + esc(t("smtp.help")) + '</div>';
+    h += '<div class="surface-settings-grid">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.host")) + '</label>';
+    h += '<input type="text" id="surface-smtp-host" class="surface-settings-input" placeholder="smtp.example.com" value="' + esc(cfg.host || "") + '">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.port")) + '</label>';
+    h += '<input type="number" id="surface-smtp-port" class="surface-settings-input" value="' + esc(String(cfg.port || 587)) + '">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.user")) + '</label>';
+    h += '<input type="text" id="surface-smtp-user" class="surface-settings-input" value="' + esc(cfg.username || "") + '">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.password")) + '</label>';
+    var ph = cfg.password_set ? "•••••••• (" + t("smtp.already_set") + ")" : t("smtp.password_ph");
+    h += '<input type="password" id="surface-smtp-pass" class="surface-settings-input" placeholder="' + esc(ph) + '">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.sender")) + '</label>';
+    h += '<input type="email" id="surface-smtp-sender" class="surface-settings-input" placeholder="surface@example.com" value="' + esc(cfg.sender || "") + '">';
+    h += '<label class="surface-settings-label">' + esc(t("smtp.recipients")) + '</label>';
+    h += '<input type="text" id="surface-smtp-rcpt" class="surface-settings-input" placeholder="ciso@example.com, soc@example.com" value="' + esc(cfg.recipients || "") + '">';
+    h += '</div>';
+    h += '<label class="surface-settings-check"><input type="checkbox" id="surface-smtp-tls"' + (cfg.use_tls !== false ? " checked" : "") + '> ' + esc(t("smtp.use_tls")) + '</label>';
+    h += '<div style="display:flex;gap:8px;margin-top:10px">';
+    h += '<button class="btn-add" style="background:#1f2937;color:white" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
+    h += '<button class="btn-add" data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
+    h += '</div>';
+    holder.innerHTML = h;
+}
+
+window._saveSmtpConfig = function() {
+    var body = {
+        host:       (document.getElementById("surface-smtp-host")   || {}).value || "",
+        port:       parseInt((document.getElementById("surface-smtp-port") || {}).value || "587", 10),
+        username:   (document.getElementById("surface-smtp-user")   || {}).value || "",
+        password:   (document.getElementById("surface-smtp-pass")   || {}).value || "",
+        sender:     (document.getElementById("surface-smtp-sender") || {}).value || "",
+        recipients: (document.getElementById("surface-smtp-rcpt")   || {}).value || "",
+        use_tls:    !!(document.getElementById("surface-smtp-tls")  || {}).checked,
+    };
+    SurfaceAPI.smtpSetConfig(body).then(function() {
+        showStatus(t("smtp.saved"));
+        _surfaceWireSmtpSection();
+    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+};
+
+window._sendSmtpDigestNow = function() {
+    showStatus(t("smtp.sending"));
+    SurfaceAPI.sendEmailDigest().then(function(r) {
+        showStatus(t("smtp.sent").replace("{n}", (r.recipients || []).length));
+    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+};
 
 })();

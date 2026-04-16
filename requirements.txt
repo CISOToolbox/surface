@@ -9,3 +9,4 @@ python-multipart==0.0.24
 authlib==1.6.9
 PyJWT[crypto]==2.12.1
 dnspython==2.7.0
+playwright==1.51.0
