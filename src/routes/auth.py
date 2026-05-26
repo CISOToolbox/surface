@@ -34,6 +34,7 @@ from src.auth import (
     auth_enabled,
     create_jwt,
     get_current_user,
+    get_current_user_permissive,
     get_module_role,
 )
 from src.database import get_db
@@ -112,14 +113,14 @@ async def get_providers():
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(user: User = Depends(get_current_user)):
+async def me(user: User = Depends(get_current_user_permissive)):
     if user is None:
         raise HTTPException(status_code=401, detail="Auth not enabled")
     return user
 
 
 @router.get("/role")
-async def get_role(user: User = Depends(get_current_user)):
+async def get_role(user: User = Depends(get_current_user_permissive)):
     """Return the user's role for this module (used by frontend to show/hide UI)."""
     role = get_module_role(user)
     return {"module": MODULE_NAME, "role": role, "email": user.email if user else ""}
@@ -146,7 +147,7 @@ async def login_token(body: dict, db: AsyncSession = Depends(get_db)):
     if not _secrets.compare_digest(token, AUTH_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    email = body.get("email", "admin@local")
+    email = (body.get("email") or "admin@local").strip().lower()
     user = await _upsert_user(db, email=email, name=email.split("@")[0], picture="", provider="token", provider_id="token")
     jwt_token = _issue_jwt(user)
     response = JSONResponse(content={"ok": True, "email": user.email, "role": user.role})
@@ -312,6 +313,7 @@ async def _upsert_user(
     provider_id: str,
 ) -> User:
     """Find or create a standalone user. First user gets admin role."""
+    email = (email or "").strip().lower()
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)

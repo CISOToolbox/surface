@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from src.auth import get_current_user, require_admin
 from src.database import get_db
 from src.models import User
 from src.schemas import UserResponse, UserUpdate
+from src.audit import log_action
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -28,6 +29,7 @@ async def list_users(
 async def update_user(
     user_id: uuid.UUID,
     body: UserUpdate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

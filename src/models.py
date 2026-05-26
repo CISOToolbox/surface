@@ -104,7 +104,13 @@ class Measure(Base):
     __tablename__ = "measures"
 
     id = Column(String(30), primary_key=True)  # short readable id like SRF-001
-    finding_id = Column(UUID(as_uuid=True), ForeignKey("findings.id", ondelete="CASCADE"), nullable=False, unique=True)
+    # Primary finding (kept for backwards compat with the 1:1 relationship
+    # on Finding). No longer unique or non-null since migration 006 —
+    # bulk triage groups findings under a single Measure via finding_ids.
+    finding_id = Column(UUID(as_uuid=True), ForeignKey("findings.id", ondelete="CASCADE"), nullable=True)
+    # All findings covered by this measure. Contains at least finding_id
+    # after the migration 006 backfill. Set by bulk triage "À corriger".
+    finding_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     sort_order = Column(Integer, nullable=False, default=0)
     title = Column(String(500), nullable=False, default="")
     description = Column(Text, nullable=True, default="")
@@ -167,3 +173,22 @@ class MonitoredAsset(Base):
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
+
+
+# ── Audit Log ─────────────────────────────────────────────────────
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    logged_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    user_email = Column(String(255), nullable=False, default="")
+    user_name = Column(String(255), nullable=True, default="")
+    action = Column(String(100), nullable=False)
+    target = Column(String(500), nullable=True, default="")
+    details = Column(Text, nullable=True, default="")
+    ip_address = Column(String(64), nullable=True, default="")
+
+    __table_args__ = (
+        Index("ix_audit_log_logged_at", "logged_at"),
+        Index("ix_audit_log_user", "user_email"),
+        Index("ix_audit_log_action", "action"),
+    )

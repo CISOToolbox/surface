@@ -28,7 +28,7 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +37,7 @@ from src.auth import get_current_user
 from src.database import get_db
 from src.models import AppSettings, Finding, Measure, MonitoredAsset, ScanJob, User
 from src.scanners import _resolve_safe_target
+from src.audit import log_action
 
 logger = logging.getLogger("surface.reports")
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -380,6 +381,7 @@ async def smtp_get_config(user: User = Depends(get_current_user), db: AsyncSessi
 @router.put("/smtp/config")
 async def smtp_set_config(
     body: SmtpConfig,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -425,6 +427,7 @@ async def smtp_set_config(
 
 @router.post("/email-digest/send")
 async def email_digest_send(
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

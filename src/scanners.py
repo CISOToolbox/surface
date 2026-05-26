@@ -92,13 +92,19 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
     if "/" in host_only and not re.match(r"^[0-9a-fA-F:.]+/\d{1,3}$", host_only):
         raise ValueError(f"Cible invalide (chemin inattendu) : {t}")
 
-    bare = host_only.split(":")[0].split("/")[0].lower()
+    # Strip brackets for IPv6 literals like [::1] before further checks
+    bare = host_only.strip("[]")
+    # For IPv4/hostname:port, split on the LAST colon only if it looks
+    # like a port (not an IPv6 address which contains multiple colons)
+    if ":" in bare and bare.count(":") == 1:
+        bare = bare.split(":")[0]
+    bare = bare.split("/")[0].lower()
     if bare in _DOCKER_SIBLING_NAMES:
         raise ValueError(f"Cible interne bloquee : {bare} (scan lateral non autorise)")
 
     if "/" in host_only:
         try:
-            net = ipaddress.ip_network(host_only, strict=False)
+            net = ipaddress.ip_network(host_only.strip("[]"), strict=False)
         except ValueError as e:
             raise ValueError(f"Plage CIDR invalide : {e}")
         for ip in (net.network_address, net.broadcast_address):
@@ -3674,12 +3680,6 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "Nuclei (templates DAST)",
         "kinds": {"host"},
         "callable": scan_nuclei,
-        "returns_discovered": False,
-    },
-    "techstack": {
-        "label": "Tech stack fingerprinting",
-        "kinds": {"host"},
-        "callable": scan_host_techstack,
         "returns_discovered": False,
     },
     "sensitive_files": {

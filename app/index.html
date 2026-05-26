@@ -14,6 +14,13 @@
     <button class="btn-hamburger" data-click="_toggleSidebarMobile">&#9776;</button>
     <span class="app-title">Surface</span>
     <span class="flex-spacer"></span>
+    <div class="toolbar-menu">
+        <button class="btn-menu" data-click="toggleMenu" data-i18n="menu_file">Fichier</button>
+        <div class="toolbar-dropdown" id="io-menu">
+            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["importHosts"]' data-i18n="menu.import_hosts">Importer hôtes</div>
+            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["exportReport"]' data-i18n="menu.export_report">Exporter rapport</div>
+        </div>
+    </div>
     <span class="status" id="status-msg"></span>
     <span class="toolbar-right" id="toolbar-right"></span>
 </div>
@@ -48,6 +55,11 @@
     </div>
 
     <div class="flex-spacer"></div>
+
+    <div class="sidebar-item admin-only" data-click="selectPanel" data-args='["audit"]'>
+        <svg class="sidebar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        <span data-i18n="nav.audit">Journal d'audit</span>
+    </div>
 
     <div class="sidebar-section" data-i18n="nav.help_section">AIDE</div>
     <div class="sidebar-item" data-click="toggleHelp" data-args='["methodo"]'>
@@ -95,11 +107,20 @@
 <script src="js/cisotoolbox.js"></script>
 <script src="js/cisotoolbox_backend.js"></script>
 <script src="js/i18n.js"></script>
+<script src="js/ct_audit.js"></script>
+<script src="js/ct_modal.js"></script>
+<script src="js/ct_userpicker.js"></script>
+<script src="js/ct_measure_modal.js"></script>
+<script src="js/ct_table.js"></script>
+<script src="js/ct_bulkbar.js"></script>
+<script src="js/ct_finding_view.js"></script>
 <script src="js/Surface_i18n_fr.js"></script>
 <script src="js/Surface_i18n_en.js"></script>
 <script src="js/surface_api.js"></script>
 <script src="js/Surface_app.js"></script>
 <script src="js/ai_common.js"></script>
+<script src="js/ct_settings.js"></script>
+<script src="js/ai_backend.js"></script>
 
 </body>
 </html>

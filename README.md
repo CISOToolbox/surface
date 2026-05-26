@@ -65,9 +65,6 @@ Part of the [CISO Toolbox](https://cisotoolbox.org) open-source suite.
 | `shodan_host`       |         | Shodan `/host/{ip}` enrichment *(1 Shodan credit per lookup)*  |
 | `screenshot`        |         | Chromium headless screenshot *(opt-in, Playwright bundled)*    |
 
-`techstack` (30-signature HTTP fingerprinting) is still available in the
-registry but no longer in the default set — nuclei's wappalyzer provides
-broader tech detection (3 000+ signatures) and feeds `cve_lookup` directly.
 
 #### Domain-level
 
@@ -234,13 +231,12 @@ ghcr.io/cisotoolbox/ciso-surface:latest
 
 Multi-arch: `linux/amd64`, `linux/arm64`.
 
-Two tag families are published to the same image name:
+Two separate images are published:
 
-- `:vX.Y.Z` / `:latest` — standalone build (public, no suite-only code)
-- `:vX.Y.Z-suite` / `:suite` — suite build (adds Pilot integration routes)
+- `ghcr.io/cisotoolbox/ciso-surface` — standalone build (**public**)
+- `ghcr.io/cisotoolbox/ciso-surface-suite` — suite build (**private**, adds Pilot integration routes)
 
-This `README.md` describes the standalone build. The suite variant is
-consumed by the CISO Toolbox demo-docker deployment.
+This `README.md` describes the standalone build.
 
 ---
 

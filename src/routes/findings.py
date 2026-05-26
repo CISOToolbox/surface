@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from src.database import get_db
 from src.models import Finding, Measure, User
 from src.rate_limit import check_scan_quota
 from src.schemas import FindingCreate, FindingResponse, FindingTriage
+from src.audit import log_action
 
 router = APIRouter(prefix="/api/findings", tags=["findings"])
 
@@ -124,12 +126,14 @@ async def get_finding(
 @router.delete("/{finding_id}", status_code=204)
 async def delete_finding(
     finding_id: uuid.UUID,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     f = await db.get(Finding, finding_id)
     if not f:
         raise HTTPException(status_code=404, detail="Finding not found")
+    await log_action(db, user, request, "finding.delete", target=f"{f.cve_id or f.title[:60]}")
     await db.delete(f)
     await db.commit()
 
@@ -138,6 +142,7 @@ async def delete_finding(
 async def triage_finding(
     finding_id: uuid.UUID,
     body: FindingTriage,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -203,10 +208,22 @@ async def triage_finding(
         existing = await db.execute(select(Measure).where(Measure.finding_id == finding_id))
         m = existing.scalar_one_or_none()
         if m:
+            deleted_id = m.id
             await db.delete(m)
+            await db.commit()
+            from src.pilot_notify import notify_pilot_measure_deleted
+            asyncio.ensure_future(notify_pilot_measure_deleted(deleted_id))
+            await db.refresh(f)
+            return _to_dict(f)
 
     await db.commit()
     await db.refresh(f)
+    if new_status == "to_fix":
+        measure = (await db.execute(select(Measure).where(Measure.finding_id == finding_id))).scalar_one_or_none()
+        if measure:
+            from src.routes.internal import _measure_to_pilot_payload
+            from src.pilot_notify import notify_pilot_measure
+            asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(measure, f)))
     return _to_dict(f)
 
 
@@ -230,19 +247,20 @@ class BulkTriageRequest(BaseModel):
 @router.post("/bulk-triage")
 async def bulk_triage(
     body: BulkTriageRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     check_scan_quota(str(user.id) if user else "anonymous")
     """Apply the same triage to N findings at once.
 
-    For status='to_fix', creates ONE Measure per finding (the model requires
-    a 1:1 FK), all sharing the same title/description/responsable/echeance
-    so the operator can track a group of identical fixes as a single batch
-    in the Measures tab.
+    For status == "to_fix": update triage metadata on every finding,
+    partition into covered (already have a Measure) vs uncovered, update
+    existing measures' fields in place, and create ONE new Measure
+    covering all uncovered findings via finding_ids JSONB (migration 006).
 
-    For status='false_positive', the same justification is attached to all
-    selected findings.
+    For status == "false_positive": attach the same justification to all
+    findings and delete any linked measures.
     """
     if body.status not in ("new", "false_positive", "to_fix", "fixed"):
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -255,62 +273,71 @@ async def bulk_triage(
         select(Finding).options(selectinload(Finding.measure)).where(Finding.id.in_(body.ids))
     )
     findings = result.scalars().all()
+    if findings:
+        await log_action(db, user, request, "finding.bulk_triage",
+                         target=f"{len(findings)} findings", details={"status": body.status})
     if not findings:
         raise HTTPException(status_code=404, detail="Aucun finding trouve pour les ids fournis")
 
     triaged_by = (user.name if user else None) or (user.email if user else "system")
     now = datetime.now(timezone.utc)
 
-    count_result = await db.execute(select(func.count()).select_from(Measure))
-    base_count = count_result.scalar() or 0
-    new_measure_idx = 0
-
     updated: list[dict] = []
+    measures_created = 0
 
+    # Pass 1: update status + triage metadata on every finding.
     for f in findings:
         f.status = body.status
         f.triaged_at = now
         f.triaged_by = triaged_by
         if body.notes is not None:
             f.triage_notes = body.notes
-
-        # `f.measure` is already eager-loaded via selectinload at line 218.
-        # Using it instead of re-querying avoids N+1 on bulk triages of
-        # up to 500 findings.
-        m = f.measure
-
-        if body.status == "to_fix":
-            if m is None:
-                new_measure_idx += 1
-                db.add(Measure(
-                    id=f"SRF-{uuid.uuid4().hex[:8].upper()}",
-                    finding_id=f.id,
-                    sort_order=base_count + new_measure_idx,
-                    title=body.measure_title.strip(),
-                    description=(body.measure_description or f.description or "").strip(),
-                    statut="a_faire",
-                    responsable=(body.responsable or "").strip(),
-                    echeance=(body.echeance or "").strip(),
-                ))
-            else:
-                m.title = body.measure_title.strip()
-                if body.measure_description is not None:
-                    m.description = body.measure_description.strip()
-                if body.responsable is not None:
-                    m.responsable = body.responsable.strip()
-                if body.echeance is not None:
-                    m.echeance = body.echeance.strip()
-        else:
-            if m:
-                await db.delete(m)
-
         updated.append({"id": str(f.id), "status": f.status})
+
+    if body.status == "to_fix":
+        # Simple semantics: each bulk triage creates ONE new Measure
+        # covering exactly the selected findings. No merging with
+        # existing measures — finding_ids always equals the user's
+        # current selection. See AppSec bulk_triage for the rationale.
+        count_result = await db.execute(select(func.count()).select_from(Measure))
+        base_count = count_result.scalar() or 0
+        primary = findings[0]
+        seen: set[str] = set()
+        unique_ids: list[str] = []
+        for f in findings:
+            s = str(f.id)
+            if s not in seen:
+                seen.add(s)
+                unique_ids.append(s)
+        description = (
+            body.measure_description
+            or (primary.description or "")
+        ).strip()
+        db.add(Measure(
+            id=f"SRF-{uuid.uuid4().hex[:8].upper()}",
+            finding_id=primary.id,
+            finding_ids=unique_ids,
+            sort_order=base_count + 1,
+            title=body.measure_title.strip()[:500],
+            description=description[:2000],
+            statut="a_faire",
+            responsable=(body.responsable or "").strip(),
+            echeance=(body.echeance or "").strip(),
+        ))
+        measures_created = 1
+    else:
+        # Non-"to_fix" status: drop the legacy 1:1 linked measure only.
+        # Group measures (finding_ids) are left alone — a single finding
+        # flipping back to "new" doesn't retroactively undo the group.
+        for f in findings:
+            if f.measure is not None:
+                await db.delete(f.measure)
 
     await db.commit()
     return {
         "updated": len(updated),
         "status": body.status,
-        "measures_created": new_measure_idx,
+        "measures_created": measures_created,
         "items": updated,
     }
 
@@ -322,14 +349,23 @@ class BulkDeleteRequest(BaseModel):
 @router.post("/bulk-delete")
 async def bulk_delete(
     body: BulkDeleteRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete N findings at once (and their linked measures via cascade)."""
     check_scan_quota(str(user.id) if user else "anonymous")
-    # Cascade: delete linked measures first, then findings, in two
-    # batch statements instead of N individual DELETEs.
+    await log_action(db, user, request, "finding.bulk_delete", target=f"{len(body.ids)} findings")
+    # Collect measure IDs before deleting so we can notify Pilot
+    measure_rows = (await db.execute(
+        select(Measure.id).where(Measure.finding_id.in_(body.ids))
+    )).scalars().all()
     await db.execute(sa_delete(Measure).where(Measure.finding_id.in_(body.ids)))
     result = await db.execute(sa_delete(Finding).where(Finding.id.in_(body.ids)))
     await db.commit()
+    # Notify Pilot of each deleted measure
+    if measure_rows:
+        from src.pilot_notify import notify_pilot_measure_deleted
+        for mid in measure_rows:
+            asyncio.ensure_future(notify_pilot_measure_deleted(mid))
     return {"deleted": result.rowcount}

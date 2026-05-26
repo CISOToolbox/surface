@@ -1,12 +1,26 @@
 if (typeof _registerTranslations === "function") {
     _registerTranslations("fr", {
+        "ai.error": "Erreur : {msg}",
+        "menu_file":              "Fichier",
+        "menu.import_hosts":      "Importer hôtes",
+        "menu.export_report":     "Exporter rapport",
+        "feature.coming_soon":    "Fonctionnalité à venir",
         // ── Toolbar / nav ──────────────────────────────────
-        "nav.dashboard":   "Tableau de bord",
         "nav.monitored":   "Surveillance",
         "nav.hosts":       "Hosts",
         "nav.jobs":        "Scans",
         "nav.findings":    "Findings",
-        "nav.measures":    "Mesures",
+        "nav.measures":    "Plan d'action",
+        "nav.audit":"Journal d'audit",
+        "audit.title":"Journal d'audit",
+        "audit.search":"Rechercher...",
+        "audit.empty":"Aucune entree dans le journal",
+        "audit.entries":"entrees",
+        "audit.col_date":"Date",
+        "audit.col_user":"Utilisateur",
+        "audit.col_action":"Action",
+        "audit.col_target":"Cible",
+        "audit.col_details":"Details",
         "nav.help_section":"AIDE",
         "nav.help_methodo":"Méthodologie",
         "nav.help_usage":  "Utilisation",
@@ -41,8 +55,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Analyse TLS</strong> : validité, chaîne, expiration, self-signed, hostname mismatch</li>' +
                 '<li><strong>TLS grade (A-F)</strong> — probe des versions TLS 1.0/1.1/1.2/1.3 et SSL 3.0, inspection du cipher négocié, détection des suites faibles (RC4, 3DES, NULL, EXPORT, MD5). Une note globale matérialise l\'écart par rapport aux recommandations Mozilla.</li>' +
                 '<li><strong>Security headers grade (A-F)</strong> — note HSTS, Content-Security-Policy (pénalisée si <code>unsafe-inline/eval</code>), X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. Produit un diagnostic Mozilla Observatory-lite sans dépendance externe.</li>' +
-                '<li><strong>Tech stack fingerprinting</strong> — 30+ signatures HTTP (Server header, X-Powered-By, Set-Cookie, balises meta, paths caractéristiques) pour identifier nginx / Apache / IIS / WordPress / Drupal / Django / Rails / Spring Boot et leur version.</li>' +
-                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — le scanner <code>cve_lookup</code> consomme la sortie versionnée du techstack, interroge l\'API NVD 2.0, enrichit chaque CVE avec sa probabilité EPSS et un flag CISA KEV. Les détections sans version sont écartées pour éviter le bruit 2009.</li>' +
+                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — le scanner <code>cve_lookup</code> consomme la sortie tech-detect de nuclei (wappalyzer), interroge l\'API NVD 2.0, enrichit chaque CVE avec sa probabilité EPSS et un flag CISA KEV. Les détections sans version sont écartées pour éviter le bruit.</li>' +
                 '<li><strong>Nuclei DAST</strong> : 12 000+ templates de la communauté ProjectDiscovery, rate-limitable pour ne pas être blacklisté</li>' +
             '</ul>' +
             '<h3>4. Détection des risques spécifiques</h3>' +
@@ -221,9 +234,12 @@ if (typeof _registerTranslations === "function") {
         "sev.info":     "Info",
 
         // ── Status labels ──────────────────────────────────
+        "status.open":           "Ouverts",
+        "status.new":            "Nouveau",
         "status.to_fix":         "À corriger",
         "status.false_positive": "Faux positif",
         "status.fixed":          "Corrigé",
+        "status.failed":         "Échoué",
         "status.all":            "Tous",
         "status.to_triage":      "À traiter",
 
@@ -255,6 +271,10 @@ if (typeof _registerTranslations === "function") {
         "monitored.next.disabled":    "désactivé",
         "monitored.last.never":       "jamais",
         "monitored.delete_confirm":   "Supprimer cette cible ?",
+        "monitored.bulk_delete":      "Supprimer",
+        "monitored.bulk_delete_confirm": "Supprimer {count} cible(s) surveillée(s) ? Cette action est irréversible.",
+        "monitored.bulk_delete_done": "{count} cible(s) supprimée(s)",
+        "monitored.bulk_delete_partial": "{done} supprimée(s), {errors} erreur(s)",
 
         // ── Hosts panel ────────────────────────────────────
         "hosts.title":            "Hosts",
@@ -310,9 +330,19 @@ if (typeof _registerTranslations === "function") {
         "findings.empty":             "Aucun finding ne correspond aux filtres.",
 
         // ── Bulk action bar ────────────────────────────────
-        "bulk.selected":           "finding(s) sélectionné(s)",
+        "bulk.selected":                "{n} élément(s) sélectionné(s)",
+        "bulk.findings_selected":       "{n} finding(s) sélectionné(s)",
+        "bulk.delete_confirm_title":    "Supprimer {n} finding(s) ?",
+        "bulk.delete_confirm_msg":      "Cette action est irréversible.",
+        "bulk.fixed_confirm_title":     "Marquer {n} finding(s) comme corrigés ?",
+        "bulk.fixed_confirm_msg":       "Les findings seront marqués comme corrigés. Ils réapparaîtront s'ils sont détectés au prochain scan.",
+        "bulk.measure_default_title":   "Mesure corrective",
+        "bulk.deleted":                 "supprimé(s)",
         "bulk.false_positive":     "Faux positif",
         "bulk.to_fix":             "Créer une mesure corrective",
+        "bulk.fixed":              "Corrigé",
+        "bulk.choose_action":      "Choisir une action",
+        "bulk.fixed_confirm":      "{n} finding(s) seront marqué(s) comme corrigé(s). Ils réapparaîtront si détectés au prochain scan.",
         "bulk.delete":             "Supprimer",
         "bulk.clear":              "Désélectionner",
         "bulk.fp_title":           "Déclarer {n} finding(s) comme faux positifs",
@@ -320,9 +350,9 @@ if (typeof _registerTranslations === "function") {
         "bulk.fp_confirm":         "Confirmer le faux positif ({n})",
         "bulk.fp_justification":   "Justification *",
         "bulk.fp_placeholder":     "Expliquer pourquoi ces findings sont des faux positifs (contexte, exception documentée, configuration intentionnelle...)",
-        "bulk.measure_title":      "Créer une mesure corrective pour {n} finding(s)",
-        "bulk.measure_help":       "Une mesure corrective sera créée pour chaque finding sélectionné, toutes avec le même titre/description/responsable/échéance. Elles apparaîtront groupées dans l'onglet Mesures.",
-        "bulk.measure_confirm":    "Créer {n} mesure(s)",
+        "bulk.measure_title":      "Créer une mesure corrective couvrant {n} finding(s)",
+        "bulk.measure_help":       "UNE seule mesure corrective sera créée et liée aux {n} findings sélectionnés.",
+        "bulk.measure_confirm":    "Créer la mesure",
         "bulk.measure_name":       "Nom de la mesure *",
         "bulk.measure_name_ph":    "Ex: Mettre à jour nginx sur tous les hosts exposés",
         "bulk.measure_desc":       "Description / plan de remédiation",
@@ -457,7 +487,6 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_summary":              "Résumé",
         "fd.ai_remediation":          "Remédiation",
         "fd.ai_refs":                 "Références",
-        "fd.ai_error":                "Erreur analyse IA",
         "smtp.section":               "Envoi email (digest hebdo)",
         "smtp.help":                  "Configure le serveur SMTP pour l'envoi automatique du digest hebdomadaire et du rapport exécutif par email.",
         "smtp.host":                  "Serveur",
@@ -517,6 +546,9 @@ if (typeof _registerTranslations === "function") {
         "fd.measure_status":         "Statut",
         "fd.measure_owner":          "Responsable",
         "fd.measure_due":            "Échéance",
+        "fd.fp_justif_required":     "La justification est obligatoire pour un faux positif",
+        "fd.measure_title_prompt":   "Nom de la mesure corrective :",
+        "fd.triage_ok":              "Triage enregistré",
 
         // ── Triage modal (single) ─────────────────────────
         "tm.title_to_fix":           "Créer une mesure corrective",
@@ -540,7 +572,7 @@ if (typeof _registerTranslations === "function") {
         "tm.justif_required":        "La justification est obligatoire",
 
         // ── Measures panel ────────────────────────────────
-        "measures.title":            "Mesures correctives",
+        "measures.title":            "Plan d'action",
         "measures.help":             "Plan d'action issu du triage des findings. Chaque mesure est liée au finding qui l'a générée.",
         "measures.empty":            "Aucune mesure créée. Les mesures apparaissent automatiquement quand vous triez un finding en 'À corriger'.",
         "measures.col.id":           "ID",
@@ -551,6 +583,7 @@ if (typeof _registerTranslations === "function") {
         "measures.status.a_faire":   "À faire",
         "measures.status.en_cours":  "En cours",
         "measures.status.termine":   "Terminé",
+        "measures.col.severity":     "Sévérité",
         "measures.updated":          "Mesure mise à jour",
 
         // ── Quick prompts (utility actions) ───────────────
@@ -562,6 +595,11 @@ if (typeof _registerTranslations === "function") {
 
         // ── Generic & host/nuclei inline strings ──────────
         "common.error":              "Erreur",
+        "error.bad_request":         "Requête invalide",
+        "error.forbidden":           "Accès refusé",
+        "error.not_found":           "Ressource introuvable",
+        "error.server":              "Erreur serveur, veuillez réessayer",
+        "error.generic":             "Une erreur est survenue",
         "triage.status_prefix":      "Finding",
         "host.deleted":               "Host supprimé",
         "nuclei.form.rate_limit":     "Rate limit (req/s)",

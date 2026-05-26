@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,7 @@ from src.findings_dedup import diff_summary, insert_many
 from src.models import Finding, ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.scanners import _parse_nmap_xml, _resolve_safe_target
+from src.audit import log_action
 
 logger = logging.getLogger("surface.scan_jobs")
 
@@ -163,6 +164,7 @@ async def list_jobs(
 async def create_job(
     body: JobCreate,
     background: BackgroundTasks,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -176,6 +178,7 @@ async def create_job(
         target=target, profile=body.profile, scanner="nmap",
         status="pending", triggered_by=(user.email if user else "system"),
     )
+    await log_action(db, user, request, "scan.create_job", target=body.target)
     db.add(job)
     await db.commit()
     await db.refresh(job)
@@ -198,6 +201,7 @@ async def get_job(
 @router.delete("/jobs/{job_id}", status_code=204)
 async def delete_job(
     job_id: uuid.UUID,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

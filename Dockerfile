@@ -1,5 +1,5 @@
 # ┌──────────────────────────────────────────────────────────────────┐
-# │  CISO Toolbox — Surface (ASM) standalone hardened image         │
+# │  CISO Toolbox — Surface (ASM) hardened image                    │
 # │  Multi-stage: pip deps → tools → hardened runtime               │
 # │  Non-root (surface:1000), read-only rootfs friendly,            │
 # │  minimal packages, no compiler/shell utilities in final layer.  │
@@ -48,7 +48,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="ciso-surface" \
       org.opencontainers.image.description="CISO Toolbox — Surface (ASM) module" \
       org.opencontainers.image.vendor="CISOToolbox" \
-      org.opencontainers.image.source="https://github.com/CISOToolbox/surface" \
+      org.opencontainers.image.source="https://github.com/CISOToolbox/demo-docker" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
 # Install only the runtime system packages — no compilers, no curl/wget/git.
@@ -62,6 +62,7 @@ RUN apt-get update && apt-get upgrade -y \
         libatspi2.0-0 libx11-6 libxcb1 libxext6 \
         fonts-liberation fonts-unifont \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    # Remove package manager caches and unnecessary utilities.
     && rm -f /usr/bin/wget /usr/bin/curl 2>/dev/null || true
 
 # Copy pip packages from builder.
@@ -76,7 +77,8 @@ RUN playwright install chromium \
 COPY --from=tools /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=tools /nuclei-templates /opt/nuclei-templates
 
-# Non-root user — UID 1000 for host/OCP compatibility.
+# Non-root user — UID 1000 chosen for compatibility with OpenShift
+# arbitrary UID ranges and standard Docker-on-host permission mapping.
 RUN useradd -r -m -u 1000 -s /usr/sbin/nologin surface \
     && mkdir -p /app /data/wordlists \
     && chown -R surface:surface /app /data /opt/nuclei-templates /ms-playwright
@@ -90,14 +92,14 @@ COPY --chown=surface:surface alembic.ini .
 COPY --chown=surface:surface docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Hardening env vars.
+# Hardening: Python optimisations + disable .pyc cache on read-only rootfs.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
 
 EXPOSE 8080
 
-# HEALTHCHECK so orchestrators detect hangs.
+# HEALTHCHECK so orchestrators (Docker, k8s, Compose) can detect hangs.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
 

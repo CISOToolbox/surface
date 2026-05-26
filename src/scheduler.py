@@ -7,6 +7,7 @@ Loop:
   - insert findings, mark last_scan_at, and for ip_range scans auto-create
     monitored_assets for newly discovered hosts
   - cap to MAX_PER_TICK to spread load
+  - daily, refresh the nuclei community templates (`nuclei -ut`)
 
 The scheduler runs in the same event loop as FastAPI but the scanners
 themselves are blocking (subprocess, sockets), so we use asyncio.to_thread.
@@ -16,6 +17,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -150,6 +154,64 @@ async def _scan_one(asset_id) -> None:
     logger.info("scheduler: %s/%s -> job=%s, dedup=%s, %d new hosts", kind, value, job_id, dedup_counts, len(discovered) if discovered else 0)
 
 
+async def _rebalance_schedule() -> None:
+    """Spread scan times evenly so assets with the same frequency don't
+    all fire on the same tick.
+
+    Groups assets by `scan_frequency_hours`, then within each group
+    assigns a synthetic `last_scan_at` that distributes the next-due
+    times uniformly across the period. Only touches assets that have
+    never been scanned (`last_scan_at IS NULL`) or that would create a
+    burst (more than MAX_PER_TICK assets due in the same 2-minute window).
+
+    Called once at startup and then once per day by the scheduler loop.
+    """
+    now = datetime.now(timezone.utc)
+    async with async_session() as db:
+        result = await db.execute(
+            select(MonitoredAsset)
+            .where(MonitoredAsset.enabled == True)
+            .where(MonitoredAsset.scan_frequency_hours > 0)
+        )
+        assets = result.scalars().all()
+        if not assets:
+            return
+
+        # Group by frequency
+        by_freq: dict[int, list[MonitoredAsset]] = {}
+        for a in assets:
+            by_freq.setdefault(a.scan_frequency_hours, []).append(a)
+
+        updated = 0
+        for freq_h, group in by_freq.items():
+            # Only rebalance if there's a burst: count how many are due
+            # right now (NULL or past-due).
+            due_now = [
+                a for a in group
+                if a.last_scan_at is None
+                or (a.last_scan_at + timedelta(hours=freq_h)) <= now
+            ]
+            if len(due_now) <= MAX_PER_TICK:
+                continue
+
+            # Spread the due assets evenly across the period. Asset i
+            # gets last_scan_at = now - (i / N) * period, so each one
+            # becomes due at a different future tick.
+            period = timedelta(hours=freq_h)
+            n = len(due_now)
+            # Sort by value for deterministic ordering
+            due_now.sort(key=lambda a: a.value)
+            for i, a in enumerate(due_now):
+                offset = period * (i / n)
+                a.last_scan_at = now - offset
+                updated += 1
+
+        if updated:
+            await db.commit()
+            logger.info("scheduler: rebalanced %d asset(s) across %d frequency group(s)",
+                        updated, len(by_freq))
+
+
 async def _tick() -> None:
     """One iteration of the scheduler — pick due assets and launch them."""
     now = datetime.now(timezone.utc)
@@ -230,18 +292,116 @@ async def _maybe_send_weekly_digest() -> None:
             logger.exception("weekly digest send failed")
 
 
+# ── Nuclei templates auto-update ───────────────────────────────────
+# Default cadence: 24 h. Override via env NUCLEI_AUTO_UPDATE_HOURS.
+# Set NUCLEI_AUTO_UPDATE_HOURS=0 to disable the auto-update entirely.
+# Last-run timestamp is persisted in AppSettings so the cadence survives
+# restarts.
+NUCLEI_AUTO_UPDATE_HOURS = int(os.environ.get("NUCLEI_AUTO_UPDATE_HOURS", "24"))
+NUCLEI_UPDATE_KEY = "nuclei.last_template_update_at"
+NUCLEI_UPDATE_TIMEOUT = 300  # `nuclei -ut` can take a couple of minutes on a fresh install
+
+
+async def _maybe_update_nuclei_templates() -> None:
+    """Run ``nuclei -ut`` if more than ``NUCLEI_AUTO_UPDATE_HOURS`` have
+    elapsed since the last successful refresh. Tracks the last-run via
+    ``AppSettings[nuclei.last_template_update_at]``. No-op when the
+    nuclei binary is missing or the cadence is disabled (0)."""
+    if NUCLEI_AUTO_UPDATE_HOURS <= 0:
+        return
+    nuclei_path = shutil.which("nuclei")
+    if not nuclei_path:
+        return  # binary not in PATH on this build — silently skip
+
+    from src.models import AppSettings  # local import to mirror digest hook
+    now = datetime.now(timezone.utc)
+    async with async_session() as db:
+        last_row = (await db.execute(
+            select(AppSettings).where(AppSettings.key == NUCLEI_UPDATE_KEY)
+        )).scalar_one_or_none()
+        if last_row and last_row.value:
+            try:
+                last = datetime.fromisoformat(last_row.value)
+                if (now - last).total_seconds() < NUCLEI_AUTO_UPDATE_HOURS * 3600:
+                    return
+            except ValueError:
+                pass  # corrupt value → re-run and overwrite
+
+    logger.info("scheduler: refreshing nuclei templates (last run >%dh ago)",
+                NUCLEI_AUTO_UPDATE_HOURS)
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [nuclei_path, "-ut", "-disable-update-check", "-no-color"],
+            capture_output=True, timeout=NUCLEI_UPDATE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("scheduler: nuclei -ut timed out after %ds — will retry next cycle",
+                       NUCLEI_UPDATE_TIMEOUT)
+        return
+    except Exception:
+        logger.exception("scheduler: nuclei -ut crashed")
+        return
+
+    if proc.returncode != 0:
+        # Keep the last-run unchanged so we retry next cycle.
+        logger.warning("scheduler: nuclei -ut exited rc=%s: %s",
+                       proc.returncode, proc.stderr.decode(errors="replace")[-500:])
+        return
+
+    # Bust the cached templates inventory so the next /nuclei/config call
+    # sees the new count without waiting 120s.
+    try:
+        from src.routes.scans import _nuclei_environment_info
+        await asyncio.to_thread(_nuclei_environment_info, True)
+    except Exception:
+        pass
+
+    async with async_session() as db:
+        last_row = (await db.execute(
+            select(AppSettings).where(AppSettings.key == NUCLEI_UPDATE_KEY)
+        )).scalar_one_or_none()
+        if last_row is None:
+            db.add(AppSettings(key=NUCLEI_UPDATE_KEY, value=now.isoformat()))
+        else:
+            last_row.value = now.isoformat()
+        await db.commit()
+    logger.info("scheduler: nuclei templates refreshed (rc=0)")
+
+
+REBALANCE_INTERVAL_TICKS = 1440  # ~24 h at 60 s/tick
+NUCLEI_CHECK_INTERVAL_TICKS = 60  # check the nuclei cadence once an hour
+
+
 async def run_scheduler() -> None:
     """Long-running coroutine started on FastAPI startup."""
     logger.info("scheduler: starting in %ds (tick=%ds)", INITIAL_DELAY, TICK_SECONDS)
     await asyncio.sleep(INITIAL_DELAY)
+
+    # Initial rebalance: spread any burst of due assets evenly so the
+    # first few ticks don't try to scan everything at once.
+    try:
+        await _rebalance_schedule()
+    except Exception:
+        logger.exception("scheduler: initial rebalance failed")
+
+    # Initial nuclei template check on startup — covers fresh deployments
+    # and ensures templates are current after a long downtime. Re-checks
+    # are then driven by NUCLEI_CHECK_INTERVAL_TICKS below.
+    try:
+        await _maybe_update_nuclei_templates()
+    except Exception:
+        logger.exception("scheduler: initial nuclei update failed")
+
     digest_ticks = 0
+    rebalance_ticks = 0
+    nuclei_ticks = 0
     while True:
         try:
             await _tick()
         except Exception:
             logger.exception("scheduler: tick crashed")
-        # Check the digest once every 60 ticks (~1 h). _maybe_send_weekly_digest
-        # is a no-op unless a full week has passed since the last send.
+        # Check the digest once every 60 ticks (~1 h).
         digest_ticks += 1
         if digest_ticks >= 60:
             digest_ticks = 0
@@ -249,4 +409,23 @@ async def run_scheduler() -> None:
                 await _maybe_send_weekly_digest()
             except Exception:
                 logger.exception("scheduler: digest crashed")
+        # Rebalance once a day to smooth out drift from manual scans,
+        # newly added assets, or frequency changes.
+        rebalance_ticks += 1
+        if rebalance_ticks >= REBALANCE_INTERVAL_TICKS:
+            rebalance_ticks = 0
+            try:
+                await _rebalance_schedule()
+            except Exception:
+                logger.exception("scheduler: rebalance failed")
+        # Check nuclei templates freshness once per hour. The helper
+        # itself enforces the configured cadence (24 h by default) so
+        # this is cheap — just a SELECT on AppSettings most of the time.
+        nuclei_ticks += 1
+        if nuclei_ticks >= NUCLEI_CHECK_INTERVAL_TICKS:
+            nuclei_ticks = 0
+            try:
+                await _maybe_update_nuclei_templates()
+            except Exception:
+                logger.exception("scheduler: nuclei update crashed")
         await asyncio.sleep(TICK_SECONDS)

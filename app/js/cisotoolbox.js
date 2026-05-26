@@ -587,9 +587,13 @@ function _safeDispatch(fn, args) {
     if (typeof window[fn] === "function") window[fn].apply(null, args);
 }
 
+var _mouseDownTarget = null;
+document.addEventListener("mousedown", function(e) { _mouseDownTarget = e.target; });
+
 document.addEventListener("click", function(e) {
     var selfEl = e.target.closest("[data-click-self]");
     if (selfEl && e.target === selfEl) {
+        if (_mouseDownTarget !== selfEl) return;
         var fn0 = selfEl.getAttribute("data-click-self");
         _safeDispatch(fn0, []);
         return;

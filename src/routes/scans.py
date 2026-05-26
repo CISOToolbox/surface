@@ -13,7 +13,7 @@ import ssl
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from src.database import get_db
 from src.findings_dedup import insert_many
 from src.models import User
 from src.rate_limit import check_scan_quota
+from src.audit import log_action
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -224,6 +225,7 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
 @router.post("/quick")
 async def quick_scan(
     body: QuickScanRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -348,7 +350,7 @@ def _nuclei_environment_info(force: bool = False) -> dict[str, Any]:
     except Exception:
         pass
 
-    templates_dir = os.path.expanduser("~/nuclei-templates")
+    templates_dir = os.environ.get("NUCLEI_TEMPLATES_DIR") or os.path.expanduser("~/nuclei-templates")
     if os.path.isdir(templates_dir):
         count = 0
         for root, _, files in os.walk(templates_dir):
@@ -395,6 +397,7 @@ async def nuclei_config(
 @router.put("/nuclei/config")
 async def nuclei_config_update(
     body: NucleiTuningPatch,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -506,6 +509,7 @@ async def shodan_get_config(
 @router.put("/shodan/config")
 async def shodan_set_config(
     body: ShodanKeyPatch,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -579,6 +583,7 @@ async def shodan_set_config(
 
 @router.delete("/shodan/config")
 async def shodan_delete_config(
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

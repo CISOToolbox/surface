@@ -7,7 +7,6 @@
 // index.html, so this global assignment runs first.
 window.AI_APP_CONFIG = {
     storagePrefix: "surface",
-    hideDemo: true,
     settingsExtraHTML: function() {
         // Surface settings are rendered as a list of <details> accordions
         // so the panel stays scannable as the number of sections grows.
@@ -233,7 +232,7 @@ var _jobsFilterScanner = "";
 var _jobsFilterStatus = "";
 var _scannersCatalog = null;
 var _measures = [];
-var _filterStatus = "new";  // default: only show findings that need triage
+var _filterStatus = "open";  // default: show new + to_fix findings
 var _filterSeverities = [];  // multi-select; empty = all
 var _filterScanners = [];    // multi-select; empty = all
 var _monitoredFilterScanners = []; // multi-select scanner filter on Surveillance page
@@ -259,7 +258,10 @@ window.selectPanel = function(id) {
     _panel = id;
     _selectedFinding = null;
     _selectedHost = null;
-    _bulkSelection = {};
+    if (window.ct_bulkbar) {
+        ct_bulkbar.clear("surface-findings");
+        ct_bulkbar.clear("surface-measures");
+    }
     document.querySelectorAll(".sidebar-item").forEach(function(el) {
         var args = el.getAttribute("data-args");
         if (args) try { el.classList.toggle("active", JSON.parse(args)[0] === id); } catch(e) {}
@@ -290,12 +292,78 @@ function renderPanel() {
         case "jobs": _renderJobs(c); break;
         case "findings": _renderFindings(c); break;
         case "measures": _renderMeasures(c); break;
+        case "audit": _renderAuditLog(c); break;
         default: _renderDashboard(c);
     }
     var tr = document.getElementById("toolbar-right");
-    if (tr && typeof _getSettingsButtonHTML === "function") tr.innerHTML = _getSettingsButtonHTML();
+    if (tr && typeof _getSettingsButtonHTML === "function" && !tr.querySelector(".toolbar-settings")) {
+        var _sh = _getSettingsButtonHTML();
+        if (_sh) tr.insertAdjacentHTML("afterbegin", '<span class="toolbar-settings">' + _sh + '</span>');
+    }
 }
 window.renderPanel = renderPanel;
+// ═══════════════════════════════════════════════════════════════
+// AUDIT LOG (admin-only)
+// ═══════════════════════════════════════════════════════════════
+
+var _auditFilter = { q: "" };
+
+async function _renderAuditLog(c) {
+    var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    h += '<h2 style="margin:0">' + t("audit.title") + '</h2><span style="flex:1"></span>';
+    h += '<input type="search" class="appsec-filter" placeholder="' + t("audit.search") + '" value="' + esc(_auditFilter.q || "") + '" data-input="_setAuditSearch" data-pass-value style="min-width:200px">';
+    h += '</div>';
+    h += '<div id="audit-body"><p class="text-muted">Chargement...</p></div>';
+    c.innerHTML = h;
+    _refreshAuditBody();
+}
+
+async function _refreshAuditBody() {
+    var el = document.getElementById("audit-body");
+    if (!el) return;
+    try {
+        var qs = _auditFilter.q ? "?q=" + encodeURIComponent(_auditFilter.q) : "";
+        var resp = await fetch("api/audit-log" + qs, { credentials: "same-origin" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        var data = await resp.json();
+        var items = data.items || [];
+        var h = '';
+        if (items.length === 0) {
+            h = '<p class="text-muted">' + t("audit.empty") + '</p>';
+        } else {
+            h = '<table class="surface-table" style="font-size:0.85em"><thead><tr>';
+            h += '<th>' + t("audit.col_date") + '</th>';
+            h += '<th>' + t("audit.col_user") + '</th>';
+            h += '<th>' + t("audit.col_action") + '</th>';
+            h += '<th>' + t("audit.col_target") + '</th>';
+            h += '<th>' + t("audit.col_details") + '</th>';
+            h += '<th>IP</th></tr></thead><tbody>';
+            for (var i = 0; i < items.length; i++) {
+                var e = items[i];
+                var d = new Date(e.logged_at);
+                var dateStr = isNaN(d.getTime()) ? e.logged_at : d.toLocaleString();
+                var actionLabel = t("audit.action." + e.action);
+                if (actionLabel === "audit.action." + e.action) actionLabel = e.action;
+                h += '<tr>';
+                h += '<td style="white-space:nowrap;color:var(--text-muted)">' + esc(dateStr) + '</td>';
+                h += '<td>' + esc(e.user_email || "—") + '</td>';
+                h += '<td><code style="font-size:0.85em">' + esc(actionLabel) + '</code></td>';
+                h += '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">' + esc(e.target || "—") + '</td>';
+                h += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)" title="' + esc(e.details || "") + '">' + esc(e.details || "—") + '</td>';
+                h += '<td style="color:var(--text-muted)">' + esc(e.ip_address || "") + '</td>';
+                h += '</tr>';
+            }
+            h += '</tbody></table>';
+            h += '<p style="font-size:0.78em;color:var(--text-muted)">' + data.total + ' ' + t("audit.entries") + '</p>';
+        }
+        el.innerHTML = h;
+    } catch (e) {
+        el.innerHTML = '<p style="color:var(--red)">' + esc(e.message || String(e)) + '</p>';
+    }
+}
+
+window._setAuditSearch = function(v) { _auditFilter.q = v; _refreshAuditBody(); };
+
 window.renderAll = renderPanel;
 window._initDataAndRender = function() { _panel = "dashboard"; _loadAndRender(); };
 
@@ -516,7 +584,7 @@ function _ensureJobModal() {
         ov.id = "job-overlay";
         ov.className = "ct-modal-overlay";
         document.body.appendChild(ov);
-        ov.addEventListener("click", function(e) { if (e.target === ov) _closeJobModal(); });
+        var _md = null; ov.addEventListener("mousedown", function(e) { _md = e.target; }); ov.addEventListener("click", function(e) { if (e.target === ov && _md === ov) _closeJobModal(); });
     }
     // Rebuild innerHTML on every call so the modal picks up the current locale
     // (user may have switched FR↔EN after the first render).
@@ -749,6 +817,7 @@ function _refreshMonitoredTable() {
         h += '<div class="bulk-action-bar">';
         h += '<span class="bulk-count">' + selCount + ' ' + esc(t("bulk.selected")) + '</span>';
         h += '<button class="btn-add btn-icon" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
+        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:#fff" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
         h += '<span style="flex:1"></span>';
         h += '<button class="btn-add" data-click="_clearMonitoredBulk">' + esc(t("bulk.clear")) + '</button>';
         h += '</div>';
@@ -789,6 +858,26 @@ window._clearMonitoredBulk = function() {
     _refreshMonitoredTable();
 };
 
+window._bulkDeleteMonitored = function() {
+    var ids = Object.keys(_monitoredBulkSelection);
+    if (!ids.length) return;
+    if (!confirm(t("monitored.bulk_delete_confirm", {count: ids.length}))) return;
+    var done = 0, errors = 0;
+    ids.forEach(function(id) {
+        SurfaceAPI.deleteMonitored(id)
+            .then(function() { done++; _checkBulkDeleteDone(done, errors, ids.length); })
+            .catch(function() { errors++; _checkBulkDeleteDone(done, errors, ids.length); });
+    });
+};
+
+function _checkBulkDeleteDone(done, errors, total) {
+    if (done + errors < total) return;
+    _monitoredBulkSelection = {};
+    _loadAndRender();
+    if (errors) showStatus(t("monitored.bulk_delete_partial", {done: done, errors: errors}), true);
+    else showStatus(t("monitored.bulk_delete_done", {count: done}));
+}
+
 window._bulkConfigureScanners = function() {
     var ids = Object.keys(_monitoredBulkSelection);
     if (!ids.length) return;
@@ -824,7 +913,7 @@ function _ensureMonitoredModal() {
         ov.id = "monitored-overlay";
         ov.className = "ct-modal-overlay";
         document.body.appendChild(ov);
-        ov.addEventListener("click", function(e) { if (e.target === ov) _closeMonitoredModal(); });
+        var _md = null; ov.addEventListener("mousedown", function(e) { _md = e.target; }); ov.addEventListener("click", function(e) { if (e.target === ov && _md === ov) _closeMonitoredModal(); });
     }
     // Rebuild innerHTML on every open so the locale is always current.
     ov.innerHTML =
@@ -1847,7 +1936,7 @@ function _dashGaps() {
 
 // ── Navigation helpers ───────────────────────────────────────
 window._dashGotoSeverity = function(sev) {
-    _filterStatus = "new";
+    _filterStatus = "open";
     _filterSeverities = [sev];
     _filterScanners = [];
     _findingsSearch = "";
@@ -1913,7 +2002,8 @@ function _refreshFindingsBody() {
 
     // ── Status filter pills ────────────────────────────────
     var statusOptions = [
-        { v: "new",            key: "status.to_triage" },
+        { v: "open",           key: "status.open" },
+        { v: "new",            key: "status.new" },
         { v: "to_fix",         key: "status.to_fix" },
         { v: "false_positive", key: "dash.false_positive" },
         { v: "fixed",          key: "status.fixed" },
@@ -1959,7 +2049,8 @@ function _refreshFindingsBody() {
 
     var searchQ = _findingsSearch.trim().toLowerCase();
     var filtered = _findings.filter(function(f) {
-        if (_filterStatus && f.status !== _filterStatus) return false;
+        if (_filterStatus === "open") { if (f.status !== "new" && f.status !== "to_fix") return false; }
+        else if (_filterStatus && f.status !== _filterStatus) return false;
         if (_filterSeverities.length && _filterSeverities.indexOf(f.severity) < 0) return false;
         if (_filterScanners.length && _filterScanners.indexOf(f.scanner) < 0) return false;
         if (searchQ) {
@@ -1977,232 +2068,204 @@ function _refreshFindingsBody() {
         return;
     }
 
-    // Prune the bulk selection to only IDs still in the filtered view
+    // ct_bulkbar keeps its own selection set; we just need to prune
+    // entries that are no longer in the filtered view so bulk actions
+    // don't try to act on hidden rows.
     var filteredIds = {};
     filtered.forEach(function(f) { filteredIds[f.id] = true; });
-    Object.keys(_bulkSelection).forEach(function(id) {
-        if (!filteredIds[id]) delete _bulkSelection[id];
-    });
-    var selectedCount = Object.keys(_bulkSelection).length;
-    var allChecked = filtered.length > 0 && filtered.every(function(f) { return _bulkSelection[f.id]; });
+    var sel = ct_bulkbar.getSelection("surface-findings");
+    var prunedKeys = [];
+    sel.forEach(function(k) { if (filteredIds[k]) prunedKeys.push(k); });
+    if (prunedKeys.length !== sel.size) ct_bulkbar.setSelection("surface-findings", prunedKeys);
 
-    h += '<div class="findings-scroll"><table class="surface-table findings-table"><thead><tr>';
-    h += '<th><input type="checkbox" id="bulk-select-all"' + (allChecked ? " checked" : "") + ' data-change="_toggleBulkAll" data-pass-value></th>';
-    h += '<th>' + esc(t("findings.col.severity")) + '</th>';
-    h += '<th>' + esc(t("findings.col.type")) + '</th>';
-    h += '<th>' + esc(t("findings.col.title")) + '</th>';
-    h += '<th>' + esc(t("findings.col.target")) + '</th>';
-    h += '<th>' + esc(t("findings.col.status")) + '</th>';
-    h += '<th>' + esc(t("findings.col.datetime")) + '</th>';
-    h += '<th></th></tr></thead><tbody>';
-    filtered.forEach(function(f) {
-        var checked = _bulkSelection[f.id] ? " checked" : "";
-        var dateDisplay = f.created_at ? (_fmtDate(f.created_at)) : "-";
-        h += '<tr class="finding-row sev-' + esc(f.severity) + ' status-' + esc(f.status) + '" data-click="_openFinding" data-args=\'' + _da(f.id) + '\'>';
-        h += '<td data-stop><input type="checkbox" class="bulk-check"' + checked + ' data-click="_toggleBulkOne" data-args=\'' + _da(f.id) + '\' data-stop></td>';
-        h += '<td><span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>';
-        h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type) + '</td>';
-        h += '<td style="font-weight:600">' + esc(f.title) + '</td>';
-        h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(f.target || "-") + '</td>';
-        h += '<td><span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span></td>';
-        h += '<td style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(dateDisplay) + '</td>';
-        h += '<td style="white-space:nowrap">';
-        if (f.status !== "to_fix") h += '<button class="btn-mini btn-fix" data-click="_quickTriage" data-args=\'' + _da(f.id, "to_fix") + '\' data-stop title="' + esc(t("status.to_fix")) + '">' + _icon("check", 14) + '</button> ';
-        if (f.status !== "false_positive") h += '<button class="btn-mini btn-fp" data-click="_quickTriage" data-args=\'' + _da(f.id, "false_positive") + '\' data-stop title="' + esc(t("status.false_positive")) + '">' + _icon("x", 14) + '</button>';
-        h += '</td>';
-        h += '</tr>';
+    h += ct_table.render({
+        rows: filtered,
+        rowKey: "id",
+        onRowClick: "_openFindingRow",
+        rowClass: function(f) { return "finding-row sev-" + f.severity + " status-" + f.status; },
+        bulk: { scope: "surface-findings" },
+        columns: [
+            { key: "severity", label: t("findings.col.severity"), width: "80px",
+              render: function(f) { return '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span>'; } },
+            { key: "type", label: t("findings.col.type"),
+              render: function(f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type || "") + '</span>'; } },
+            { key: "title", label: t("findings.col.title"),
+              render: function(f) { return '<span style="font-weight:600">' + esc(f.title || "") + '</span>'; } },
+            { key: "target", label: t("findings.col.target"),
+              render: function(f) { return '<span style="font-size:0.82em;color:var(--text-muted);word-break:break-all">' + esc(f.target || "-") + '</span>'; } },
+            { key: "status", label: t("findings.col.status"), width: "110px",
+              render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>'; } },
+            { key: "created_at", label: t("findings.col.datetime"), width: "130px",
+              render: function(f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
+        ],
+        actions: [
+            { icon: "check", label: t("status.to_fix"), onClick: "_quickTriageRow",
+              show: function(f) { return f.status !== "to_fix"; } },
+            { icon: "x", label: t("status.false_positive"), onClick: "_quickTriageFpRow",
+              show: function(f) { return f.status !== "false_positive"; } }
+        ]
     });
-    h += '</tbody></table></div>';
-
-    if (selectedCount > 0) {
-        h += '<div class="bulk-action-bar">';
-        h += '<span class="bulk-count">' + selectedCount + ' ' + esc(t("bulk.selected")) + '</span>';
-        h += '<button class="btn-add btn-fp btn-icon" data-click="_bulkFalsePositiveDialog">' + _icon("x", 14) + ' ' + esc(t("bulk.false_positive")) + '</button>';
-        h += '<button class="btn-add btn-fix btn-icon" data-click="_bulkToFixDialog">' + _icon("check", 14) + ' ' + esc(t("bulk.to_fix")) + '</button>';
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_bulkDelete">' + _icon("trash", 14) + ' ' + esc(t("bulk.delete")) + '</button>';
-        h += '<span style="flex:1"></span>';
-        h += '<button class="btn-add" data-click="_bulkClearSelection">' + esc(t("bulk.clear")) + '</button>';
-        h += '</div>';
-    }
 
     wrap.innerHTML = h;
+    _setupFindingsBulkbar();
+    ct_bulkbar.update("surface-findings");
 }
 
-window._toggleBulkAll = function(v) {
-    // v is the checkbox .value ('on') — use the state via event target instead
-    var el = document.getElementById("bulk-select-all");
-    var checked = el && el.checked;
-    var searchQ = _findingsSearch.trim().toLowerCase();
-    var filtered = _findings.filter(function(f) {
-        if (_filterStatus && f.status !== _filterStatus) return false;
-        if (_filterSeverities.length && _filterSeverities.indexOf(f.severity) < 0) return false;
-        if (_filterScanners.length && _filterScanners.indexOf(f.scanner) < 0) return false;
-        if (searchQ) {
-            var hay = ((f.title || "") + " " + (f.target || "") + " " + (f.description || "") + " " + (f.scanner || "") + " " + (f.type || "")).toLowerCase();
-            if (hay.indexOf(searchQ) < 0) return false;
-        }
-        return true;
+// ct_table passes the row object; wrappers adapt to the legacy quickTriage signature.
+window._openFindingRow = function(row) { if (row && row.id) window._openFinding(row.id); };
+window._quickTriageRow = function(row) { if (row && row.id) window._quickTriage(row.id, "to_fix"); };
+window._quickTriageFpRow = function(row) { if (row && row.id) window._quickTriage(row.id, "false_positive"); };
+
+function _setupFindingsBulkbar() {
+    ct_bulkbar.attach({
+        scope: "surface-findings",
+        label: (t("bulk.findings_selected") || "{n} finding(s) sélectionné(s)"),
+        actions: [
+            { id: "to_fix", icon: "check", label: t("bulk.to_fix") || "À corriger",
+              variant: "primary", onClick: "_bulkSurfaceToFix" },
+            { id: "fixed", icon: "check", label: t("bulk.fixed") || "Corrigé",
+              variant: "success", onClick: "_bulkSurfaceFixed" },
+            { id: "fp", icon: "x", label: t("bulk.false_positive") || "Faux positif",
+              variant: "muted", onClick: "_bulkSurfaceFP" },
+            { id: "delete", icon: "trash", label: t("bulk.delete") || "Supprimer", danger: true,
+              onClick: "_bulkSurfaceDelete",
+              confirm: { title: t("bulk.delete_confirm_title") || "Supprimer {n} finding(s) ?",
+                         message: t("bulk.delete_confirm_msg") || "Cette action est irréversible." } }
+        ]
     });
-    if (checked) {
-        filtered.forEach(function(f) { _bulkSelection[f.id] = true; });
-    } else {
-        _bulkSelection = {};
-    }
-    renderPanel();
-};
-
-window._toggleBulkOne = function(id) {
-    if (_bulkSelection[id]) delete _bulkSelection[id];
-    else _bulkSelection[id] = true;
-    renderPanel();
-};
-
-window._bulkClearSelection = function() {
-    _bulkSelection = {};
-    renderPanel();
-};
-
-// ── Bulk triage modals ─────────────────────────────────────────
-
-function _ensureBulkModal() {
-    var ov = document.getElementById("bulk-overlay");
-    if (ov) return ov;
-    ov = document.createElement("div");
-    ov.id = "bulk-overlay";
-    ov.className = "ct-modal-overlay";
-    ov.innerHTML =
-        '<div class="ct-modal">' +
-            '<div class="ct-modal-header"><span id="bulk-modal-title"></span><button class="ct-modal-close" data-click="_closeBulkModal">' + _icon("x", 18) + '</button></div>' +
-            '<div class="ct-modal-body" id="bulk-modal-body"></div>' +
-            '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeBulkModal">Annuler</button>' +
-                '<button class="btn-add" id="bulk-confirm-btn" data-click="_submitBulk">Confirmer</button>' +
-            '</div>' +
-        '</div>';
-    document.body.appendChild(ov);
-    ov.addEventListener("click", function(e) { if (e.target === ov) _closeBulkModal(); });
-    return ov;
 }
 
-window._closeBulkModal = function() {
-    var ov = document.getElementById("bulk-overlay");
-    if (ov) ov.classList.remove("open");
-};
-
-var _bulkModalContext = null;  // {action: "to_fix" | "false_positive", ids: [...]}
-
-window._bulkFalsePositiveDialog = function() {
-    var ids = Object.keys(_bulkSelection);
+window._bulkSurfaceToFix = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
     if (!ids.length) return;
-    _bulkModalContext = { action: "false_positive", ids: ids };
-    var ov = _ensureBulkModal();
-    document.getElementById("bulk-modal-title").textContent = _tn("bulk.fp_title", ids.length);
-    var btn = document.getElementById("bulk-confirm-btn");
-    btn.disabled = false;  // reset from any previous submit attempt
-    btn.textContent = _tn("bulk.fp_confirm", ids.length);
-    btn.style.background = "#6b7280";
-    btn.style.color = "white";
-    document.getElementById("bulk-modal-body").innerHTML =
-        '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px">' + esc(_tn("bulk.fp_help", ids.length)) + '</div>' +
-        '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("bulk.fp_justification")) + '</label>' +
-            '<textarea class="ct-input" id="bulk-fp-notes" rows="5" placeholder="' + esc(t("bulk.fp_placeholder")) + '"></textarea>' +
-        '</div>' +
-        '<div class="ct-error" id="bulk-error" style="display:none"></div>';
-    ov.classList.add("open");
-    setTimeout(function() { var el = document.getElementById("bulk-fp-notes"); if (el) el.focus(); }, 50);
-};
+    var selected = _findings.filter(function(f) { return ids.indexOf(f.id) >= 0; });
+    // Interpolate {n} — t() returns the raw key/value, no placeholder handling.
+    var interp = function(key, fallback) {
+        var v = (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
+        return v;
+    };
+    var defaultTitle = selected.length === 1 ? selected[0].title
+        : (t("bulk.measure_default_title") || "Mesure corrective") + " (" + ids.length + " findings)";
+    var defaultDesc = selected.map(function(f) { return "- " + (f.title || ""); }).join("\n");
+    var helpText = interp("bulk.measure_help", "UNE mesure sera créée et liée aux {n} findings sélectionnés.");
+    var summary = '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:6px">' + esc(helpText) + '</div>'
+                + '<div style="font-size:0.82em;color:var(--text-muted);font-weight:600;margin-top:4px">'
+                + esc("Findings couverts") + ' (' + ids.length + ')</div>'
+                + '<div style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px">'
+                + selected.map(function(f) {
+                      return '<div style="padding:2px 0"><span class="sev-badge sev-' + esc(f.severity) + '">'
+                           + esc(f.severity) + '</span> ' + esc((f.title || "").substring(0, 80)) + '</div>';
+                  }).join("")
+                + '</div>';
 
-window._bulkToFixDialog = function() {
-    var ids = Object.keys(_bulkSelection);
-    if (!ids.length) return;
-    _bulkModalContext = { action: "to_fix", ids: ids };
-    var ov = _ensureBulkModal();
-    document.getElementById("bulk-modal-title").textContent = _tn("bulk.measure_title", ids.length);
-    var btn = document.getElementById("bulk-confirm-btn");
-    btn.disabled = false;  // reset from any previous submit attempt
-    btn.textContent = _tn("bulk.measure_confirm", ids.length);
-    btn.style.background = "#16a34a";
-    btn.style.color = "white";
-    document.getElementById("bulk-modal-body").innerHTML =
-        '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px">' + esc(_tn("bulk.measure_help", ids.length)) + '</div>' +
-        '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("bulk.measure_name")) + '</label>' +
-            '<input type="text" class="ct-input" id="bulk-measure-title" placeholder="' + esc(t("bulk.measure_name_ph")) + '">' +
-        '</div>' +
-        '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("bulk.measure_desc")) + '</label>' +
-            '<textarea class="ct-input" id="bulk-measure-desc" rows="4" placeholder="' + esc(t("bulk.measure_desc_ph")) + '"></textarea>' +
-        '</div>' +
-        '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("bulk.measure_resp")) + '</label>' +
-            '<input type="text" class="ct-input" id="bulk-measure-resp" placeholder="' + esc(t("bulk.measure_resp_ph")) + '">' +
-        '</div>' +
-        '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("bulk.measure_due")) + '</label>' +
-            '<input type="date" class="ct-input" id="bulk-measure-due">' +
-        '</div>' +
-        '<div class="ct-error" id="bulk-error" style="display:none"></div>';
-    ov.classList.add("open");
-    setTimeout(function() { var el = document.getElementById("bulk-measure-title"); if (el) el.focus(); }, 50);
-};
-
-window._submitBulk = function() {
-    if (!_bulkModalContext) return;
-    var ctx = _bulkModalContext;
-    var err = document.getElementById("bulk-error");
-    if (err) err.style.display = "none";
-    var payload = { ids: ctx.ids, status: ctx.action };
-
-    if (ctx.action === "false_positive") {
-        var notes = (document.getElementById("bulk-fp-notes").value || "").trim();
-        if (!notes) {
-            err.textContent = t("tm.justif_required");
-            err.style.display = "block";
-            return;
-        }
-        payload.notes = notes;
-    } else if (ctx.action === "to_fix") {
-        var title = (document.getElementById("bulk-measure-title").value || "").trim();
-        if (!title) {
-            err.textContent = t("tm.name_required");
-            err.style.display = "block";
-            return;
-        }
-        payload.measure_title = title;
-        payload.measure_description = (document.getElementById("bulk-measure-desc").value || "").trim();
-        payload.responsable = (document.getElementById("bulk-measure-resp").value || "").trim();
-        payload.echeance = (document.getElementById("bulk-measure-due").value || "").trim();
-    }
-
-    var btn = document.getElementById("bulk-confirm-btn");
-    if (btn) { btn.disabled = true; btn.textContent = "..."; }
-
-    SurfaceAPI.bulkTriageFindings(payload).then(function(r) {
-        _closeBulkModal();
-        _bulkSelection = {};
-        _bulkModalContext = null;
-        showStatus(r.updated + " finding(s) mis a jour" + (r.measures_created ? ", " + r.measures_created + " mesure(s) creee(s)" : ""));
-        _loadAndRender();
-    }).catch(function(e) {
-        if (err) {
-            err.textContent = e.message || t("common.error");
-            err.style.display = "block";
-        }
-        if (btn) { btn.disabled = false; btn.textContent = t("action.confirm"); }
+    ct_measure_modal.open({ title: defaultTitle, description: defaultDesc }, {
+        title: interp("bulk.measure_title", "Créer une mesure corrective couvrant {n} finding(s)"),
+        saveLabel: interp("bulk.measure_confirm", "Créer la mesure"),
+        hideFields: ["type", "statut"],
+        ownerPicker: { pickerId: "surface-bulk-owner", directoryUrl: "api/directory" },
+        extraContent: summary
+    }).then(function(data) {
+        if (!data || data.__deleted) return;
+        SurfaceAPI.bulkTriageFindings({
+            ids: ids, status: "to_fix",
+            measure_title: data.title,
+            measure_description: data.description,
+            responsable: data.responsable,
+            echeance: data.echeance
+        }).then(function(r) {
+            var msg = r.updated + " finding(s) → " + (t("status.to_fix") || "À corriger");
+            if (r.measures_created) msg += " (" + r.measures_created + " mesure(s) créée(s))";
+            showStatus(msg);
+            ct_bulkbar.clear(scope);
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
     });
 };
 
-window._bulkDelete = function() {
-    var ids = Object.keys(_bulkSelection);
+window._bulkSurfaceFixed = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
     if (!ids.length) return;
-    if (!confirm(_tn("bulk.delete_confirm", ids.length))) return;
+    ct_modal.confirm({
+        title: t("bulk.fixed_confirm_title") || "Marquer " + ids.length + " finding(s) comme corrigés ?",
+        message: t("bulk.fixed_confirm_msg") || "Les findings seront marqués corrigés."
+    }).then(function(ok) {
+        if (!ok) return;
+        SurfaceAPI.bulkTriageFindings({ ids: ids, status: "fixed" }).then(function(r) {
+            showStatus(r.updated + " finding(s) " + (t("bulk.fixed") || "corrigé(s)"));
+            ct_bulkbar.clear(scope);
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    });
+};
+
+window._bulkSurfaceFP = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
+    if (!ids.length) return;
+    var interp = function(key, fallback) {
+        return (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
+    };
+    var body = '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px">'
+             + esc(interp("bulk.fp_help", "La justification sera attachée à chaque finding pour audit."))
+             + '</div>'
+             + '<div class="ct-measure-form">'
+             +   '<label>' + esc(t("bulk.fp_justification") || "Justification") + ' *'
+             +     '<textarea id="surface-bulk-fp-notes" rows="5" placeholder="'
+             +     esc(t("bulk.fp_placeholder") || "Expliquer pourquoi ces findings sont des faux positifs") + '"></textarea>'
+             +   '</label>'
+             + '</div>';
+    ct_modal.open({
+        title: interp("bulk.fp_title", "Déclarer {n} finding(s) comme faux positifs"),
+        body: body,
+        size: "md",
+        onOpen: function() { var el = document.getElementById("surface-bulk-fp-notes"); if (el) el.focus(); },
+        buttons: [
+            { id: "cancel", label: t("btn_cancel") || "Annuler" },
+            { id: "save", primary: true, label: interp("bulk.fp_confirm", "Confirmer ({n})"),
+              result: function() {
+                  var notes = ((document.getElementById("surface-bulk-fp-notes") || {}).value || "").trim();
+                  if (!notes) {
+                      if (typeof showStatus === "function") showStatus(t("tm.justif_required") || "Justification requise", true);
+                      return false;
+                  }
+                  return { notes: notes };
+              }}
+        ]
+    }).then(function(res) {
+        if (!res) return;
+        SurfaceAPI.bulkTriageFindings({ ids: ids, status: "false_positive", notes: res.notes }).then(function(r) {
+            showStatus(r.updated + " finding(s) → " + (t("bulk.false_positive") || "faux positif"));
+            ct_bulkbar.clear(scope);
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    });
+};
+
+window._bulkSurfaceDelete = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
+    if (!ids.length) return;
     SurfaceAPI.bulkDeleteFindings(ids).then(function(r) {
-        showStatus(r.deleted + " finding(s) supprime(s)");
-        _bulkSelection = {};
+        showStatus(r.deleted + " finding(s) " + (t("bulk.deleted") || "supprimé(s)"));
+        ct_bulkbar.clear(scope);
         _loadAndRender();
-    }).catch(function(e) {
-        showStatus(e.message || t("common.error"), true);
-    });
+    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
+
 
 function _statusLabel(s) {
     return t("status." + s) || s;
+}
+
+// Measure status badge — colored span reused by the Plan d'action table.
+function _measureStatusBadge(statut) {
+    var palette = {
+        a_faire:   "background:#f3f4f6;color:#6b7280",
+        en_cours:  "background:#dbeafe;color:#1e40af",
+        termine:   "background:#dcfce7;color:#166534",
+        annule:    "background:#fee2e2;color:#991b1b"
+    };
+    var style = palette[statut] || palette.a_faire;
+    var label = t("measures.status." + statut) || statut || "";
+    return '<span class="sev-badge" style="' + style + '">' + esc(label) + '</span>';
 }
 
 // All findings filter toggles refresh ONLY the body wrapper, leaving the
@@ -2255,71 +2318,17 @@ window._backToFindings = function() { _selectedFinding = null; renderPanel(); };
 
 function _renderFindingDetail(c) {
     var f = _selectedFinding;
-    var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-icon" data-click="_backToFindings">' + _icon("arrow_left", 14) + ' ' + esc(t("fd.back")) + '</button>';
-    h += '<h2 style="margin:0;flex:1">' + esc(f.title) + '</h2>';
-    h += '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(t("sev." + f.severity)) + '</span>';
-    h += '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>';
-    h += '</div>';
-
-    h += '<div class="surface-card">';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.scanner")) + '</div><div>' + esc(f.scanner) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.type")) + '</div><div>' + esc(f.type) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.target")) + '</div><div>' + esc(f.target || "-") + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.created")) + '</div><div>' + esc(_fmtDate(f.created_at || "", "long")) + '</div></div>';
-    if (f.triaged_at) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.triaged")) + '</div><div>' + esc(_fmtDate(f.triaged_at || "", "long")) + ' ' + esc(t("fd.triaged_by")) + ' ' + esc(f.triaged_by || "?") + '</div></div>';
-    }
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.description")) + '</div><div style="white-space:pre-wrap">' + esc(f.description || t("fd.description_none")) + '</div></div>';
-    if (f.evidence && Object.keys(f.evidence).length) {
-        // Screenshot preview: when the scanner embeds a base64 PNG in
-        // evidence.png_b64, render it inline. Strip the blob from the
-        // JSON dump so the evidence block stays readable.
-        var evDisplay = f.evidence;
-        if (f.evidence.png_b64 && typeof f.evidence.png_b64 === "string") {
-            var b64 = f.evidence.png_b64;
-            var src = "data:image/png;base64," + b64;
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.screenshot") || "Screenshot") + '</div>'
-              +  '<div><a href="' + esc(src) + '" target="_blank" rel="noopener" title="' + esc(t("fd.screenshot_open") || "Open full size") + '">'
-              +  '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
-              +  '</a></div></div>';
-            evDisplay = Object.assign({}, f.evidence, { png_b64: "[" + Math.round(b64.length * 0.75 / 1024) + " KB PNG — affiché au-dessus]" });
-        }
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.evidence")) + '</div><div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">' + esc(JSON.stringify(evDisplay, null, 2)) + '</pre></div></div>';
-    }
-    if (f.triage_notes) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.notes")) + '</div><div style="white-space:pre-wrap">' + esc(f.triage_notes) + '</div></div>';
-    }
-    h += '</div>';
-
-    h += '<div class="surface-card">';
-    h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(t("fd.triage")) + '</h3>';
-    h += '<textarea id="triage-notes" placeholder="' + esc(t("fd.triage_notes_ph")) + '" style="width:100%;min-height:60px;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:0.85em;margin-bottom:8px">' + esc(f.triage_notes || "") + '</textarea>';
-    h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-fix btn-icon" data-click="_triageDetail" data-args=\'["to_fix"]\'>' + _icon("check", 14) + ' ' + esc(t("fd.triage_to_fix")) + '</button>';
-    h += '<button class="btn-add btn-fp btn-icon" data-click="_triageDetail" data-args=\'["false_positive"]\'>' + _icon("x", 14) + ' ' + esc(t("fd.triage_fp")) + '</button>';
-    if (f.status !== "new") {
-        h += '<button class="btn-add" data-click="_triageDetail" data-args=\'["new"]\'>' + esc(t("fd.triage_reset")) + '</button>';
-    }
-    if (window._aiIsEnabled && window._aiIsEnabled()) h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
-    h += '<span style="flex:1"></span>';
-    h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteFindingDetail">' + esc(t("fd.delete")) + '</button>';
-    h += '</div>';
-    h += '<div id="ai-triage-result" style="display:none;margin-top:12px;padding:12px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;font-size:0.88em"></div>';
-    h += '</div>';
-
-    if (f.measure_id) {
-        var m = _measures.find(function(x) { return x.id === f.measure_id; });
-        if (m) {
-            h += '<div class="surface-card">';
-            h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(t("fd.measure_linked")) + '</h3>';
-            h += '<div style="font-weight:600">' + esc(m.id) + ' &mdash; ' + esc(m.title) + '</div>';
-            h += '<div style="font-size:0.82em;color:var(--text-muted);margin-top:4px">' + esc(t("fd.measure_status")) + ' : ' + esc(t("measures.status." + m.statut) || m.statut) + (m.responsable ? ' &middot; ' + esc(t("fd.measure_owner")) + ' : ' + esc(m.responsable) : '') + (m.echeance ? ' &middot; ' + esc(t("fd.measure_due")) + ' : ' + esc(m.echeance) : '') + '</div>';
-            h += '</div>';
-        }
-    }
-
-    c.innerHTML = h;
+    var linked = null;
+    if (f.measure_id) linked = _measures.find(function(x) { return x.id === f.measure_id; }) || null;
+    c.innerHTML = ct_finding_view.render(f, {
+        backHandler: "_backToFindings",
+        triageHandler: "_triageDetail",
+        aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
+        aiHandler: "_aiTriageFinding",
+        deleteHandler: "_deleteFindingDetail",
+        linkedMeasure: linked,
+        cardClass: "surface-card"
+    });
 }
 
 // v0.3 — AI triage button: sends the finding to the configured LLM
@@ -2424,28 +2433,30 @@ window._aiTriageFinding = async function() {
     }
     box.style.display = "block";
     box.innerHTML = '<em>' + esc(t("fd.ai_analyzing")) + '…</em>';
-    var systemPrompt = (
-        "Tu es un analyste cybersécurité senior. L'utilisateur te donne un finding issu d'un scan ASM. " +
-        "Tu dois répondre UNIQUEMENT en JSON strict, sans texte autour, avec ces champs : " +
-        '{"is_probable_false_positive": boolean, "confidence": number between 0 and 1, ' +
-        '"severity_recommendation": "critical"|"high"|"medium"|"low"|"info", ' +
-        '"summary": "2-3 phrases expliquant la finding au CISO", ' +
-        '"remediation": ["étape 1", "étape 2", "étape 3"], ' +
-        '"references": ["URL 1", "URL 2"]}. ' +
-        "Sois concret et actionnable."
-    );
-    var userPrompt = (
-        "Scanner : " + (f.scanner || "unknown") + "\n" +
-        "Type : " + (f.type || "unknown") + "\n" +
-        "Cible : " + (f.target || "unknown") + "\n" +
-        "Sévérité actuelle : " + (f.severity || "unknown") + "\n" +
-        "Titre : " + (f.title || "") + "\n\n" +
-        "Description :\n" + (f.description || "(aucune)") + "\n\n" +
-        "Évidence :\n" + JSON.stringify(f.evidence || {}, null, 2)
-    );
+    // Métier endpoint: the methodology prompt + NVD enrichment are built
+    // server-side (POST /api/ai/surface/analyze-finding). The browser only
+    // ships the raw finding — same-origin, so the strict CSP is satisfied
+    // (the old client-side NVD fetch was blocked by connect-src 'self').
     try {
-        var raw = await window._aiCallAPI(systemPrompt, userPrompt);
-        var parsed = window._aiParseJSON ? window._aiParseJSON(raw) : JSON.parse(raw);
+        var resp = await fetch("api/ai/surface/analyze-finding", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                scanner: f.scanner || "",
+                type: f.type || "",
+                target: f.target || "",
+                severity: f.severity || "",
+                title: f.title || "",
+                description: f.description || "",
+                evidence: f.evidence || {}
+            })
+        });
+        if (!resp.ok) {
+            var errTxt = await resp.text();
+            throw new Error("API " + resp.status + ": " + errTxt.substring(0, 200));
+        }
+        var parsed = await resp.json();
         var fp = parsed.is_probable_false_positive;
         var conf = Math.round((parsed.confidence || 0) * 100);
         var sev = parsed.severity_recommendation || "";
@@ -2470,148 +2481,51 @@ window._aiTriageFinding = async function() {
         }
         box.innerHTML = html;
     } catch (e) {
-        box.innerHTML = '<strong style="color:#991b1b">' + esc(t("fd.ai_error")) + '</strong><br>' +
-            '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(e.message || String(e)) + '</span>';
+        box.innerHTML = '<div class="ai-error">' + esc(t("ai.error", {msg: e.message || String(e)})) + '</div>';
     }
 };
 
-// ── Triage modals ─────────────────────────────────────────────
+// ── Triage flow (delegates to ct_finding_view) ─────────────────
 
-var _triageContext = null;  // {id, status, finding}
-
-function _ensureTriageModal() {
-    var ov = document.getElementById("triage-overlay");
-    if (ov) return ov;
-    ov = document.createElement("div");
-    ov.id = "triage-overlay";
-    ov.className = "ct-modal-overlay";
-    ov.innerHTML =
-        '<div class="ct-modal">' +
-            '<div class="ct-modal-header"><span id="triage-modal-title"></span><button class="ct-modal-close" data-click="_closeTriageModal">' + _icon("x", 18) + '</button></div>' +
-            '<div class="ct-modal-body" id="triage-modal-body"></div>' +
-            '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeTriageModal">' + esc(t("action.cancel")) + '</button>' +
-                '<button class="btn-add" id="triage-confirm-btn" data-click="_submitTriage">' + esc(t("action.confirm")) + '</button>' +
-            '</div>' +
-        '</div>';
-    document.body.appendChild(ov);
-    ov.addEventListener("click", function(e) { if (e.target === ov) _closeTriageModal(); });
-    return ov;
-}
-
-window._closeTriageModal = function() {
-    var ov = document.getElementById("triage-overlay");
-    if (ov) ov.classList.remove("open");
-    _triageContext = null;
-};
-
-function _openTriageModal(finding, status) {
-    _triageContext = { id: finding.id, status: status, finding: finding };
-    var ov = _ensureTriageModal();
-    var title = document.getElementById("triage-modal-title");
-    var body = document.getElementById("triage-modal-body");
-    var btn = document.getElementById("triage-confirm-btn");
-
-    if (status === "to_fix") {
-        title.textContent = t("tm.title_to_fix");
-        btn.textContent = t("tm.confirm_to_fix");
-        btn.style.background = "#16a34a";
-        btn.style.color = "white";
-        body.innerHTML =
-            '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px"><strong>' + esc(t("tm.finding")) + '</strong> ' + esc(finding.title) + '</div>' +
-            '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("tm.measure_name")) + '</label>' +
-                '<input type="text" class="ct-input" id="triage-measure-title" value="' + esc(finding.title) + '">' +
-                '<div class="ct-field-help">' + esc(t("tm.measure_name_help")) + '</div>' +
-            '</div>' +
-            '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("tm.measure_desc")) + '</label>' +
-                '<textarea class="ct-input" id="triage-measure-desc" rows="5">' + esc(finding.description || "") + '</textarea>' +
-            '</div>' +
-            '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("tm.measure_owner")) + '</label>' +
-                '<input type="text" class="ct-input" id="triage-measure-resp" placeholder="' + esc(t("tm.measure_owner_ph")) + '">' +
-            '</div>' +
-            '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("tm.measure_due")) + '</label>' +
-                '<input type="date" class="ct-input" id="triage-measure-due">' +
-            '</div>' +
-            '<div class="ct-error" id="triage-error" style="display:none"></div>';
-    } else if (status === "false_positive") {
-        title.textContent = t("tm.title_fp");
-        btn.textContent = t("tm.confirm_fp");
-        btn.style.background = "#6b7280";
-        btn.style.color = "white";
-        body.innerHTML =
-            '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px"><strong>' + esc(t("tm.finding")) + '</strong> ' + esc(finding.title) + '</div>' +
-            '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("tm.fp_justif")) + '</label>' +
-                '<textarea class="ct-input" id="triage-fp-notes" rows="5" placeholder="' + esc(t("tm.fp_justif_ph")) + '"></textarea>' +
-                '<div class="ct-field-help">' + esc(t("tm.fp_justif_help")) + '</div>' +
-            '</div>' +
-            '<div class="ct-error" id="triage-error" style="display:none"></div>';
-    } else {
-        // status reset to "new"
-        title.textContent = t("tm.title_reset");
-        btn.textContent = t("tm.confirm_reset");
-        btn.style.background = "";
-        btn.style.color = "";
-        body.innerHTML =
-            '<div style="font-size:0.85em">' + esc(t("tm.reset_help")) + '</div>' +
-            '<div class="ct-error" id="triage-error" style="display:none"></div>';
-    }
-
-    ov.classList.add("open");
-    setTimeout(function() {
-        var first = body.querySelector("input[type=text], textarea");
-        if (first) first.focus();
-    }, 50);
-}
-
-window._submitTriage = function() {
-    if (!_triageContext) return;
-    var payload = { status: _triageContext.status };
-    var err = document.getElementById("triage-error");
-    err.style.display = "none";
-
-    if (_triageContext.status === "to_fix") {
-        var mTitle = (document.getElementById("triage-measure-title").value || "").trim();
-        if (!mTitle) { err.textContent = t("tm.name_required"); err.style.display = "block"; return; }
-        payload.measure_title = mTitle;
-        payload.measure_description = (document.getElementById("triage-measure-desc").value || "").trim();
-        payload.responsable = (document.getElementById("triage-measure-resp").value || "").trim();
-        payload.echeance = (document.getElementById("triage-measure-due").value || "").trim();
-    } else if (_triageContext.status === "false_positive") {
-        var fpNotes = (document.getElementById("triage-fp-notes").value || "").trim();
-        if (!fpNotes) { err.textContent = t("tm.justif_required"); err.style.display = "block"; return; }
-        payload.notes = fpNotes;
-    }
-
-    SurfaceAPI.triageFinding(_triageContext.id, payload).then(function() {
-        _closeTriageModal();
-        showStatus(t("triage.status_prefix") + " " + _statusLabel(_triageContext ? _triageContext.status : payload.status));
-        _selectedFinding = null;
-        _loadAndRender();
-    }).catch(function(e) {
-        err.textContent = e.message || t("common.error");
-        err.style.display = "block";
+function _runSurfaceTriage(finding, status) {
+    return ct_finding_view.openTriageModal(finding, status, {
+        ownerPickerId: "surface-triage-owner",
+        directoryUrl: "api/directory"
+    }).then(function(payload) {
+        if (!payload) return;
+        return SurfaceAPI.triageFinding(finding.id, payload).then(function() {
+            showStatus(t("triage.status_prefix") + " " + _statusLabel(payload.status));
+            _selectedFinding = null;
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
     });
-};
+}
 
 window._triageDetail = function(status) {
     if (!_selectedFinding) return;
-    _openTriageModal(_selectedFinding, status);
+    _runSurfaceTriage(_selectedFinding, status);
 };
 
 window._quickTriage = function(id, status) {
     var f = _findings.find(function(x) { return x.id === id; });
     if (!f) return;
-    _openTriageModal(f, status);
+    _runSurfaceTriage(f, status);
 };
 
 window._deleteFindingDetail = function() {
     if (!_selectedFinding) return;
-    if (!confirm(t("fd.delete_confirm"))) return;
-    SurfaceAPI.deleteFinding(_selectedFinding.id).then(function() {
-        _selectedFinding = null;
-        showStatus(t("fd.deleted"));
-        _loadAndRender();
-    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    ct_modal.confirm({
+        title: t("fd.delete") || "Supprimer",
+        message: t("fd.delete_confirm") || "Supprimer ce finding ? Cette action est irréversible.",
+        danger: true
+    }).then(function(ok) {
+        if (!ok) return;
+        SurfaceAPI.deleteFinding(_selectedFinding.id).then(function() {
+            _selectedFinding = null;
+            showStatus(t("fd.deleted") || "Finding supprimé");
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    });
 };
 
 window._quickScanDialog = function() {
@@ -2738,7 +2652,7 @@ function _ensureBulkImportModal() {
         ov.id = "bulk-import-overlay";
         ov.className = "ct-modal-overlay";
         document.body.appendChild(ov);
-        ov.addEventListener("click", function(e) { if (e.target === ov) _closeBulkImportModal(); });
+        var _md = null; ov.addEventListener("mousedown", function(e) { _md = e.target; }); ov.addEventListener("click", function(e) { if (e.target === ov && _md === ov) _closeBulkImportModal(); });
     }
     var tt = typeof t === "function" ? t : function(k) { return k; };
     ov.innerHTML =
@@ -2892,47 +2806,136 @@ window._bulkImportDialog = function() {
 // MEASURES
 // ═══════════════════════════════════════════════════════════════
 function _renderMeasures(c) {
-    var h = '<h2>' + esc(t("measures.title")) + '</h2>';
+    var total = _measures.length;
+    var done = _measures.filter(function(m) { return m.statut === "termine"; }).length;
+    var inProg = _measures.filter(function(m) { return m.statut === "en_cours"; }).length;
+    var todo = total - done - inProg;
+
+    var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    h += '<h2 style="margin:0">' + esc(t("measures.title")) + '</h2>';
+    h += '<span style="flex:1"></span>';
+    if (total > 0) {
+        h += '<span class="sev-badge" style="background:#dcfce7;color:#166534">' + done + ' ' + esc(t("measures.status.termine")) + '</span>';
+        h += '<span class="sev-badge" style="background:#dbeafe;color:#1e40af">' + inProg + ' ' + esc(t("measures.status.en_cours")) + '</span>';
+        h += '<span class="sev-badge" style="background:#f3f4f6;color:#6b7280">' + todo + ' ' + esc(t("measures.status.a_faire")) + '</span>';
+    }
+    h += '</div>';
     h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("measures.help")) + '</div>';
 
-    if (!_measures.length) {
+    if (!total) {
         h += '<div class="empty-state">' + esc(t("measures.empty")) + '</div>';
         c.innerHTML = h;
         return;
     }
 
-    h += '<table class="surface-table"><thead><tr>'
-      + '<th>' + esc(t("measures.col.id")) + '</th>'
-      + '<th>' + esc(t("measures.col.title")) + '</th>'
-      + '<th>' + esc(t("measures.col.status")) + '</th>'
-      + '<th>' + esc(t("measures.col.owner")) + '</th>'
-      + '<th>' + esc(t("measures.col.due")) + '</th>'
-      + '</tr></thead><tbody>';
-    _measures.forEach(function(m) {
-        h += '<tr>';
-        h += '<td style="font-family:monospace;font-size:0.85em">' + esc(m.id) + '</td>';
-        h += '<td>' + esc(m.title) + '</td>';
-        h += '<td><select data-change="_updMeasure" data-args=\'' + _da(m.id, "statut") + '\' data-pass-value style="font-size:0.8em">';
-        ["a_faire", "en_cours", "termine"].forEach(function(s) {
-            h += '<option value="' + s + '"' + (m.statut === s ? " selected" : "") + '>' + esc(t("measures.status." + s)) + '</option>';
-        });
-        h += '</select></td>';
-        h += '<td><input type="text" value="' + esc(m.responsable || "") + '" data-change="_updMeasure" data-args=\'' + _da(m.id, "responsable") + '\' data-pass-value style="width:100%;font-size:0.8em" placeholder="-"></td>';
-        h += '<td><input type="date" value="' + esc(m.echeance || "") + '" data-change="_updMeasure" data-args=\'' + _da(m.id, "echeance") + '\' data-pass-value style="font-size:0.8em"></td>';
-        h += '</tr>';
+    var today = new Date().toISOString().substring(0, 10);
+
+    h += ct_table.render({
+        rows: _measures,
+        rowKey: "id",
+        onRowClick: "_editSurfaceMeasureRow",
+        bulk: { scope: "surface-measures" },
+        rowClass: function(m) {
+            return (m.echeance && m.statut !== "termine" && m.echeance < today) ? "row-overdue" : "";
+        },
+        columns: [
+            { key: "id", label: t("measures.col.id"), width: "110px",
+              render: function(m) { return '<span style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(m.id) + '</span>'; } },
+            { key: "title", label: t("measures.col.title"),
+              render: function(m) { return esc(m.title || ""); } },
+            { key: "finding_ids", label: t("measures.col.findings") || "Findings", width: "90px",
+              render: function(m) {
+                  var n = (m.finding_ids && m.finding_ids.length) ? m.finding_ids.length : (m.finding_id ? 1 : 0);
+                  return '<span class="fs-sm text-muted">' + n + '</span>';
+              } },
+            { key: "statut", label: t("measures.col.status"), width: "110px",
+              render: function(m) { return _measureStatusBadge(m.statut); } },
+            { key: "responsable", label: t("measures.col.owner"),
+              render: function(m) { return esc(m.responsable || ""); } },
+            { key: "echeance", label: t("measures.col.due"), width: "140px",
+              render: function(m) {
+                  if (!m.echeance) return "";
+                  var overdue = m.statut !== "termine" && m.echeance < today;
+                  return overdue
+                      ? '<span style="color:#dc2626;font-weight:600">' + esc(m.echeance) + ' ⚠</span>'
+                      : esc(m.echeance);
+              } }
+        ]
     });
-    h += '</tbody></table>';
 
     c.innerHTML = h;
+
+    ct_bulkbar.attach({
+        scope: "surface-measures",
+        label: "{n} mesure(s) sélectionnée(s)",
+        actions: [
+            { id: "done", icon: "check", label: t("measures.status.termine") || "Terminé", variant: "success",
+              onClick: "_bulkSurfaceMeasuresDone" },
+            { id: "delete", icon: "trash", label: t("bulk.delete") || "Supprimer", danger: true,
+              onClick: "_bulkSurfaceMeasuresDelete",
+              confirm: { title: "Supprimer {n} mesure(s) ?", message: "Cette action est irréversible." } }
+        ]
+    });
+    ct_bulkbar.update("surface-measures");
 }
 
-window._updMeasure = function(id, field, val) {
-    var data = {}; data[field] = val;
-    SurfaceAPI.updateMeasure(id, data).then(function() {
-        showStatus(t("measures.updated"));
-        var m = _measures.find(function(x) { return x.id === id; });
-        if (m) m[field] = val;
-    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+window._editSurfaceMeasureRow = function(row) {
+    var m = _measures.find(function(x) { return x.id === row.id; });
+    if (!m) return;
+    ct_measure_modal.open(m, {
+        title: m.id + " — " + (m.title || "Mesure"),
+        hideFields: ["type"],
+        statusOptions: [
+            { value: "a_faire",  label: t("measures.status.a_faire") || "À faire" },
+            { value: "en_cours", label: t("measures.status.en_cours") || "En cours" },
+            { value: "termine",  label: t("measures.status.termine") || "Terminé" }
+        ],
+        defaultStatus: "a_faire",
+        ownerPicker: { pickerId: "surface-measure-owner", directoryUrl: "api/directory" },
+        onDelete: function() {
+            ct_modal.confirm({
+                title: "Supprimer la mesure",
+                message: "Cette action est irréversible.",
+                danger: true
+            }).then(function(ok) {
+                if (!ok) return;
+                SurfaceAPI.deleteMeasure(m.id).then(function() {
+                    showStatus(t("measures.deleted") || "Mesure supprimée");
+                    _loadAndRender();
+                }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+            });
+        }
+    }).then(function(result) {
+        if (!result || result.__deleted) return;
+        SurfaceAPI.updateMeasure(m.id, result).then(function() {
+            showStatus(t("measures.updated") || "Mesure mise à jour");
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    });
+};
+
+window._bulkSurfaceMeasuresDone = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
+    if (!ids.length) return;
+    Promise.all(ids.map(function(id) { return SurfaceAPI.updateMeasure(id, { statut: "termine" }); }))
+        .then(function() {
+            showStatus(ids.length + " " + (t("measures.marked_done") || "mesure(s) terminée(s)"));
+            ct_bulkbar.clear(scope);
+            _loadAndRender();
+        })
+        .catch(function(e) { showStatus(e.message || t("common.error"), true); });
+};
+
+window._bulkSurfaceMeasuresDelete = function(scope) {
+    var ids = Array.from(ct_bulkbar.getSelection(scope));
+    if (!ids.length) return;
+    Promise.all(ids.map(function(id) { return SurfaceAPI.deleteMeasure(id); }))
+        .then(function() {
+            showStatus(ids.length + " " + (t("measures.deleted") || "mesure(s) supprimée(s)"));
+            ct_bulkbar.clear(scope);
+            _loadAndRender();
+        })
+        .catch(function(e) { showStatus(e.message || t("common.error"), true); });
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -3205,54 +3208,19 @@ window._backToHosts = function() {
 
 function _renderHostFindingInline(c, hostValue) {
     var f = _hostSelectedFinding;
-    var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-icon" data-click="_backToHostFromFinding">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back_to_host") || "Retour au host") + '</button>';
-    h += '<h2 style="margin:0;flex:1">' + esc(f.title) + '</h2>';
-    h += '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(t("sev." + f.severity)) + '</span>';
-    h += '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>';
-    h += '</div>';
-
-    h += '<div class="surface-card">';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.scanner")) + '</div><div>' + esc(f.scanner) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.type")) + '</div><div>' + esc(f.type) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.target")) + '</div><div>' + esc(f.target || "-") + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.created")) + '</div><div>' + esc(_fmtDate(f.created_at || "", "long")) + '</div></div>';
-    if (f.triaged_at) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.triaged")) + '</div><div>' + esc(_fmtDate(f.triaged_at || "", "long")) + ' ' + esc(t("fd.triaged_by")) + ' ' + esc(f.triaged_by || "?") + '</div></div>';
-    }
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.description")) + '</div><div style="white-space:pre-wrap">' + esc(f.description || t("fd.description_none")) + '</div></div>';
-    if (f.evidence && Object.keys(f.evidence).length) {
-        var evDisplay = f.evidence;
-        if (f.evidence.png_b64 && typeof f.evidence.png_b64 === "string") {
-            var b64 = f.evidence.png_b64;
-            var src = "data:image/png;base64," + b64;
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.screenshot") || "Screenshot") + '</div>'
-              +  '<div><a href="' + esc(src) + '" target="_blank" rel="noopener" title="' + esc(t("fd.screenshot_open") || "Open full size") + '">'
-              +  '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
-              +  '</a></div></div>';
-            evDisplay = Object.assign({}, f.evidence, { png_b64: "[" + Math.round(b64.length * 0.75 / 1024) + " KB PNG]" });
-        }
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.evidence")) + '</div><div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">' + esc(JSON.stringify(evDisplay, null, 2)) + '</pre></div></div>';
-    }
-    if (f.triage_notes) {
-        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("fd.notes")) + '</div><div style="white-space:pre-wrap">' + esc(f.triage_notes) + '</div></div>';
-    }
-    h += '</div>';
-
-    // Triage actions
-    h += '<div class="surface-card">';
-    h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(t("fd.triage")) + '</h3>';
-    h += '<textarea id="triage-notes" placeholder="' + esc(t("fd.triage_notes_ph")) + '" style="width:100%;min-height:60px;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:0.85em;margin-bottom:8px">' + esc(f.triage_notes || "") + '</textarea>';
-    h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-fix btn-icon" data-click="_triageHostFinding" data-args=\'["to_fix"]\'>' + _icon("check", 14) + ' ' + esc(t("fd.triage_to_fix")) + '</button>';
-    h += '<button class="btn-add btn-fp btn-icon" data-click="_triageHostFinding" data-args=\'["false_positive"]\'>' + _icon("x", 14) + ' ' + esc(t("fd.triage_fp")) + '</button>';
-    if (f.status !== "new") {
-        h += '<button class="btn-add" data-click="_triageHostFinding" data-args=\'["new"]\'>' + esc(t("fd.triage_reset")) + '</button>';
-    }
-    if (window._aiIsEnabled && window._aiIsEnabled()) h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="_aiTriageFinding">' + _icon("zap", 14) + ' ' + esc(t("fd.ai_triage")) + '</button>';
-    h += '</div></div>';
-
-    c.innerHTML = h;
+    // Same shared vertical card stack as the main findings detail page,
+    // only the back button goes to the host detail instead of the findings
+    // list.
+    var linked = null;
+    if (f.measure_id) linked = _measures.find(function(x) { return x.id === f.measure_id; }) || null;
+    c.innerHTML = ct_finding_view.render(f, {
+        backHandler: "_backToHostFromFinding",
+        triageHandler: "_triageHostFindingDetail",
+        aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
+        aiHandler: "_aiTriageFinding",
+        linkedMeasure: linked,
+        cardClass: "surface-card"
+    });
 }
 
 function _renderHostDetail(c) {
@@ -3382,55 +3350,53 @@ function _renderHostDetail(c) {
     if (!hostFindings.length) {
         h += '<div class="empty-state">' + esc(t("host.findings_empty")) + '</div>';
     } else {
-        // Prune selection to current host findings
-        var hostIds = {};
-        hostFindings.forEach(function(f) { hostIds[f.id] = true; });
-        Object.keys(_bulkSelection).forEach(function(id) { if (!hostIds[id]) delete _bulkSelection[id]; });
-        var selectedCount = Object.keys(_bulkSelection).length;
-        var allChecked = hostFindings.length > 0 && hostFindings.every(function(f) { return _bulkSelection[f.id]; });
-
-        h += '<table class="surface-table"><thead><tr>';
-        h += '<th style="width:28px"><input type="checkbox" id="host-bulk-select-all"' + (allChecked ? " checked" : "") + ' data-change="_toggleHostBulkAll" data-pass-value></th>';
-        h += '<th>' + esc(t("findings.col.severity")) + '</th>';
-        h += '<th>Scanner</th>';
-        h += '<th>' + esc(t("findings.col.type")) + '</th>';
-        h += '<th>' + esc(t("findings.col.title")) + '</th>';
-        h += '<th>' + esc(t("findings.col.status")) + '</th>';
-        h += '<th>' + esc(t("findings.col.datetime")) + '</th>';
-        h += '<th></th></tr></thead><tbody>';
-        hostFindings.forEach(function(f) {
-            var checked = _bulkSelection[f.id] ? " checked" : "";
-            var dateDisplay = f.created_at ? (_fmtDate(f.created_at)) : "-";
-            h += '<tr class="finding-row sev-' + esc(f.severity) + ' status-' + esc(f.status) + '" data-click="_openFindingFromHost" data-args=\'' + _da(f.id) + '\'>';
-            h += '<td data-stop><input type="checkbox" class="bulk-check"' + checked + ' data-click="_toggleBulkOne" data-args=\'' + _da(f.id) + '\' data-stop></td>';
-            h += '<td><span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>';
-            h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(f.scanner) + '</td>';
-            h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type) + '</td>';
-            h += '<td style="font-weight:600">' + esc(f.title) + '</td>';
-            h += '<td><span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span></td>';
-            h += '<td style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(dateDisplay) + '</td>';
-            h += '<td style="white-space:nowrap" data-stop>';
-            if (f.status !== "to_fix") h += '<button class="btn-mini btn-fix" data-click="_quickTriage" data-args=\'' + _da(f.id, "to_fix") + '\' data-stop title="' + esc(t("status.to_fix")) + '">' + _icon("check", 14) + '</button> ';
-            if (f.status !== "false_positive") h += '<button class="btn-mini btn-fp" data-click="_quickTriage" data-args=\'' + _da(f.id, "false_positive") + '\' data-stop title="' + esc(t("status.false_positive")) + '">' + _icon("x", 14) + '</button>';
-            h += '</td>';
-            h += '</tr>';
+        // Render via the shared ct_table + ct_bulkbar so the host view
+        // uses the same chrome / bulk actions as the main Findings panel.
+        // The scope 'surface-findings' is shared — a selection made here
+        // survives navigation back to the main panel, which is what the
+        // user expects (selection follows findings, not the view).
+        h += ct_table.render({
+            rows: hostFindings,
+            rowKey: "id",
+            onRowClick: "_openFindingRowFromHost",
+            rowClass: function(f) { return "finding-row sev-" + f.severity + " status-" + f.status; },
+            bulk: { scope: "surface-findings" },
+            columns: [
+                { key: "severity", label: t("findings.col.severity"), width: "80px",
+                  render: function(f) { return '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span>'; } },
+                { key: "scanner", label: "Scanner",
+                  render: function(f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.scanner || "") + '</span>'; } },
+                { key: "type", label: t("findings.col.type"),
+                  render: function(f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type || "") + '</span>'; } },
+                { key: "title", label: t("findings.col.title"),
+                  render: function(f) { return '<span style="font-weight:600">' + esc(f.title || "") + '</span>'; } },
+                { key: "status", label: t("findings.col.status"), width: "110px",
+                  render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>'; } },
+                { key: "created_at", label: t("findings.col.datetime"), width: "130px",
+                  render: function(f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
+            ],
+            actions: [
+                { icon: "check", label: t("status.to_fix"), onClick: "_quickTriageRow",
+                  show: function(f) { return f.status !== "to_fix"; } },
+                { icon: "x", label: t("status.false_positive"), onClick: "_quickTriageFpRow",
+                  show: function(f) { return f.status !== "false_positive"; } }
+            ]
         });
-        h += '</tbody></table>';
-
-        if (selectedCount > 0) {
-            h += '<div class="bulk-action-bar">';
-            h += '<span class="bulk-count">' + selectedCount + ' ' + esc(t("bulk.selected")) + '</span>';
-            h += '<button class="btn-add btn-fp btn-icon" data-click="_bulkFalsePositiveDialog">' + _icon("x", 14) + ' ' + esc(t("bulk.false_positive")) + '</button>';
-            h += '<button class="btn-add btn-fix btn-icon" data-click="_bulkToFixDialog">' + _icon("check", 14) + ' ' + esc(t("bulk.to_fix")) + '</button>';
-            h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_bulkDelete">' + _icon("trash", 14) + ' ' + esc(t("bulk.delete")) + '</button>';
-            h += '<span style="flex:1"></span>';
-            h += '<button class="btn-add" data-click="_bulkClearSelection">' + esc(t("bulk.clear")) + '</button>';
-            h += '</div>';
-        }
     }
 
     c.innerHTML = h;
+    // Attach the same bulkbar handlers used by the main Findings panel
+    // so "À corriger" / "Corrigé" / "FP" / "Supprimer" behave identically.
+    _setupFindingsBulkbar();
+    ct_bulkbar.update("surface-findings");
 }
+
+// Row click in the host-detail table: same legacy behaviour as the
+// <tr data-click="_openFindingFromHost"> but signature adapted to
+// ct_table which passes the row object.
+window._openFindingRowFromHost = function(row) {
+    if (row && row.id) window._openFindingFromHost(row.id);
+};
 
 window._toggleMonitoredScanner = function(s) {
     var i = _monitoredFilterScanners.indexOf(s);
@@ -3448,32 +3414,29 @@ window._backToHostFromFinding = function() {
     renderPanel();
 };
 
-window._triageHostFinding = function(newStatus) {
+// Host-detail finding triage delegates to the same shared dialog as the
+// main Findings panel (ct_finding_view.openTriageModal → ct_measure_modal
+// for to_fix, ct_modal for fp/new). The only difference is that after a
+// successful triage we return to the host detail, not the findings list.
+window._triageHostFindingDetail = function(newStatus) {
     var f = _hostSelectedFinding;
     if (!f) return;
-    var notes = (document.getElementById("triage-notes") || {}).value || "";
-
-    if (newStatus === "false_positive" && !notes.trim()) {
-        showStatus(t("fd.fp_justif_required") || "Justification obligatoire", true);
-        return;
-    }
-
-    var body = { status: newStatus, notes: notes };
-    if (newStatus === "to_fix") {
-        var title = prompt(t("fd.measure_title_prompt") || "Nom de la mesure corrective :");
-        if (!title) return;
-        body.measure_title = title;
-    }
-
-    SurfaceAPI.post("/api/findings/" + f.id + "/triage", body).then(function(updated) {
-        // Refresh finding in local array
-        var idx = _findings.findIndex(function(x) { return x.id === f.id; });
-        if (idx >= 0) Object.assign(_findings[idx], updated);
-        _hostSelectedFinding = null;
-        showStatus(t("fd.triage_ok") || "Triage enregistré");
-        renderPanel();
-    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    ct_finding_view.openTriageModal(f, newStatus, {
+        ownerPickerId: "surface-host-triage-owner",
+        directoryUrl: "api/directory"
+    }).then(function(payload) {
+        if (!payload) return;
+        return SurfaceAPI.triageFinding(f.id, payload).then(function() {
+            showStatus(t("fd.triage_ok") || "Triage enregistré");
+            _hostSelectedFinding = null;
+            _loadAndRender();
+        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    });
 };
+
+// Kept for backwards compat: any stale data-click referencing the old
+// handler still resolves to the new flow.
+window._triageHostFinding = window._triageHostFindingDetail;
 
 window._toggleHostHideFP = function() {
     _hostHideFP = !_hostHideFP;
@@ -3481,22 +3444,10 @@ window._toggleHostHideFP = function() {
     renderPanel();
 };
 
-window._toggleHostBulkAll = function() {
-    var el = document.getElementById("host-bulk-select-all");
-    var checked = el && el.checked;
-    if (!_selectedHost) return;
-    var a = _selectedHost;
-    var hostFindings = _findings.filter(function(f) {
-        var tgt = f.target || "";
-        return tgt === a.value || tgt.indexOf(a.value + ":") === 0;
-    });
-    if (checked) {
-        hostFindings.forEach(function(f) { _bulkSelection[f.id] = true; });
-    } else {
-        _bulkSelection = {};
-    }
-    renderPanel();
-};
+// Legacy handler kept so old toolbars referencing it don't error out.
+// ct_table's bulk column now handles "select all" natively via
+// _ctTableBulkToggleAll on the header checkbox.
+window._toggleHostBulkAll = function() {};
 
 window._openFindingFromHost = function(id) {
     var f = _findings.find(function(x) { return x.id === id; });
@@ -3686,6 +3637,13 @@ document.addEventListener("DOMContentLoaded", function() {
     // Initial data load + render
     if (typeof _loadAndRender === "function") _loadAndRender();
 
+    // Hash-based deep link: Pilot opens /surface/#measures to land on
+    // the measures tab directly. Read the hash once after first render.
+    var _hashPanel = (location.hash || "").replace("#", "");
+    if (_hashPanel && typeof selectPanel === "function") {
+        setTimeout(function() { selectPanel(_hashPanel); }, 200);
+    }
+
     // Settings wrapper
     var original = window.openSettings;
     if (typeof original === "function") {
@@ -3702,6 +3660,10 @@ document.addEventListener("DOMContentLoaded", function() {
         };
     }
 });
+
+// Placeholder File-menu actions (wired in toolbar; real impl coming later)
+window.importHosts = function() { showStatus(t("feature.coming_soon")); };
+window.exportReport = function() { showStatus(t("feature.coming_soon")); };
 
 // ═══════════════════════════════════════════════════════════════
 // SHODAN SETTINGS SECTION

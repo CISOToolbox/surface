@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from src.models import Finding, MonitoredAsset, ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.routes.scans import _quick_scan_sync
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
+from src.audit import log_action
 
 router = APIRouter(prefix="/api/monitored-assets", tags=["monitored"])
 
@@ -141,6 +142,7 @@ async def list_assets(
 @router.post("", status_code=201)
 async def create_asset(
     body: MonitoredAssetCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -174,6 +176,7 @@ async def create_asset(
         resolved_ip=resolved_ip,
     )
     db.add(a)
+    await log_action(db, user, request, "asset.create", target=canonical)
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)
@@ -183,6 +186,7 @@ async def create_asset(
 async def update_asset(
     asset_id: uuid.UUID,
     body: MonitoredAssetUpdate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -225,12 +229,14 @@ async def update_asset(
 @router.delete("/{asset_id}", status_code=204)
 async def delete_asset(
     asset_id: uuid.UUID,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     a = await db.get(MonitoredAsset, asset_id)
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
+    await log_action(db, user, request, "asset.delete", target=a.value)
     await db.delete(a)
     await db.commit()
 
@@ -316,6 +322,7 @@ async def _run_manual_scan(
 async def scan_asset(
     asset_id: uuid.UUID,
     background: BackgroundTasks,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -358,6 +365,7 @@ async def scan_asset(
 
 @router.post("/scan-all")
 async def scan_all(
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

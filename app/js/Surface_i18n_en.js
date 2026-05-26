@@ -1,12 +1,26 @@
 if (typeof _registerTranslations === "function") {
     _registerTranslations("en", {
+        "ai.error": "Error: {msg}",
+        "menu_file":              "File",
+        "menu.import_hosts":      "Import hosts",
+        "menu.export_report":     "Export report",
+        "feature.coming_soon":    "Feature coming soon",
         // ── Toolbar / nav ──────────────────────────────────
-        "nav.dashboard":   "Dashboard",
         "nav.monitored":   "Monitoring",
         "nav.hosts":       "Hosts",
         "nav.jobs":        "Scans",
         "nav.findings":    "Findings",
-        "nav.measures":    "Measures",
+        "nav.measures":    "Action Plan",
+        "nav.audit":"Audit Log",
+        "audit.title":"Audit Log",
+        "audit.search":"Search...",
+        "audit.empty":"No audit entries",
+        "audit.entries":"entries",
+        "audit.col_date":"Date",
+        "audit.col_user":"User",
+        "audit.col_action":"Action",
+        "audit.col_target":"Target",
+        "audit.col_details":"Details",
         "nav.help_section":"HELP",
         "nav.help_methodo":"Methodology",
         "nav.help_usage":  "Usage",
@@ -41,8 +55,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>TLS analysis</strong>: validity, chain, expiry, self-signed, hostname mismatch</li>' +
                 '<li><strong>TLS grade (A-F)</strong> — probes TLS 1.0/1.1/1.2/1.3 and SSL 3.0, inspects the negotiated cipher, flags weak suites (RC4, 3DES, NULL, EXPORT, MD5). A single letter grade captures the distance to Mozilla\'s recommended baseline.</li>' +
                 '<li><strong>Security headers grade (A-F)</strong> — grades HSTS, Content-Security-Policy (penalized if it allows <code>unsafe-inline/eval</code>), X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. A Mozilla Observatory-lite check with zero external dependency.</li>' +
-                '<li><strong>Tech stack fingerprinting</strong> — 30+ HTTP signatures (Server, X-Powered-By, Set-Cookie, meta tags, characteristic paths) to identify nginx / Apache / IIS / WordPress / Drupal / Django / Rails / Spring Boot and their version.</li>' +
-                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — the <code>cve_lookup</code> scanner consumes the versioned tech output, queries the NVD 2.0 API, enriches each CVE with its EPSS probability and a CISA KEV flag. Unversioned detections are dropped to avoid 2009-era noise.</li>' +
+                '<li><strong>CVE matching NVD + EPSS + KEV</strong> — the <code>cve_lookup</code> scanner consumes nuclei\'s wappalyzer tech-detect output, queries the NVD 2.0 API, enriches each CVE with its EPSS probability and a CISA KEV flag. Unversioned detections are dropped to avoid noise.</li>' +
                 '<li><strong>Nuclei DAST</strong>: 12 000+ community templates from ProjectDiscovery, rate-limitable to avoid blacklisting</li>' +
             '</ul>' +
             '<h3>4. Specific risk detection</h3>' +
@@ -218,9 +231,12 @@ if (typeof _registerTranslations === "function") {
         "sev.info":     "Info",
 
         // ── Status labels ──────────────────────────────────
+        "status.open":           "Open",
+        "status.new":            "New",
         "status.to_fix":         "To fix",
         "status.false_positive": "False positive",
         "status.fixed":          "Fixed",
+        "status.failed":         "Failed",
         "status.all":            "All",
         "status.to_triage":      "To triage",
 
@@ -252,6 +268,10 @@ if (typeof _registerTranslations === "function") {
         "monitored.next.disabled":    "disabled",
         "monitored.last.never":       "never",
         "monitored.delete_confirm":   "Delete this target?",
+        "monitored.bulk_delete":      "Delete",
+        "monitored.bulk_delete_confirm": "Delete {count} monitored target(s)? This action cannot be undone.",
+        "monitored.bulk_delete_done": "{count} target(s) deleted",
+        "monitored.bulk_delete_partial": "{done} deleted, {errors} error(s)",
 
         // ── Hosts panel ────────────────────────────────────
         "hosts.title":            "Hosts",
@@ -310,6 +330,9 @@ if (typeof _registerTranslations === "function") {
         "bulk.selected":           "finding(s) selected",
         "bulk.false_positive":     "False positive",
         "bulk.to_fix":             "Create corrective measure",
+        "bulk.fixed":              "Fixed",
+        "bulk.choose_action":      "Choose action",
+        "bulk.fixed_confirm":      "{n} finding(s) will be marked as fixed. They will reappear if detected on the next scan.",
         "bulk.delete":             "Delete",
         "bulk.clear":              "Unselect",
         "bulk.fp_title":           "Mark {n} finding(s) as false positives",
@@ -454,7 +477,6 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_summary":              "Summary",
         "fd.ai_remediation":          "Remediation",
         "fd.ai_refs":                 "References",
-        "fd.ai_error":                "AI analysis error",
         "smtp.section":               "Email sending (weekly digest)",
         "smtp.help":                  "Configure the SMTP server used to send the weekly digest and the executive report by email.",
         "smtp.host":                  "Host",
@@ -514,6 +536,9 @@ if (typeof _registerTranslations === "function") {
         "fd.measure_status":         "Status",
         "fd.measure_owner":          "Owner",
         "fd.measure_due":            "Deadline",
+        "fd.fp_justif_required":     "Justification is required for false positives",
+        "fd.measure_title_prompt":   "Corrective measure name:",
+        "fd.triage_ok":              "Triage saved",
 
         // ── Triage modal (single) ─────────────────────────
         "tm.title_to_fix":           "Create a corrective measure",
@@ -537,7 +562,7 @@ if (typeof _registerTranslations === "function") {
         "tm.justif_required":        "Justification is required",
 
         // ── Measures panel ────────────────────────────────
-        "measures.title":            "Corrective measures",
+        "measures.title":            "Action Plan",
         "measures.help":             "Action plan from triaged findings. Each measure is linked to the finding that created it.",
         "measures.empty":            "No measure created. Measures appear automatically when you triage a finding to 'To fix'.",
         "measures.col.id":           "ID",
@@ -548,6 +573,7 @@ if (typeof _registerTranslations === "function") {
         "measures.status.a_faire":   "To do",
         "measures.status.en_cours":  "In progress",
         "measures.status.termine":   "Done",
+        "measures.col.severity":     "Severity",
         "measures.updated":          "Measure updated",
 
         // ── Quick prompts (utility actions) ───────────────
@@ -559,6 +585,11 @@ if (typeof _registerTranslations === "function") {
 
         // ── Generic & host/nuclei inline strings ──────────
         "common.error":              "Error",
+        "error.bad_request":         "Invalid request",
+        "error.forbidden":           "Access denied",
+        "error.not_found":           "Not found",
+        "error.server":              "Server error, please try again",
+        "error.generic":             "An error occurred",
         "triage.status_prefix":      "Finding",
         "host.deleted":               "Host deleted",
         "nuclei.form.rate_limit":     "Rate limit (req/s)",

@@ -4,6 +4,8 @@ import logging
 import os
 
 from fastapi import FastAPI, Request, Response
+
+_scheduler_task = None  # prevent GC of asyncio task
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -20,6 +22,7 @@ from src.routes.scan_jobs import router as scan_jobs_router
 from src.routes.reports import router as reports_router
 from src.routes.scans import router as scans_router
 from src.routes.users import router as users_router
+from src.routes.audit import router as audit_router
 
 # Suite-integration routers — only present in the full suite build;
 # silently absent in standalone deployments.
@@ -28,17 +31,30 @@ try:
 except ImportError:
     internal_router = None
 
+try:
+    from src.routes.directory_proxy import router as directory_proxy_router
+except ImportError:
+    directory_proxy_router = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("surface-backend")
 
 app = FastAPI(title="Surface Backend", version="0.3.1")
 
 
+@app.exception_handler(Exception)
+async def _global_error_handler(request, exc):
+    import logging as _log
+    _log.getLogger("surface-backend").error("Unhandled error: %s", exc, exc_info=True)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://services.nvd.nist.gov"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -66,8 +82,11 @@ app.include_router(measures_router)
 app.include_router(ai_router)
 app.include_router(reports_router)
 app.include_router(users_router)
+app.include_router(audit_router)
 if internal_router is not None:
     app.include_router(internal_router)
+if directory_proxy_router is not None:
+    app.include_router(directory_proxy_router)
 
 
 @app.get("/api/health")
@@ -114,7 +133,8 @@ async def on_startup():
             set_nuclei_tuning_cache(overrides)
             logger.info("Nuclei tuning loaded from DB: %s", overrides)
 
-    asyncio.create_task(run_scheduler())
+    global _scheduler_task
+    _scheduler_task = asyncio.create_task(run_scheduler())
     logger.info("Surveillance scheduler started")
 
 

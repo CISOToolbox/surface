@@ -20,7 +20,15 @@ async function _fetch(url, opts) {
         throw new Error("Not authenticated");
     }
     if (resp.status === 204) return null;
-    if (!resp.ok) throw new Error("API " + resp.status);
+    if (!resp.ok) {
+        var detail = "";
+        try { var errBody = await resp.json(); detail = errBody.detail || ""; } catch(e2) {}
+        if (!detail || detail.length > 200 || detail.includes("Traceback") || detail.includes("sqlalchemy")) {
+            var msgs = {400: t("error.bad_request") || "Invalid request", 403: t("error.forbidden") || "Access denied", 404: t("error.not_found") || "Not found", 500: t("error.server") || "Server error"};
+            detail = msgs[resp.status] || (t("error.generic") || "Error " + resp.status);
+        }
+        throw new Error(detail);
+    }
     return resp.json();
 }
 
@@ -71,6 +79,7 @@ window.SurfaceAPI = {
     deleteJob: function(id) { return _fetch("/scans/jobs/" + id, { method: "DELETE" }); },
     listMeasures: function() { return _fetch("/measures"); },
     updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data }); },
+    deleteMeasure: function(id) { return _fetch("/measures/" + id, { method: "DELETE" }); },
     // v0.3 — executive report + smtp config
     executiveReport: function() { return _fetch("/reports/executive"); },
     smtpConfig: function() { return _fetch("/reports/smtp/config"); },
@@ -85,3 +94,42 @@ window._appInitCallback = function() {
 };
 
 })();
+
+// ─── Toolbar user pill (name + admin + logout) ──────────────────
+function _initAuth() {
+    fetch("auth/providers").then(function(r) { return r.json(); }).then(function(data) {
+        if (!data.auth_enabled) return;
+        fetch("auth/me", { credentials: "same-origin" }).then(function(r) {
+            if (!r.ok) { var _rp = window.location.pathname.replace(/[^/]*$/, ""); window.location.href = "/login.html?redirect=" + encodeURIComponent(_rp); return; }
+            return r.json();
+        }).then(function(user) {
+            if (!user) return;
+            window._currentUser = user;
+            var right = document.getElementById("toolbar-right");
+            if (!right) return;
+            var h = "";
+            h += '<span style="color:rgba(255,255,255,0.8);font-size:0.8em;margin:0 6px">' + esc(user.name || user.email) + '</span>';
+            if (user.role === "admin") h += '<button style="font-size:0.72em;color:rgba(255,255,255,0.7);background:none;border:1px solid rgba(255,255,255,0.3);border-radius:4px;cursor:pointer;padding:3px 8px;margin-left:4px" data-click="openUserAdmin">Admin</button>';
+            h += '<button style="font-size:0.75em;color:rgba(255,255,255,0.5);background:none;border:none;cursor:pointer;padding:4px 8px" data-click="_logout" title="Sign out">&#x23FB;</button>';
+            var container = document.createElement("span");
+            container.className = "toolbar-right";
+            container.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";
+            container.innerHTML = h;
+            right.parentNode.insertBefore(container, right);
+            fetch("auth/role", { credentials: "same-origin" }).then(function(rr) {
+                return rr.ok ? rr.json() : {};
+            }).then(function(roleInfo) {
+                var role = roleInfo.role || "";
+                window._moduleRole = role;
+                if (role) document.body.classList.add("role-" + role);
+                if (user.role === "admin") document.body.classList.add("role-admin");
+            }).catch(function() {});
+        });
+    }).catch(function() {});
+}
+window._logout = function() {
+    fetch("auth/logout", { method: "POST", credentials: "same-origin" })
+        .finally(function() { window.location.href = "/auth/logout"; });
+};
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _initAuth);
+else _initAuth();
