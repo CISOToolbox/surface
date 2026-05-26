@@ -1,42 +1,19 @@
 /**
  * CISO Toolbox — AI Backend Overrides
  *
- * On any deployment that has a backend, ALL provider interaction goes
- * through the server: key storage (PUT /api/ai/keys), validation
- * (POST /api/ai/validate-key) and completion (POST /api/ai/complete).
- * The browser only ever talks to same-origin, so the module CSP can
- * stay strict (connect-src 'self') — no direct calls to AI providers.
- *
- * Two sub-modes:
- *  - managed (AI_MANAGED_BY_PILOT): keys pushed by Pilot, settings drawer
- *    shows a toggle only.
- *  - standalone-backend: the user enters their own key in the drawer;
- *    it is stored and used server-side.
- *
- * Load AFTER ai_common.js + ct_settings.js. Backend apps only (never
- * loaded in the browser-local opensource builds).
+ * Pilot-managed AI mode: runtime probe, proxy calls, managed settings UI.
+ * Load AFTER ai_common.js. Used by backend apps only (never in opensource).
  */
 (function() {
     "use strict";
 
     var cfg = window.AI_APP_CONFIG || {};
 
-    // Backend deployments support all four providers — the server-side
-    // proxy (/api/ai/complete) handles Anthropic, OpenAI, Bedrock (SigV4)
-    // and a custom OpenAI-compatible endpoint. Credentials are stored and
-    // used server-side; the browser only ever talks to same-origin.
-    window._AI_PROVIDER_ALLOWLIST = ["anthropic", "openai", "bedrock", "custom"];
-
-    function _pfx() { return (cfg.storagePrefix || "ct") + "_ai_"; }
-
     // ═══════════════════════════════════════════════════════════════════
     // RUNTIME PROBE
     // ═══════════════════════════════════════════════════════════════════
 
-    window._aiRuntime = {
-        managed: false, can_use: false, provider: "anthropic", model: "",
-        anthropic_configured: false, openai_configured: false, loaded: false
-    };
+    window._aiRuntime = { managed: false, can_use: false, provider: "anthropic", model: "", loaded: false };
 
     window._aiFetchRuntime = async function() {
         try {
@@ -48,57 +25,65 @@
         } catch (e) {
             window._aiRuntime.loaded = true;
         }
-        // Re-render once the probe is in so AI buttons appear when enabled.
-        if (window._aiIsEnabled && window._aiIsEnabled()) {
+        // Re-render current view so AI buttons appear after probe completes
+        if (window._aiRuntime.managed && window._aiRuntime.can_use) {
             if (typeof renderAll === "function") setTimeout(renderAll, 100);
             else if (typeof renderPanel === "function") setTimeout(renderPanel, 100);
         }
         return window._aiRuntime;
     };
 
+    window._aiFetchRuntime();
+
     // ═══════════════════════════════════════════════════════════════════
-    // OVERRIDE: key accessors — the key lives server-side, never in the
-    // browser. _aiGetApiKey returns a non-empty placeholder only so legacy
-    // `if (!_aiGetApiKey()) return` guards don't misfire.
+    // OVERRIDE: _aiIsEnabled — managed mode checks can_use
     // ═══════════════════════════════════════════════════════════════════
 
+    // Override _aiGetApiKey: in managed mode, return a placeholder
+    // so that guards like `if (!_aiGetApiKey()) return` don't block.
+    var _origGetApiKey = window._aiGetApiKey;
     window._aiGetApiKey = function() {
-        var rt = window._aiRuntime || {};
-        if (rt.managed) return rt.can_use ? "managed-by-pilot" : "";
-        return "";  // standalone-backend: never expose the key to the page
+        if (window._aiRuntime && window._aiRuntime.managed && window._aiRuntime.can_use) {
+            return "managed-by-pilot";
+        }
+        return _origGetApiKey();
     };
 
+    var _origIsEnabled = window._aiIsEnabled;
     window._aiIsEnabled = function() {
-        var rt = window._aiRuntime || {};
-        var enabled = localStorage.getItem(_pfx() + "enabled") === "true";
-        if (rt.managed) return enabled && !!rt.can_use;
-        // standalone-backend: enabled AND a key is configured server-side
-        var provider = window._aiGetProvider ? window._aiGetProvider() : "anthropic";
-        return enabled && !!rt[provider + "_configured"];
+        if (window._aiRuntime && window._aiRuntime.managed) {
+            var pfx = (cfg.storagePrefix || "ct") + "_ai_";
+            return localStorage.getItem(pfx + "enabled") === "true" && !!window._aiRuntime.can_use;
+        }
+        return _origIsEnabled();
     };
 
     // ═══════════════════════════════════════════════════════════════════
-    // OVERRIDE: _aiCallAPI — always routes through the server-side proxy
+    // OVERRIDE: _aiCallAPI — managed mode routes through backend proxy
     // ═══════════════════════════════════════════════════════════════════
 
+    var _origCallAPI = window._aiCallAPI;
     window._aiCallAPI = async function(systemPrompt, userPrompt) {
+        if (!(window._aiRuntime && window._aiRuntime.managed)) {
+            return _origCallAPI(systemPrompt, userPrompt);
+        }
         var ctx = window._aiGetContext ? window._aiGetContext() : "";
         if (ctx) {
             systemPrompt += "\n\n--- METHODOLOGY INSTRUCTIONS (provided by the user) ---\n" + ctx;
         }
-        var rt = window._aiRuntime || {};
-        if (rt.managed && !rt.can_use) throw new Error(t("ai.invalid_key") || "AI access not granted");
-        var provider = rt.managed ? (rt.provider || "anthropic")
-                                  : (window._aiGetProvider ? window._aiGetProvider() : "anthropic");
-        var model = rt.managed ? (rt.model || "claude-sonnet-4-6")
-                               : (window._aiGetModel ? window._aiGetModel() : "");
+        if (!window._aiRuntime.can_use) throw new Error(t("ai.invalid_key") || "AI access not granted");
         var r;
         try {
             r = await fetch("api/ai/complete", {
                 method: "POST",
                 credentials: "same-origin",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ system: systemPrompt, user: userPrompt, provider: provider, model: model })
+                body: JSON.stringify({
+                    system: systemPrompt,
+                    user: userPrompt,
+                    provider: window._aiRuntime.provider || "anthropic",
+                    model: window._aiRuntime.model || "claude-sonnet-4-6"
+                })
             });
         } catch (e) {
             throw new Error("Network: " + e.message);
@@ -113,88 +98,7 @@
     };
 
     // ═══════════════════════════════════════════════════════════════════
-    // OVERRIDE: key storage + validation — server-side.
-    //  _pushConfig: PUT /api/ai/keys with the full credential set for the
-    //  selected provider. Bedrock additionally carries the secret access
-    //  key + region; custom carries the endpoint URL + key + model. An
-    //  empty apiKey is never sent for anthropic/openai/bedrock so a
-    //  config-only push (provider/model/region change) does not wipe a
-    //  stored key.
-    // ═══════════════════════════════════════════════════════════════════
-
-    function _pushConfig(provider, apiKey, model) {
-        var body = { provider: provider };
-        if (model) body.model = model;
-        if (apiKey) body[provider] = apiKey;
-        if (provider === "bedrock") {
-            if (window._aiGetSecretKey) body.ai_secret_bedrock = window._aiGetSecretKey();
-            if (window._aiGetRegion) body.ai_region_bedrock = window._aiGetRegion();
-        }
-        if (provider === "custom") {
-            if (window._aiGetEndpoint) body.ai_custom_endpoint = window._aiGetEndpoint();
-            body.ai_custom_key = apiKey || "";
-            if (model) body.ai_custom_model = model;
-        }
-        return fetch("api/ai/keys", {
-            method: "PUT",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        });
-    }
-
-    window._aiValidateKey = async function(provider, apiKey, model) {
-        try {
-            var pr = await _pushConfig(provider, apiKey, model);
-            if (!pr.ok) return false;
-            var vr = await fetch("api/ai/validate-key?provider=" + encodeURIComponent(provider), {
-                method: "POST", credentials: "same-origin"
-            });
-            if (!vr.ok) return false;
-            var vj = await vr.json();
-            await window._aiFetchRuntime();   // refresh *_configured flags
-            return !!vj.valid;
-        } catch (e) {
-            return false;
-        }
-    };
-
-    window._aiSetApiKey = function(apiKey) {
-        var provider = window._aiGetProvider ? window._aiGetProvider() : "anthropic";
-        _pushConfig(provider, apiKey, window._aiGetModel ? window._aiGetModel() : "")
-            .then(function() { if (window._aiFetchRuntime) window._aiFetchRuntime(); })
-            .catch(function() {});
-    };
-    window._aiClearApiKey = function() {
-        var provider = window._aiGetProvider ? window._aiGetProvider() : "anthropic";
-        var body = { provider: provider };
-        body[provider] = "";
-        if (provider === "custom") body.ai_custom_endpoint = "";
-        if (provider === "bedrock") body.ai_secret_bedrock = "";
-        fetch("api/ai/keys", {
-            method: "PUT", credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
-        }).then(function() {
-            if (window._aiFetchRuntime) window._aiFetchRuntime();
-        }).catch(function() {});
-    };
-
-    // Push the non-key config (provider / model / Bedrock region / custom
-    // endpoint) without touching a stored key. ct_settings.js calls this
-    // at the end of every settings save, so a custom LLM with no key, or a
-    // toggle-only save, still reaches the server.
-    window._aiPersistConfig = function() {
-        var provider = window._aiGetProvider ? window._aiGetProvider() : "anthropic";
-        _pushConfig(provider, "", window._aiGetModel ? window._aiGetModel() : "")
-            .then(function() { if (window._aiFetchRuntime) window._aiFetchRuntime(); })
-            .catch(function() {});
-    };
-
-    // ═══════════════════════════════════════════════════════════════════
-    // OVERRIDE: openSettings — managed mode shows a toggle only.
-    // In standalone-backend mode the normal ct_settings.js drawer is used
-    // (its save handler routes through the overridden primitives above).
+    // OVERRIDE: openSettings — managed mode shows toggle only
     // ═══════════════════════════════════════════════════════════════════
 
     var _origOpenSettings = window.openSettings;
@@ -207,7 +111,7 @@
             return;
         }
         if (typeof toggleMenu === "function") toggleMenu();
-        var pfx = _pfx();
+        var pfx = (cfg.storagePrefix || "ct") + "_ai_";
         var aiEnabled = localStorage.getItem(pfx + "enabled") === "true";
         var canUse = !!window._aiRuntime.can_use;
 
@@ -218,7 +122,7 @@
             '<div class="settings-section">' +
                 '<div class="settings-label">' + t("settings.language") + '</div>' +
                 '<div style="display:flex;gap:8px">' +
-                    '<button class="settings-lang-btn' + (typeof _locale !== "undefined" && _locale === "fr" ? " active" : "") + '" id="settings-lang-fr">Français</button>' +
+                    '<button class="settings-lang-btn' + (typeof _locale !== "undefined" && _locale === "fr" ? " active" : "") + '" id="settings-lang-fr">Fran\u00e7ais</button>' +
                     '<button class="settings-lang-btn' + (typeof _locale !== "undefined" && _locale === "en" ? " active" : "") + '" id="settings-lang-en">English</button>' +
                 '</div>' +
             '</div>' +
@@ -264,17 +168,14 @@
         if (cfg.onSettingsRendered) cfg.onSettingsRendered();
     };
 
-    // Probe the runtime now that the overrides are in place.
-    window._aiFetchRuntime();
-
     // ═══════════════════════════════════════════════════════════════════
     // I18N — backend-only keys
     // ═══════════════════════════════════════════════════════════════════
 
     if (typeof _registerTranslations === "function") {
         _registerTranslations("fr", {
-            "settings.ai_managed_note": "Le fournisseur, le modèle et la clé API sont configurés de manière centralisée par votre administrateur.",
-            "settings.ai_no_access": "L'accès à l'assistant IA n'a pas été accordé à votre compte. Contactez votre administrateur."
+            "settings.ai_managed_note": "Le fournisseur, le mod\u00e8le et la cl\u00e9 API sont configur\u00e9s de mani\u00e8re centralis\u00e9e par votre administrateur.",
+            "settings.ai_no_access": "L'acc\u00e8s \u00e0 l'assistant IA n'a pas \u00e9t\u00e9 accord\u00e9 \u00e0 votre compte. Contactez votre administrateur."
         });
         _registerTranslations("en", {
             "settings.ai_managed_note": "Provider, model and API key are managed centrally by your administrator.",

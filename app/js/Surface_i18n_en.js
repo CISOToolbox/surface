@@ -1,6 +1,5 @@
 if (typeof _registerTranslations === "function") {
     _registerTranslations("en", {
-        "ai.error": "Error: {msg}",
         "menu_file":              "File",
         "menu.import_hosts":      "Import hosts",
         "menu.export_report":     "Export report",
@@ -477,6 +476,7 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_summary":              "Summary",
         "fd.ai_remediation":          "Remediation",
         "fd.ai_refs":                 "References",
+        "fd.ai_error":                "AI analysis error",
         "smtp.section":               "Email sending (weekly digest)",
         "smtp.help":                  "Configure the SMTP server used to send the weekly digest and the executive report by email.",
         "smtp.host":                  "Host",

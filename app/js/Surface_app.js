@@ -2433,30 +2433,58 @@ window._aiTriageFinding = async function() {
     }
     box.style.display = "block";
     box.innerHTML = '<em>' + esc(t("fd.ai_analyzing")) + '…</em>';
-    // Métier endpoint: the methodology prompt + NVD enrichment are built
-    // server-side (POST /api/ai/surface/analyze-finding). The browser only
-    // ships the raw finding — same-origin, so the strict CSP is satisfied
-    // (the old client-side NVD fetch was blocked by connect-src 'self').
+    var today = new Date().toISOString().substring(0, 10);
+    var systemPrompt = (
+        "Tu es un analyste cybersécurité senior. L'utilisateur te donne un finding issu d'un scan ASM. " +
+        "Date du jour : " + today + ". Les CVE avec année " + today.substring(0, 4) + " ou antérieure sont valides et publiées. " +
+        "Les bases de données du scanner sont à jour — fais confiance aux données CVE fournies. " +
+        "NE REJETTE PAS un CVE comme faux ou hallucination en te basant uniquement sur l'année. " +
+        "Si un CVE ID est présent, utilise les données NVD fournies ci-dessous (si disponibles) comme source de vérité. " +
+        "Tu dois répondre UNIQUEMENT en JSON strict, sans texte autour, avec ces champs : " +
+        '{"is_probable_false_positive": boolean, "confidence": number between 0 and 1, ' +
+        '"severity_recommendation": "critical"|"high"|"medium"|"low"|"info", ' +
+        '"summary": "2-3 phrases expliquant la finding au CISO", ' +
+        '"remediation": ["étape 1", "étape 2", "étape 3"], ' +
+        '"references": ["URL 1", "URL 2"]}. ' +
+        "Sois concret et actionnable."
+    );
+
+    // CVE NVD lookup
+    var nvdData = "";
+    var cveId = (f.title || "").match(/CVE-\d{4}-\d+/) || (f.description || "").match(/CVE-\d{4}-\d+/);
+    if (cveId) {
+        try {
+            var nvdResp = await fetch("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=" + encodeURIComponent(cveId[0]));
+            if (nvdResp.ok) {
+                var nvdJson = await nvdResp.json();
+                var vuln = (nvdJson.vulnerabilities || [])[0];
+                if (vuln && vuln.cve) {
+                    var cve = vuln.cve;
+                    var desc = (cve.descriptions || []).find(function(d) { return d.lang === "en"; });
+                    var metrics = cve.metrics || {};
+                    var cvss = (metrics.cvssMetricV31 || metrics.cvssMetricV30 || [])[0];
+                    nvdData = "\n\nDonnées NVD vérifiées pour " + cveId[0] + " :\n" +
+                        "Description: " + (desc ? desc.value : "N/A") + "\n" +
+                        "Publié: " + (cve.published || "N/A") + "\n" +
+                        (cvss ? "CVSS: " + cvss.cvssData.baseScore + " (" + cvss.cvssData.baseSeverity + ")\nVecteur: " + cvss.cvssData.vectorString + "\n" : "") +
+                        "Références: " + (cve.references || []).slice(0, 3).map(function(r) { return r.url; }).join(", ");
+                }
+            }
+        } catch(e) { /* NVD unavailable */ }
+    }
+
+    var userPrompt = (
+        "Scanner : " + (f.scanner || "unknown") + "\n" +
+        "Type : " + (f.type || "unknown") + "\n" +
+        "Cible : " + (f.target || "unknown") + "\n" +
+        "Sévérité actuelle : " + (f.severity || "unknown") + "\n" +
+        "Titre : " + (f.title || "") + "\n\n" +
+        "Description :\n" + (f.description || "(aucune)") + "\n\n" +
+        "Évidence :\n" + JSON.stringify(f.evidence || {}, null, 2) + nvdData
+    );
     try {
-        var resp = await fetch("api/ai/surface/analyze-finding", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                scanner: f.scanner || "",
-                type: f.type || "",
-                target: f.target || "",
-                severity: f.severity || "",
-                title: f.title || "",
-                description: f.description || "",
-                evidence: f.evidence || {}
-            })
-        });
-        if (!resp.ok) {
-            var errTxt = await resp.text();
-            throw new Error("API " + resp.status + ": " + errTxt.substring(0, 200));
-        }
-        var parsed = await resp.json();
+        var raw = await window._aiCallAPI(systemPrompt, userPrompt);
+        var parsed = window._aiParseJSON ? window._aiParseJSON(raw) : JSON.parse(raw);
         var fp = parsed.is_probable_false_positive;
         var conf = Math.round((parsed.confidence || 0) * 100);
         var sev = parsed.severity_recommendation || "";
@@ -2481,7 +2509,8 @@ window._aiTriageFinding = async function() {
         }
         box.innerHTML = html;
     } catch (e) {
-        box.innerHTML = '<div class="ai-error">' + esc(t("ai.error", {msg: e.message || String(e)})) + '</div>';
+        box.innerHTML = '<strong style="color:#991b1b">' + esc(t("fd.ai_error")) + '</strong><br>' +
+            '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(e.message || String(e)) + '</span>';
     }
 };
 

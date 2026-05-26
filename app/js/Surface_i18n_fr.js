@@ -1,6 +1,5 @@
 if (typeof _registerTranslations === "function") {
     _registerTranslations("fr", {
-        "ai.error": "Erreur : {msg}",
         "menu_file":              "Fichier",
         "menu.import_hosts":      "Importer hôtes",
         "menu.export_report":     "Exporter rapport",
@@ -487,6 +486,7 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_summary":              "Résumé",
         "fd.ai_remediation":          "Remédiation",
         "fd.ai_refs":                 "Références",
+        "fd.ai_error":                "Erreur analyse IA",
         "smtp.section":               "Envoi email (digest hebdo)",
         "smtp.help":                  "Configure le serveur SMTP pour l'envoi automatique du digest hebdomadaire et du rapport exécutif par email.",
         "smtp.host":                  "Serveur",

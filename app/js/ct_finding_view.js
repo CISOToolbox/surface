@@ -297,7 +297,7 @@
                + esc(_t("fd.triage_reset", "Réinitialiser")) + '</button>';
         }
         if (opts.aiEnabled && opts.aiHandler) {
-            h += '<button class="btn-ai btn-icon" data-click="' + esc(opts.aiHandler) + '">'
+            h += '<button class="btn-add btn-icon" style="background:#6366f1;color:white" data-click="' + esc(opts.aiHandler) + '">'
                + _icn("zap", 14) + ' ' + esc(_t("fd.ai_triage", "Triage IA")) + '</button>';
         }
         if (opts.deleteHandler) {
