@@ -2130,6 +2130,8 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
     args = [
         nuclei_path, "-target", url, "-jsonl", "-silent",
         "-as",
+        "-stats", "-stats-interval", "30",  # emit progress on stderr so we can
+                                            # detect WAF-blocked scans afterwards
         "-severity", severity_filter,
         "-rate-limit", str(tuning["rate_limit"]),
         "-concurrency", str(tuning["concurrency"]),
@@ -2206,9 +2208,54 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
             },
         })
 
-    # No "scan_clean" info finding — a scan that finds nothing is expected
-    # behavior, not something to persist and triage. The ScanJob record
-    # (findings_count=0) already conveys the information.
+    # WAF / anti-bot detection: when a target massively rejects nuclei's
+    # probes, the scan looks "clean" (zero findings) while in reality we
+    # never reached most templates. Operators were puzzled by exactly
+    # that on WP sites behind aggressive CDNs (e.g. RocketCDN). Parse
+    # nuclei's `-stats` output (last line on stderr) for the cumulative
+    # requests/errors counts and emit a `scanner_blocked` info finding
+    # when the ratio is high enough to invalidate the "no findings = safe"
+    # conclusion. Threshold is conservative (>=50% errors AND >=50 requests
+    # — small scans naturally have noisy ratios on transient hiccups).
+    try:
+        last_stats = ""
+        for line in proc.stderr.decode(errors="replace").splitlines():
+            if "Errors:" in line and "Requests:" in line:
+                last_stats = line
+        if last_stats:
+            err_match = re.search(r"Errors:\s*(\d+)", last_stats)
+            req_match = re.search(r"Requests:\s*(\d+)", last_stats)
+            errors = int(err_match.group(1)) if err_match else 0
+            requests = int(req_match.group(1)) if req_match else 0
+            if requests >= 50 and errors / max(requests, 1) >= 0.5:
+                pct = round(100 * errors / requests)
+                findings.append({
+                    "scanner": "nuclei", "type": "scanner_blocked", "severity": "info",
+                    "title": f"Nuclei scan blocked on {url} ({pct}% error rate)",
+                    "description": (
+                        f"Nuclei issued {requests} requests against {url} and "
+                        f"{errors} were rejected ({pct}%). The target likely sits "
+                        "behind a WAF / anti-bot that drops automated probes. "
+                        "Findings below are partial — the absence of "
+                        "vulnerabilities does NOT mean the host is clean. "
+                        "Consider a manual review or a stealth scan from a "
+                        "different egress IP."
+                    ),
+                    "target": target,
+                    "evidence": {
+                        "errors": errors,
+                        "requests": requests,
+                        "error_rate_pct": pct,
+                    },
+                })
+    except Exception:
+        # Never let stats parsing break a successful scan — at worst we
+        # miss the diagnostic finding on this run.
+        logger.exception("nuclei: stats parsing failed for %s", target)
+
+    # No "scan_clean" info finding — a scan that finds nothing (and that
+    # wasn't blocked) is expected behavior, not something to persist and
+    # triage. The ScanJob record (findings_count=0) already conveys it.
     return findings
 
 
