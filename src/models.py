@@ -170,6 +170,13 @@ class MonitoredAsset(Base):
     # last scan. Used by the Hosts view to group aliases that point to the
     # same machine. NULL until the first scan resolves successfully.
     resolved_ip = Column(String(64), nullable=True)
+    # When True, sub-domains/hosts discovered during a scan of this asset
+    # (via CT logs, DNS brute, SAN, Shodan, ip_range sweep) are
+    # automatically enrolled as new MonitoredAsset rows. Default False so
+    # an operator who adds a single host only ever sees scans on that
+    # host — discovered names still appear in the scan findings/evidence,
+    # they're just not turned into tracked assets without consent.
+    auto_enroll_discoveries = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))

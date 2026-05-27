@@ -509,6 +509,8 @@ if (typeof _registerTranslations === "function") {
         "tz.browser":                 "Auto (navigateur)",
         "tz.saved":                   "Fuseau horaire mis à jour",
         "mon_modal.enabled":        "Actif",
+        "mon_modal.auto_enroll":    "Auto-enrôler les sous-domaines découverts",
+        "mon_modal.auto_enroll_help": "Si activé, les hostnames trouvés via CT logs, DNS brute, SAN ou Shodan deviennent automatiquement de nouveaux assets surveillés. Désactivé par défaut : seul l'asset que vous ajoutez est scanné, la découverte reste visible dans les findings.",
         "mon_modal.value_required": "La valeur est obligatoire",
         "mon_modal.added":          "Cible ajoutée",
         "mon_modal.updated":        "Cible mise à jour",

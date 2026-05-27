@@ -91,6 +91,7 @@ class MonitoredAssetCreate(BaseModel):
     enabled_scanners: Optional[list[str]] = None
     tags: Optional[list[str]] = None
     criticality: Optional[str] = "medium"
+    auto_enroll_discoveries: bool = False
 
 
 class MonitoredAssetUpdate(BaseModel):
@@ -103,6 +104,7 @@ class MonitoredAssetUpdate(BaseModel):
     enabled_scanners: Optional[list[str]] = None
     tags: Optional[list[str]] = None
     criticality: Optional[str] = None
+    auto_enroll_discoveries: Optional[bool] = None
 
 
 def _to_dict(a: MonitoredAsset) -> dict:
@@ -113,6 +115,7 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "enabled_scanners": list(a.enabled_scanners or []),
         "tags": list(a.tags or []),
         "criticality": a.criticality or "medium",
+        "auto_enroll_discoveries": bool(a.auto_enroll_discoveries),
         "resolved_ip": a.resolved_ip,
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
     }
@@ -173,6 +176,7 @@ async def create_asset(
         enabled_scanners=scanners,
         tags=_clean_tags(body.tags),
         criticality=crit,
+        auto_enroll_discoveries=bool(body.auto_enroll_discoveries),
         resolved_ip=resolved_ip,
     )
     db.add(a)
@@ -221,6 +225,8 @@ async def update_asset(
         crit = body.criticality.lower()
         if crit in _VALID_CRITICALITY:
             a.criticality = crit
+    if body.auto_enroll_discoveries is not None:
+        a.auto_enroll_discoveries = bool(body.auto_enroll_discoveries)
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)
@@ -266,9 +272,12 @@ async def _run_manual_scan(
 
         counts = await insert_many(db, findings)
 
-        # Auto-enrol discovered hosts like the scheduler.
+        # Auto-enrol discovered hosts like the scheduler — only when the
+        # parent asset opted in. Discovery findings/evidence are kept
+        # either way; this flag only controls whether new MonitoredAsset
+        # rows are silently created.
         new_hosts_added = 0
-        if discovered:
+        if discovered and bool(asset.auto_enroll_discoveries):
             existing_q = await db.execute(
                 select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
             )

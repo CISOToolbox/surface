@@ -499,6 +499,8 @@ if (typeof _registerTranslations === "function") {
         "tz.browser":                 "Auto (browser)",
         "tz.saved":                   "Time zone updated",
         "mon_modal.enabled":        "Enabled",
+        "mon_modal.auto_enroll":    "Auto-enrol discovered sub-domains",
+        "mon_modal.auto_enroll_help": "When enabled, hostnames found via CT logs, DNS brute, SAN or Shodan are automatically added as new monitored assets. Disabled by default: only the asset you add is scanned; discovery still appears in the findings.",
         "mon_modal.value_required": "Value is required",
         "mon_modal.added":          "Target added",
         "mon_modal.updated":        "Target updated",

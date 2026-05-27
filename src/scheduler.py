@@ -87,8 +87,11 @@ async def _scan_one(asset_id) -> None:
         # Auto-add discovered hosts to monitored_assets if not already present.
         # Dedup against BOTH host and domain kinds (a hostname from CT / SAN
         # may already exist as a user-added domain seed — don't duplicate it).
+        # Gated by the per-asset `auto_enroll_discoveries` flag (default
+        # False) so adding a single host or domain never silently grows
+        # the perimeter without consent.
         new_hosts_added = 0
-        if discovered:
+        if discovered and bool(asset.auto_enroll_discoveries):
             existing_q = await db.execute(
                 select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
             )
