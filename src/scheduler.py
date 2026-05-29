@@ -54,6 +54,7 @@ async def _scan_one(asset_id) -> None:
         value = asset.value
         enabled_scanners = list(asset.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
         scanner_name = _SCANNER_BY_KIND.get(kind, "scheduled")
+        stealth = bool(asset.stealth_mode)
 
         # Create the job record (status=running, started_at=now)
         job = ScanJob(
@@ -66,10 +67,10 @@ async def _scan_one(asset_id) -> None:
         await db.refresh(job)
         job_id = job.id
 
-    logger.info("scheduler: running scanners %s for %s/%s (job=%s)", enabled_scanners, kind, value, job_id)
+    logger.info("scheduler: running scanners %s for %s/%s (job=%s, stealth=%s)", enabled_scanners, kind, value, job_id, stealth)
     error_msg = None
     try:
-        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners)
+        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners, stealth)
     except Exception as e:
         logger.exception("scanners crashed for %s/%s", kind, value)
         findings, discovered = [], []

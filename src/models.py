@@ -177,6 +177,15 @@ class MonitoredAsset(Base):
     # host — discovered names still appear in the scan findings/evidence,
     # they're just not turned into tracked assets without consent.
     auto_enroll_discoveries = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # When True, scans of this asset run in "stealth" mode: nuclei drops
+    # to rate-limit=3 / concurrency=2 with a browser User-Agent and a
+    # 1-second delay between probes, nmap drops from -T4 to -T2.
+    # Scans take 5–10x longer but are much less likely to trip a WAF /
+    # anti-bot (Cloudflare, RocketCDN, OVH-managed) into blackholing
+    # the source IP — see the `scanner_blocked` finding emitted by
+    # nuclei when the error rate goes through the roof. Off by default
+    # so the normal fast scan stays the default.
+    stealth_mode = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))

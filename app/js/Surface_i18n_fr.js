@@ -511,6 +511,8 @@ if (typeof _registerTranslations === "function") {
         "mon_modal.enabled":        "Actif",
         "mon_modal.auto_enroll":    "Auto-enrôler les sous-domaines découverts",
         "mon_modal.auto_enroll_help": "Si activé, les hostnames trouvés via CT logs, DNS brute, SAN ou Shodan deviennent automatiquement de nouveaux assets surveillés. Désactivé par défaut : seul l'asset que vous ajoutez est scanné, la découverte reste visible dans les findings.",
+        "mon_modal.stealth":        "Mode discret (anti-WAF)",
+        "mon_modal.stealth_help":   "Si activé, nuclei et nmap passent en mode lent avec User-Agent de navigateur (rate-limit 3 req/s, délai 1 s, timing T2). Permet de passer sous le radar de la plupart des WAF / anti-bot (Cloudflare, RocketCDN…) mais multiplie le temps de scan par 5 à 10. Recommandé pour les hosts qui déclenchent le finding 'scanner_blocked'.",
         "mon_modal.value_required": "La valeur est obligatoire",
         "mon_modal.added":          "Cible ajoutée",
         "mon_modal.updated":        "Cible mise à jour",

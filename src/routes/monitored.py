@@ -92,6 +92,7 @@ class MonitoredAssetCreate(BaseModel):
     tags: Optional[list[str]] = None
     criticality: Optional[str] = "medium"
     auto_enroll_discoveries: bool = False
+    stealth_mode: bool = False
 
 
 class MonitoredAssetUpdate(BaseModel):
@@ -105,6 +106,7 @@ class MonitoredAssetUpdate(BaseModel):
     tags: Optional[list[str]] = None
     criticality: Optional[str] = None
     auto_enroll_discoveries: Optional[bool] = None
+    stealth_mode: Optional[bool] = None
 
 
 def _to_dict(a: MonitoredAsset) -> dict:
@@ -116,6 +118,7 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "tags": list(a.tags or []),
         "criticality": a.criticality or "medium",
         "auto_enroll_discoveries": bool(a.auto_enroll_discoveries),
+        "stealth_mode": bool(a.stealth_mode),
         "resolved_ip": a.resolved_ip,
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
     }
@@ -177,6 +180,7 @@ async def create_asset(
         tags=_clean_tags(body.tags),
         criticality=crit,
         auto_enroll_discoveries=bool(body.auto_enroll_discoveries),
+        stealth_mode=bool(body.stealth_mode),
         resolved_ip=resolved_ip,
     )
     db.add(a)
@@ -227,6 +231,8 @@ async def update_asset(
             a.criticality = crit
     if body.auto_enroll_discoveries is not None:
         a.auto_enroll_discoveries = bool(body.auto_enroll_discoveries)
+    if body.stealth_mode is not None:
+        a.stealth_mode = bool(body.stealth_mode)
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)
@@ -253,13 +259,14 @@ async def _run_manual_scan(
     kind: str,
     value: str,
     enabled_scanners: list[str],
+    stealth: bool = False,
 ) -> None:
     """Background task: run the full scanner chain on a single asset.
     Lives in its own DB session so we never share a connection with the
     request that kicked us off. Mirrors scheduler._scan_one."""
     error_msg: str | None = None
     try:
-        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners)
+        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners, stealth)
     except Exception as e:
         findings, discovered = [], []
         error_msg = str(e)[:1000]
@@ -346,6 +353,7 @@ async def scan_asset(
     kind = a.kind
     value = a.value
     enabled_scanners = list(a.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
+    stealth = bool(a.stealth_mode)
 
     # Manual scan → distinct tag so the Scans page shows it as "manual"
     # not "scheduled" (even though it uses the same pipeline)
@@ -363,7 +371,7 @@ async def scan_asset(
     await db.commit()
     await db.refresh(job)
 
-    background.add_task(_run_manual_scan, asset_id, job.id, kind, value, enabled_scanners)
+    background.add_task(_run_manual_scan, asset_id, job.id, kind, value, enabled_scanners, stealth)
 
     return {
         "target": value,
@@ -390,13 +398,13 @@ async def scan_all(
 
     sem = asyncio.Semaphore(3)
 
-    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str]) -> tuple[uuid.UUID, str, dict | None, str | None]:
+    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str], stealth: bool) -> tuple[uuid.UUID, str, dict | None, str | None]:
         """Run the configured scanners on one asset in a dedicated DB
         session (SQLAlchemy async sessions are not coroutine-safe)."""
         async with sem:
             scanners = list(enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
             try:
-                findings, _discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, scanners)
+                findings, _discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, scanners, stealth)
             except Exception as e:
                 return asset_id, value, None, str(e)
             try:
@@ -411,7 +419,7 @@ async def scan_all(
                 return asset_id, value, None, f"persist: {e}"
 
     results = await asyncio.gather(*(
-        _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []))
+        _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []), bool(a.stealth_mode))
         for a in assets
     ))
     for _, value, counts, err in results:

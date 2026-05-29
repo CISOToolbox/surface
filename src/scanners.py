@@ -235,8 +235,16 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
             "target": target, "evidence": {},
         }]
 
-    args = [nmap_path, "-oX", "-"] + NMAP_PROFILES.get(profile, NMAP_PROFILES["quick"]) + [target]
+    profile_args = list(NMAP_PROFILES.get(profile, NMAP_PROFILES["quick"]))
     timeout = {"quick": 180, "standard": 600, "deep": 1800}.get(profile, 300)
+    if _is_stealth():
+        # Swap the timing template down from T4 (aggressive) to T2
+        # (polite — 0.4 s between probes, much smaller parallelism).
+        # Bump the subprocess timeout proportionally so the longer
+        # scan can actually finish instead of being killed.
+        profile_args = ["-T2" if a == "-T4" else a for a in profile_args]
+        timeout *= 4
+    args = [nmap_path, "-oX", "-"] + profile_args + [target]
     try:
         proc = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -900,9 +908,11 @@ def scan_iprange_discovery(cidr: str) -> tuple[list[dict[str, Any]], list[str]]:
             "title": "nmap binary not found", "description": "", "target": cidr, "evidence": {},
         }], []
 
-    args = [nmap_path, "-oX", "-", "-sn", "-T4", cidr]
+    timing = "-T2" if _is_stealth() else "-T4"
+    sweep_timeout = 2400 if _is_stealth() else 600
+    args = [nmap_path, "-oX", "-", "-sn", timing, cidr]
     try:
-        proc = subprocess.run(args, capture_output=True, timeout=600)
+        proc = subprocess.run(args, capture_output=True, timeout=sweep_timeout)
     except Exception as e:
         return [{
             "scanner": "nmap", "type": "error", "severity": "medium",
@@ -1053,6 +1063,27 @@ _NUCLEI_TUNING_LIMITS: dict[str, tuple[int, int]] = {
 }
 _nuclei_tuning_cache: dict[str, int] | None = None
 _nuclei_tuning_lock = threading.Lock()
+
+
+# ── Stealth context (per-scan opt-in) ────────────────────────────
+# Set by `run_enabled_scanners` when the asset has `stealth_mode=True`.
+# Scanners that issue lots of HTTP probes (nuclei) or do active port
+# scans (nmap) check `_is_stealth()` and switch to a slower, browser-
+# impersonating profile so the scan flies under most WAF / anti-bot
+# radars. Stored as a thread-local because each
+# `asyncio.to_thread(run_enabled_scanners, …)` runs the whole chain on
+# a single worker thread — two parallel scans get two independent
+# contexts and never interfere.
+_STEALTH_CTX = threading.local()
+_STEALTH_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _is_stealth() -> bool:
+    return bool(getattr(_STEALTH_CTX, "on", False))
 
 
 def _nuclei_env_defaults() -> dict[str, int]:
@@ -2119,6 +2150,17 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
 
     url = target if target.startswith(("http://", "https://")) else f"https://{target}"
     tuning = _nuclei_tuning()
+    stealth = _is_stealth()
+    if stealth:
+        # Stealth profile: a typical WAF / anti-bot fingerprints scanners
+        # on rate + UA + bulk timing. Drop hard on rate/concurrency,
+        # impersonate a real Chrome, space probes by 1s. Scans go from
+        # ~3 min to ~30 min but the SOC-side detection rate plummets.
+        tuning = dict(tuning)
+        tuning["rate_limit"] = min(tuning.get("rate_limit", 150), 3)
+        tuning["concurrency"] = min(tuning.get("concurrency", 50), 2)
+        tuning["bulk_size"] = min(tuning.get("bulk_size", 50), 5)
+        tuning["timeout"] = max(tuning.get("timeout", 15), 20)
 
     # v0.3.1 — run in automatic-scan mode (`-as`). Nuclei first runs
     # wappalyzer-style tech detection on the target and then executes
@@ -2141,18 +2183,29 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
         "-disable-update-check",
         "-no-color",
     ]
-    logger.info("nuclei: rate=%d c=%d bulk=%d timeout=%ds retries=%d for %s",
+    if stealth:
+        # Browser UA + 1-s delay between probes round out the stealth
+        # profile. nuclei `-H "Header: Value"` adds a custom header
+        # globally; nuclei `-delay 1` introduces a per-request jitter.
+        args += ["-H", f"User-Agent: {_STEALTH_BROWSER_UA}", "-delay", "1"]
+    logger.info("nuclei: rate=%d c=%d bulk=%d timeout=%ds retries=%d stealth=%s for %s",
                 tuning["rate_limit"], tuning["concurrency"], tuning["bulk_size"],
-                tuning["timeout"], tuning["retries"], url)
+                tuning["timeout"], tuning["retries"], stealth, url)
+    # Stealth scans run 5-10x slower than default, so the 15-min hard
+    # cap is unreachable in practice — give them 60 min before pulling
+    # the plug. Normal scans keep the 15-min default.
+    subprocess_timeout = 3600 if stealth else 900
     try:
-        proc = subprocess.run(args, capture_output=True, timeout=900)
+        proc = subprocess.run(args, capture_output=True, timeout=subprocess_timeout)
     except subprocess.TimeoutExpired:
         # Operational signal, not a vulnerability — info severity so the
         # dashboard doesn't treat a slow target as a high-severity alert.
+        cap_min = subprocess_timeout // 60
         return [{
             "scanner": "nuclei", "type": "scanner_timeout", "severity": "info",
             "title": f"Nuclei timeout sur {url}",
-            "description": "Le scan nuclei a depasse 15 minutes.", "target": target, "evidence": {},
+            "description": f"Le scan nuclei a depasse {cap_min} minutes.",
+            "target": target, "evidence": {"stealth": stealth, "cap_seconds": subprocess_timeout},
         }]
     except Exception as e:
         return [{
@@ -3819,13 +3872,32 @@ def available_scanners_for_kind(kind: str) -> list[dict[str, str]]:
     ]
 
 
-def run_enabled_scanners(kind: str, value: str, enabled: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Run only the scanners whose names are in `enabled`. Returns (findings, discovered)."""
+def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+    """Run only the scanners whose names are in `enabled`. Returns (findings, discovered).
+
+    When ``stealth=True``, sets a thread-local flag that scanners
+    (nuclei, nmap) check to switch to a slower, less detectable
+    profile. The flag is always cleared on exit so a panicking
+    scanner can't leak the state into a subsequent unrelated run on
+    the same worker thread.
+    """
     findings: list[dict[str, Any]] = []
     discovered: list[str] = []
     if not enabled:
         enabled = DEFAULT_SCANNERS_BY_KIND.get(kind, [])
 
+    _STEALTH_CTX.on = bool(stealth)
+    try:
+        return _run_scanners_inner(kind, value, enabled, findings, discovered)
+    finally:
+        _STEALTH_CTX.on = False
+
+
+def _run_scanners_inner(kind: str, value: str, enabled: list[str],
+                        findings: list[dict[str, Any]],
+                        discovered: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Inner loop split out so `run_enabled_scanners` can wrap it in a
+    try/finally that always clears the stealth context."""
     for name in enabled:
         meta = SCANNER_REGISTRY.get(name)
         if not meta:

@@ -969,6 +969,9 @@ function _ensureMonitoredModal() {
                 '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-auto-enroll"> <span>' + esc(t("mon_modal.auto_enroll")) + '</span></label>' +
                     '<div class="ct-field-help">' + esc(t("mon_modal.auto_enroll_help")) + '</div>' +
                 '</div>' +
+                '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-stealth"> <span>' + esc(t("mon_modal.stealth")) + '</span></label>' +
+                    '<div class="ct-field-help">' + esc(t("mon_modal.stealth_help")) + '</div>' +
+                '</div>' +
                 '<div class="ct-error" id="monitored-error" style="display:none"></div>' +
             '</div>' +
             '<div class="ct-modal-footer">' +
@@ -1031,6 +1034,7 @@ window._newMonitoredDialog = function() {
     document.getElementById("monitored-notes").value = "";
     document.getElementById("monitored-enabled").checked = true;
     document.getElementById("monitored-auto-enroll").checked = false;
+    document.getElementById("monitored-stealth").checked = false;
     document.getElementById("monitored-frequency").value = "24";
     document.getElementById("monitored-criticality").value = "medium";
     document.getElementById("monitored-tags").value = "";
@@ -1133,6 +1137,7 @@ window._editMonitoredDialog = function(id) {
     document.getElementById("monitored-notes").value = a.notes || "";
     document.getElementById("monitored-enabled").checked = !!a.enabled;
     document.getElementById("monitored-auto-enroll").checked = !!a.auto_enroll_discoveries;
+    document.getElementById("monitored-stealth").checked = !!a.stealth_mode;
     document.getElementById("monitored-frequency").value = String(a.scan_frequency_hours != null ? a.scan_frequency_hours : 24);
     document.getElementById("monitored-criticality").value = a.criticality || "medium";
     document.getElementById("monitored-tags").value = (a.tags || []).join(", ");
@@ -1166,6 +1171,7 @@ window._saveMonitored = function() {
         criticality: document.getElementById("monitored-criticality").value || "medium",
         tags: rawTags,
         auto_enroll_discoveries: document.getElementById("monitored-auto-enroll").checked,
+        stealth_mode: document.getElementById("monitored-stealth").checked,
     };
     var err = document.getElementById("monitored-error");
     err.style.display = "none";
