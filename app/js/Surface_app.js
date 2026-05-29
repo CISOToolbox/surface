@@ -1581,8 +1581,7 @@ function _dashBanner(stats, recent24) {
         h += '<div class="dash-list">';
         topHosts.forEach(function(row) {
             var sev = _SEV_ORDER[row.maxSev] || "info";
-            var clickable = row.id ? ' data-click="_openHost" data-args=\'' + _da(row.id) + '\'' : '';
-            h += '<div class="dash-list-row"' + clickable + '>';
+            h += '<div class="dash-list-row" data-click="_dashGotoHost" data-args=\'' + _da(row.host) + '\'>';
             h += '<span class="sev-badge sev-' + sev + '">' + esc(t("sev." + sev)) + '</span>';
             h += '<span class="dash-list-main mono" title="' + esc(row.host) + '">' + esc(row.host) + '</span>';
             h += '<span class="dash-list-count">' + row.total + '</span>';
@@ -1720,8 +1719,7 @@ function _dashTopHosts() {
         h += '<div class="dash-list">';
         rows.forEach(function(row) {
             var sev = _SEV_ORDER[row.maxSev] || "info";
-            var clickable = row.id ? ' data-click="_openHost" data-args=\'' + _da(row.id) + '\'' : '';
-            h += '<div class="dash-list-row"' + clickable + '>';
+            h += '<div class="dash-list-row" data-click="_dashGotoHost" data-args=\'' + _da(row.host) + '\'>';
             h += '<span class="sev-badge sev-' + sev + '">' + esc(sev) + '</span>';
             h += '<span class="dash-list-main" title="' + esc(row.host) + '">' + esc(row.host) + '</span>';
             h += '<span class="dash-list-count">' + row.total + '</span>';
@@ -1960,6 +1958,18 @@ window._dashGotoScanner = function(scanner) {
     _filterSeverities = [];
     _filterScanners = [scanner];
     _findingsSearch = "";
+    selectPanel("findings");
+};
+// Dashboard "Top hosts" rows pivot here. We always land on the Findings
+// panel filtered by target=host (substring match — picks up the host
+// itself AND any port-suffixed variants like `host:8443` that nuclei
+// emits). Works whether the host is in monitored_assets or not, so the
+// click affordance is consistent regardless of auto-enrol state.
+window._dashGotoHost = function(hostValue) {
+    _filterStatus = "";
+    _filterSeverities = [];
+    _filterScanners = [];
+    _findingsSearch = hostValue || "";
     selectPanel("findings");
 };
 window._dashShowStale = function() {
