@@ -674,5 +674,12 @@ if (typeof _registerTranslations === "function") {
         "bulk_import.validation_failed":"Validation failed:",
         "bulk_import.validation_ok":    "valid finding(s), ready to import",
         "bulk_import.warnings":         "warning(s)",
+        "bulk.findings_selected": "{n} finding(s) selected",
+        "bulk.delete_confirm_title": "Delete {n} finding(s)?",
+        "bulk.delete_confirm_msg": "This action cannot be undone.",
+        "bulk.fixed_confirm_title": "Mark {n} finding(s) as fixed?",
+        "bulk.fixed_confirm_msg": "Findings will be marked as fixed. They will reappear if detected on the next scan.",
+        "bulk.measure_default_title": "Corrective measure",
+        "bulk.deleted": "deleted",
     });
 }
