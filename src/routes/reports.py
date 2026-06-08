@@ -21,7 +21,6 @@ import asyncio
 import html as _html
 import logging
 import re
-import smtplib
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -35,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user
 from src.database import get_db
+from src.mailer_common import smtp_deliver
 from src.models import AppSettings, Finding, Measure, MonitoredAsset, ScanJob, User
 from src.scanners import _resolve_safe_target
 from src.audit import log_action
@@ -335,19 +335,15 @@ def _smtp_send_blocking(host: str, port: int, use_tls: bool,
                         sender: str, recipients: list[str],
                         raw_message: str) -> None:
     """Blocking smtplib helper. Must be called via asyncio.to_thread()
-    from async code — stdlib smtplib does not support asyncio."""
-    if use_tls:
-        with smtplib.SMTP(host, port, timeout=15) as s:
-            s.ehlo()
-            s.starttls()
-            if username and password:
-                s.login(username, password)
-            s.sendmail(sender, recipients, raw_message)
-    else:
-        with smtplib.SMTP(host, port, timeout=15) as s:
-            if username and password:
-                s.login(username, password)
-            s.sendmail(sender, recipients, raw_message)
+    from async code — stdlib smtplib does not support asyncio. The host is
+    re-validated against the SSRF allowlist inside the shared transport."""
+    smtp_deliver(
+        host, port, use_tls=use_tls,
+        username=username, password=password,
+        sender=sender, recipients=recipients,
+        raw_message=raw_message, timeout=15,
+        host_validator=_validate_smtp_host,
+    )
 
 
 def _build_digest_message(cfg: dict[str, str], data: dict[str, Any]) -> tuple[MIMEMultipart, str, list[str]]:
