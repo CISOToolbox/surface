@@ -1,3 +1,7 @@
+// ─────────────────────────────────────────────────────────────
+// GENERATED from shared/ts/ — do NOT edit here.
+// Edit the shared TypeScript source and run shared/ts-build.sh.
+// ─────────────────────────────────────────────────────────────
 /**
  * ct_measure_modal — Unified add/edit measure modal for every module.
  *
@@ -66,84 +70,83 @@
  *   - Delete → resolves { __deleted: true } (onDelete already called)
  *   - Custom extraButton → whatever its `result` returns
  */
-(function() {
+(function () {
     "use strict";
-
-    // ──────────────────────────────────────────────────────────────
-    // Constants / helpers
-    // ──────────────────────────────────────────────────────────────
-
     var DEFAULT_STATUS_KEYS = ["planifie", "en_cours", "termine", "backlog", "annule"];
-
     function _t(key, fallback) {
         try {
             if (typeof t === "function") {
                 var v = t(key);
-                if (v && v !== key) return v;
+                if (v && v !== key)
+                    return v;
             }
-        } catch (e) {}
+        }
+        catch (e) { }
         return fallback !== undefined ? fallback : key;
     }
-
     function _fieldId(key) { return "ctm-f-" + key; }
     function _val(id) { var el = document.getElementById(id); return el ? el.value : ""; }
-
     function _defaultStatusOptions() {
-        return DEFAULT_STATUS_KEYS.map(function(s) {
+        return DEFAULT_STATUS_KEYS.map(function (s) {
             return { value: s, label: _t("measure.status." + s, s) };
         });
     }
-
     function _hidden(key, hide) {
         return Array.isArray(hide) && hide.indexOf(key) >= 0;
     }
-
     // Extra field rendering (html / textarea / select / date / text / checkbox)
     function _extraFieldHtml(f) {
-        if (f.type === "html") return f.value || ""; // raw injection, read-only
+        if (f.type === "html")
+            return f.value || ""; // raw injection, read-only
         var id = _fieldId(f.key);
         var lbl = esc(f.label || f.key);
         var val = f.value == null ? "" : f.value;
         var h = '<label>' + lbl;
         if (f.type === "textarea") {
             h += '<textarea id="' + id + '" rows="' + (f.rows || 2) + '">' + esc(val) + '</textarea>';
-        } else if (f.type === "select") {
+        }
+        else if (f.type === "select") {
             h += '<select id="' + id + '">';
             h += '<option value="">—</option>';
-            (f.options || []).forEach(function(opt) {
-                var ov = opt.value !== undefined ? opt.value : opt;
-                var ol = opt.label !== undefined ? opt.label : ov;
+            (f.options || []).forEach(function (opt) {
+                var o = opt;
+                var ov = o.value !== undefined ? o.value : opt;
+                var ol = o.label !== undefined ? o.label : ov;
                 h += '<option value="' + esc(ov) + '"' + (String(val) === String(ov) ? " selected" : "") + '>' + esc(ol) + '</option>';
             });
             h += '</select>';
-        } else if (f.type === "date") {
+        }
+        else if (f.type === "date") {
             h += '<input type="date" id="' + id + '" value="' + esc(val) + '">';
-        } else if (f.type === "checkbox") {
+        }
+        else if (f.type === "checkbox") {
             h += '<input type="checkbox" id="' + id + '"' + (val ? " checked" : "") + '>';
-        } else {
+        }
+        else {
             h += '<input type="text" id="' + id + '" value="' + esc(val) + '">';
         }
         h += '</label>';
         return h;
     }
-
     function _readExtra(f) {
-        if (f.type === "html") return undefined;
+        if (f.type === "html")
+            return undefined;
         var el = document.getElementById(_fieldId(f.key));
-        if (!el) return undefined;
-        if (f.type === "checkbox") return !!el.checked;
+        if (!el)
+            return undefined;
+        if (f.type === "checkbox")
+            return !!el.checked;
         return el.value;
     }
-
     // ──────────────────────────────────────────────────────────────
     // Public entry point — deferred Promise that survives sub-modals
     // ──────────────────────────────────────────────────────────────
-
     function open(measure, opts) {
         var ctx = { resolved: false, resolveOuter: null };
-        var promise = new Promise(function(resolve) {
-            ctx.resolveOuter = function(v) {
-                if (ctx.resolved) return;
+        var promise = new Promise(function (resolve) {
+            ctx.resolveOuter = function (v) {
+                if (ctx.resolved)
+                    return;
                 ctx.resolved = true;
                 resolve(v);
             };
@@ -151,49 +154,43 @@
         _openInner(measure, opts || {}, ctx);
         return promise;
     }
-
     // ──────────────────────────────────────────────────────────────
     // Internal: renders + wires one instance of the modal
     // ──────────────────────────────────────────────────────────────
-
     function _openInner(measure, opts, ctx) {
         if (!window.ct_modal || typeof window.ct_modal.open !== "function") {
-            if (typeof showStatus === "function") showStatus("ct_modal not loaded", true);
+            if (typeof showStatus === "function")
+                showStatus("ct_modal not loaded", true);
             ctx.resolveOuter(null);
             return;
         }
-
         var m = measure || {};
         var prefill = opts._prefill || {};
         var FM = opts.fieldMap || {};
         var hide = opts.hideFields || [];
-
         // willReopen: set to true when "+ Créer utilisateur" triggers a
         // sub-modal. Prevents the outer deferred from resolving with null
         // when ct_modal closes the current instance to open the sub-modal.
         var willReopen = false;
-
         // ── Resolve field values (prefill > measure[outKey] > measure[localKey] > "") ──
-
         function outKey(localKey) { return FM[localKey] || localKey; }
-
         function initial(localKey) {
             var ok = outKey(localKey);
-            if (prefill[ok] != null) return prefill[ok];
-            if (m[ok] != null) return m[ok];
-            if (m[localKey] != null) return m[localKey];
+            if (prefill[ok] != null)
+                return prefill[ok];
+            if (m[ok] != null)
+                return m[ok];
+            if (m[localKey] != null)
+                return m[localKey];
             return "";
         }
-
         var v_title = initial("title");
-        var v_desc  = initial("description");
-        var v_type  = initial("type");
-        var v_stat  = initial("statut") || opts.defaultStatus || "";
-        var v_resp  = initial("responsable");
-        var v_due   = initial("echeance");
-
+        var v_desc = initial("description");
+        var v_type = initial("type");
+        var v_stat = initial("statut") || opts.defaultStatus || "";
+        var v_resp = initial("responsable");
+        var v_due = initial("echeance");
         // ── Picker config ────────────────────────────────────────────
-
         var pickerEnabled = !!opts.ownerPicker;
         var pickerOpts = (opts.ownerPicker && typeof opts.ownerPicker === "object") ? opts.ownerPicker : {};
         var pickerId = pickerOpts.pickerId || "ctm-owner";
@@ -203,40 +200,35 @@
         var sourceUrl = pickerOpts.sourceUrl === null
             ? null
             : (pickerOpts.sourceUrl || "api/settings/directory-source");
-
         // Populated in onOpen by ct_userpicker.mount. All reads of the
         // responsable field go through this handle for a uniform API
         // regardless of picker/plain mode.
         var ownerHandle = null;
-
         // ── Build body HTML ──────────────────────────────────────────
-
         var statusOpts = Array.isArray(opts.statusOptions) && opts.statusOptions.length
             ? opts.statusOptions
             : _defaultStatusOptions();
         var typeOpts = Array.isArray(opts.typeOptions) ? opts.typeOptions : [];
-
         var h = "";
-        if (opts.headerHtml) h += opts.headerHtml;
+        if (opts.headerHtml)
+            h += opts.headerHtml;
         h += '<div class="ct-measure-form">';
-
         if (!_hidden("title", hide)) {
             h += '<label>' + esc(_t("measure.field.title", "Titre"))
-              + (opts.titleRequired !== false && !opts.titleReadOnly ? ' *' : '');
+                + (opts.titleRequired !== false && !opts.titleReadOnly ? ' *' : '');
             if (opts.titleReadOnly) {
                 h += '<div style="font-weight:600">' + esc(v_title) + '</div>';
-            } else {
+            }
+            else {
                 h += '<input type="text" id="' + _fieldId("title") + '" value="' + esc(v_title) + '">';
             }
             h += '</label>';
         }
-
         if (!_hidden("description", hide)) {
             h += '<label>' + esc(_t("measure.field.description", "Description"))
-              + '<textarea id="' + _fieldId("description") + '" rows="3">' + esc(v_desc) + '</textarea>'
-              + '</label>';
+                + '<textarea id="' + _fieldId("description") + '" rows="3">' + esc(v_desc) + '</textarea>'
+                + '</label>';
         }
-
         // Row: type + status (collapsed together if both visible)
         var typeVisible = !_hidden("type", hide) && typeOpts.length > 0;
         var statVisible = !_hidden("statut", hide);
@@ -244,25 +236,25 @@
             h += '<div class="ct-measure-form__row">';
             if (typeVisible) {
                 h += '<label>' + esc(_t("measure.field.type", "Type"))
-                  + '<select id="' + _fieldId("type") + '">'
-                  + '<option value="">—</option>';
-                typeOpts.forEach(function(ty) {
+                    + '<select id="' + _fieldId("type") + '">'
+                    + '<option value="">—</option>';
+                typeOpts.forEach(function (ty) {
                     h += '<option value="' + esc(ty.value) + '"' + (v_type === ty.value ? " selected" : "") + '>' + esc(ty.label) + '</option>';
                 });
                 h += '</select></label>';
             }
             if (statVisible) {
                 h += '<label>' + esc(_t("measure.field.statut", "Statut"))
-                  + '<select id="' + _fieldId("statut") + '">';
-                if (!opts.defaultStatus) h += '<option value="">—</option>';
-                statusOpts.forEach(function(s) {
+                    + '<select id="' + _fieldId("statut") + '">';
+                if (!opts.defaultStatus)
+                    h += '<option value="">—</option>';
+                statusOpts.forEach(function (s) {
                     h += '<option value="' + esc(s.value) + '"' + (v_stat === s.value ? " selected" : "") + '>' + esc(s.label) + '</option>';
                 });
                 h += '</select></label>';
             }
             h += '</div>';
         }
-
         // Row: responsable + echeance
         var respVisible = !_hidden("responsable", hide);
         var dueVisible = !_hidden("echeance", hide);
@@ -273,28 +265,26 @@
                 if (pickerEnabled) {
                     // Slot replaced by ct_userpicker.mount() in onOpen
                     h += '<div id="ctm-owner-slot"></div>';
-                } else {
+                }
+                else {
                     h += '<input type="text" id="' + _fieldId("responsable") + '" value="' + esc(v_resp) + '">';
                 }
                 h += '</label>';
             }
             if (dueVisible) {
                 h += '<label>' + esc(_t("measure.field.echeance", "Échéance"))
-                  + '<input type="date" id="' + _fieldId("echeance") + '" value="' + esc(v_due) + '">'
-                  + '</label>';
+                    + '<input type="date" id="' + _fieldId("echeance") + '" value="' + esc(v_due) + '">'
+                    + '</label>';
             }
             h += '</div>';
         }
-
         if (Array.isArray(opts.extraFields)) {
-            opts.extraFields.forEach(function(f) { h += _extraFieldHtml(f); });
+            opts.extraFields.forEach(function (f) { h += _extraFieldHtml(f); });
         }
-
         h += '</div>';
-        if (opts.extraContent) h += opts.extraContent;
-
+        if (opts.extraContent)
+            h += opts.extraContent;
         // ── Snapshot / collect helpers ───────────────────────────────
-
         function snapshot() {
             var snap = {};
             if (!_hidden("title", hide) && !opts.titleReadOnly)
@@ -310,17 +300,18 @@
             if (dueVisible)
                 snap[outKey("echeance")] = _val(_fieldId("echeance")) || v_due;
             if (Array.isArray(opts.extraFields)) {
-                opts.extraFields.forEach(function(f) {
+                opts.extraFields.forEach(function (f) {
                     var v = _readExtra(f);
-                    if (v !== undefined) snap[f.key] = v;
+                    if (v !== undefined)
+                        snap[f.key] = v;
                 });
             }
             return snap;
         }
-
         function collect() {
             var data = {};
-            if (m && m.id) data.id = m.id;
+            if (m && m.id)
+                data.id = m.id;
             if (!_hidden("title", hide)) {
                 data[outKey("title")] = opts.titleReadOnly
                     ? v_title
@@ -339,44 +330,45 @@
             if (dueVisible)
                 data[outKey("echeance")] = _val(_fieldId("echeance"));
             if (Array.isArray(opts.extraFields)) {
-                opts.extraFields.forEach(function(f) {
+                opts.extraFields.forEach(function (f) {
                     var v = _readExtra(f);
-                    if (v !== undefined) data[f.key] = typeof v === "string" ? v.trim() : v;
+                    if (v !== undefined)
+                        data[f.key] = typeof v === "string" ? v.trim() : v;
                 });
             }
             return data;
         }
-
         // ── Buttons ──────────────────────────────────────────────────
-
         var isNew = !m || !m.id;
         var title = opts.title || (isNew
             ? _t("measure.new", "Nouvelle mesure")
             : _t("measure.edit", "Mesure") + (m.id ? " " + m.id : ""));
-
         var buttons = [];
         if (typeof opts.onDelete === "function") {
             buttons.push({
                 id: "delete", label: _t("btn_delete", "Supprimer"), danger: true,
-                result: function() {
+                result: function () {
                     // Defer so the measure modal finishes closing before the
                     // caller opens its own confirm dialog — ct_modal is a
                     // single overlay; calling ct_modal.confirm() inside this
                     // result function would tear itself down immediately.
                     var fn = opts.onDelete;
-                    setTimeout(function() { try { fn(); } catch (e) {} }, 0);
+                    setTimeout(function () { try {
+                        fn();
+                    }
+                    catch (e) { } }, 0);
                     return { __deleted: true };
                 }
             });
         }
         buttons.push({ id: "cancel", label: _t("btn_cancel", "Annuler") });
         if (Array.isArray(opts.extraButtons)) {
-            opts.extraButtons.forEach(function(b) { buttons.push(b); });
+            opts.extraButtons.forEach(function (b) { buttons.push(b); });
         }
         buttons.push({
             id: "save", primary: true,
             label: opts.saveLabel || _t("btn_save", "Enregistrer"),
-            result: function() {
+            result: function () {
                 var data = collect();
                 var titleKey = outKey("title");
                 if (!_hidden("title", hide) && !opts.titleReadOnly
@@ -385,21 +377,24 @@
                     if (typeof showStatus === "function")
                         showStatus(_t("measure.title_required", "Titre requis"), true);
                     var el = document.getElementById(_fieldId("title"));
-                    if (el) { try { el.focus(); } catch (e) {} }
+                    if (el) {
+                        try {
+                            el.focus();
+                        }
+                        catch (e) { }
+                    }
                     return false;
                 }
                 return data;
             }
         });
-
         // ── Open ─────────────────────────────────────────────────────
-
         window.ct_modal.open({
             title: title,
             body: h,
             size: opts.size || "md",
             buttons: buttons,
-            onOpen: function(overlay) {
+            onOpen: function (overlay) {
                 if (pickerEnabled && window.ct_userpicker && window.ct_userpicker.mount) {
                     window.ct_userpicker.mount({
                         slotId: "ctm-owner-slot",
@@ -408,27 +403,28 @@
                         placeholder: _t("ct.userpicker.search_placeholder", "Rechercher..."),
                         directoryUrl: directoryUrl,
                         sourceUrl: sourceUrl,
-                        onCreate: function(query) {
+                        onCreate: function (query) {
                             // Deferred reopen: promptCreateUser opens a
                             // sub-modal that WILL tear down this one.
                             willReopen = true;
                             var snap = snapshot();
                             return window.ct_userpicker.promptCreateUser({
                                 query: query, apiUrl: directoryUrl
-                            }).then(function(created) {
-                                if (created) snap[outKey("responsable")] = window.ct_userpicker._label(created);
+                            }).then(function (created) {
+                                if (created)
+                                    snap[outKey("responsable")] = window.ct_userpicker._label(created);
                                 _openInner(measure, Object.assign({}, opts, { _prefill: snap }), ctx);
                                 return created;
                             });
                         }
-                    }).then(function(handle) { ownerHandle = handle; });
+                    }).then(function (handle) { ownerHandle = handle; });
                 }
                 // Auto-grow the description textarea to fit its content
                 // (capped at 500px to keep the modal manageable). Applied
                 // on mount + on every input. Also applied to any extra
                 // textarea in the form for consistency.
                 var areas = overlay.querySelectorAll(".ct-measure-form textarea");
-                areas.forEach(function(el) {
+                areas.forEach(function (el) {
                     function autoGrow() {
                         el.style.height = "auto";
                         var h = Math.min(el.scrollHeight, 500);
@@ -439,16 +435,22 @@
                 });
                 if (!opts.titleReadOnly && !_hidden("title", hide)) {
                     var tf = overlay.querySelector("#" + _fieldId("title"));
-                    if (tf) { try { tf.focus(); tf.select && tf.select(); } catch (e) {} }
+                    if (tf) {
+                        try {
+                            tf.focus();
+                            tf.select && tf.select();
+                        }
+                        catch (e) { }
+                    }
                 }
             }
-        }).then(function(result) {
+        }).then(function (result) {
             // Skip resolution if this instance was torn down by a "+ Créer"
             // → the reopened instance owns the deferred resolution.
-            if (willReopen) return;
+            if (willReopen)
+                return;
             ctx.resolveOuter(result);
         });
     }
-
     window.ct_measure_modal = { open: open };
 })();

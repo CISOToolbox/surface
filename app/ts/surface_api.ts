@@ -1,0 +1,145 @@
+/**
+ * Surface API client.
+ */
+
+/** Options de _fetch : RequestInit restreint, body objet JSON toléré. */
+interface SurfaceFetchOpts {
+    method?: string;
+    headers?: Record<string, string>;
+    credentials?: RequestCredentials;
+    body?: BodyInit | Record<string, unknown> | unknown[] | null;
+}
+
+(function() {
+"use strict";
+
+var BASE = "api";
+
+// Retour Promise<any> : réponses JSON non typées à la frontière réseau ;
+// le typage est porté par SurfaceAPIShape (Surface_types.d.ts).
+async function _fetch(url: string, opts?: SurfaceFetchOpts): Promise<any> {
+    opts = opts || {};
+    opts.credentials = "same-origin";
+    if (opts.body && typeof opts.body === "object" && !(opts.body instanceof FormData)) {
+        opts.headers = opts.headers || {};
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(opts.body);
+    }
+    var resp = await fetch(BASE + url, opts as RequestInit);
+    if (resp.status === 401) {
+        window.location.href = "/login.html?redirect=" + encodeURIComponent(window.location.pathname);
+        throw new Error("Not authenticated");
+    }
+    if (resp.status === 204) return null;
+    if (!resp.ok) {
+        var detail = "";
+        try { var errBody = await resp.json(); detail = errBody.detail || ""; } catch(e2) {}
+        if (!detail || detail.length > 200 || detail.includes("Traceback") || detail.includes("sqlalchemy")) {
+            var msgs: Record<number, string> = {400: t("error.bad_request") || "Invalid request", 403: t("error.forbidden") || "Access denied", 404: t("error.not_found") || "Not found", 500: t("error.server") || "Server error"};
+            detail = msgs[resp.status] || (t("error.generic") || "Error " + resp.status);
+        }
+        throw new Error(detail);
+    }
+    return resp.json();
+}
+
+window.SurfaceAPI = {
+    // Generic GET/POST for one-off calls (finding detail, screenshots, etc.)
+    get: function(url) { return _fetch(url.replace(/^\/api/, "")); },
+    post: function(url, body) { return _fetch(url.replace(/^\/api/, ""), { method: "POST", body: body as Record<string, unknown> }); },
+    listFindings: function(filters) {
+        var qs = "";
+        if (filters) {
+            var parts: string[] = [];
+            for (var k in filters) if (filters[k]) parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(filters[k]!));
+            if (parts.length) qs = "?" + parts.join("&");
+        }
+        return _fetch("/findings" + qs);
+    },
+    deleteFinding: function(id) { return _fetch("/findings/" + id, { method: "DELETE" }); },
+    triageFinding: function(id, payload) {
+        return _fetch("/findings/" + id + "/triage", { method: "PATCH", body: payload as unknown as Record<string, unknown> });
+    },
+    bulkTriageFindings: function(payload) {
+        return _fetch("/findings/bulk-triage", { method: "POST", body: payload as unknown as Record<string, unknown> });
+    },
+    bulkDeleteFindings: function(ids) {
+        return _fetch("/findings/bulk-delete", { method: "POST", body: { ids: ids } });
+    },
+    quickScan: function(targetHost) {
+        return _fetch("/scans/quick", { method: "POST", body: { target_host: targetHost } });
+    },
+    bulkImport: function(findings) {
+        return _fetch("/scans/bulk-import", { method: "POST", body: { findings: findings } });
+    },
+    listMonitored: function() { return _fetch("/monitored-assets"); },
+    scannersCatalog: function() { return _fetch("/monitored-assets/scanners-catalog"); },
+    createMonitored: function(data) { return _fetch("/monitored-assets", { method: "POST", body: data as Record<string, unknown> }); },
+    updateMonitored: function(id, data) { return _fetch("/monitored-assets/" + id, { method: "PATCH", body: data as Record<string, unknown> }); },
+    deleteMonitored: function(id) { return _fetch("/monitored-assets/" + id, { method: "DELETE" }); },
+    scanMonitored: function(id) { return _fetch("/monitored-assets/" + id + "/scan", { method: "POST" }); },
+    scanAllMonitored: function() { return _fetch("/monitored-assets/scan-all", { method: "POST" }); },
+    nucleiConfig: function() { return _fetch("/scans/nuclei/config"); },
+    nucleiUpdateConfig: function(data) { return _fetch("/scans/nuclei/config", { method: "PUT", body: data }); },
+    nucleiUpdateTemplates: function() { return _fetch("/scans/nuclei/update-templates", { method: "POST" }); },
+    shodanConfig: function() { return _fetch("/scans/shodan/config"); },
+    shodanSaveKey: function(apiKey) { return _fetch("/scans/shodan/config", { method: "PUT", body: { api_key: apiKey } }); },
+    shodanDeleteKey: function() { return _fetch("/scans/shodan/config", { method: "DELETE" }); },
+    listJobs: function() { return _fetch("/scans/jobs"); },
+    createJob: function(data) { return _fetch("/scans/jobs", { method: "POST", body: data as unknown as Record<string, unknown> }); },
+    deleteJob: function(id) { return _fetch("/scans/jobs/" + id, { method: "DELETE" }); },
+    listMeasures: function() { return _fetch("/measures"); },
+    updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data as Record<string, unknown> }); },
+    deleteMeasure: function(id) { return _fetch("/measures/" + id, { method: "DELETE" }); },
+    // v0.3 — executive report + smtp config
+    executiveReport: function() { return _fetch("/reports/executive"); },
+    smtpConfig: function() { return _fetch("/reports/smtp/config"); },
+    smtpSetConfig: function(data) { return _fetch("/reports/smtp/config", { method: "PUT", body: data as Record<string, unknown> }); },
+    sendEmailDigest: function() { return _fetch("/reports/email-digest/send", { method: "POST" }); },
+};
+
+// ── Init: check auth ──
+window._appInitCallback = function() {
+    if (typeof _initDataAndRender === "function") _initDataAndRender();
+    else if (typeof renderAll === "function") renderAll();
+};
+
+})();
+
+// ─── Toolbar user pill (name + admin + logout) ──────────────────
+function _initAuth(): void {
+    fetch("auth/providers").then(function(r) { return r.json(); }).then(function(data) {
+        if (!data.auth_enabled) return;
+        fetch("auth/me", { credentials: "same-origin" }).then(function(r) {
+            if (!r.ok) { var _rp = window.location.pathname.replace(/[^/]*$/, ""); window.location.href = "/login.html?redirect=" + encodeURIComponent(_rp); return; }
+            return r.json();
+        }).then(function(user: SurfaceAuthUser | undefined) {
+            if (!user) return;
+            window._currentUser = user;
+            var right = document.getElementById("toolbar-right");
+            if (!right) return;
+            var h = "";
+            h += '<span style="color:rgba(255,255,255,0.8);font-size:0.8em;margin:0 6px">' + esc(user.name || user.email) + '</span>';
+            h += '<button style="font-size:0.75em;color:rgba(255,255,255,0.5);background:none;border:none;cursor:pointer;padding:4px 8px" data-click="_logout" title="Sign out">&#x23FB;</button>';
+            var container = document.createElement("span");
+            container.className = "toolbar-right";
+            container.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";
+            container.innerHTML = h;
+            right.parentNode!.insertBefore(container, right);
+            fetch("auth/role", { credentials: "same-origin" }).then(function(rr) {
+                return rr.ok ? rr.json() : {};
+            }).then(function(roleInfo: { role?: string }) {
+                var role = roleInfo.role || "";
+                window._moduleRole = role;
+                if (role) document.body.classList.add("role-" + role);
+                if (user.role === "admin") document.body.classList.add("role-admin");
+            }).catch(function() {});
+        });
+    }).catch(function() {});
+}
+window._logout = function() {
+    fetch("auth/logout", { method: "POST", credentials: "same-origin" })
+        .finally(function() { window.location.href = "/auth/logout"; });
+};
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _initAuth);
+else _initAuth();

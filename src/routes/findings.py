@@ -52,7 +52,7 @@ async def list_findings(
 ):
     _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed"}
     _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
-    limit = max(1, min(limit, 2000))
+    limit = max(1, min(limit, 10000))
     offset = max(0, offset)
     q = select(Finding).options(selectinload(Finding.measure)).order_by(Finding.created_at.desc())
     if status and status in _VALID_STATUSES:
