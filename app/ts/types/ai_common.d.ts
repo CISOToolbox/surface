@@ -65,4 +65,19 @@ interface Window {
     _aiClosePanel?: () => void;
     _aiShowLoading?: (title: string) => void;
     _aiShowError?: (title: string, errMsg: string) => void;
+    _aiPromptContext?: (autoUser: string) => string;
+    _aiPromptSchema?: (autoUser: string) => string;
+    _aiRenderCards?: (opts: CtAiCardsOpts) => void;
+}
+interface CtAiCardsOpts {
+    suggestions: any[];
+    title?: string;
+    renderCard: (s: any, i: number) => string;
+    onAccept: (s: any, i: number) => void;
+    onChange?: () => void;
+    acceptLabel?: string;
+    ignoreLabel?: string;
+    acceptAllLabel?: string;
+    closeLabel?: string;
+    doneLabel?: string;
 }

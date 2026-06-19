@@ -370,6 +370,77 @@
         p.footer.innerHTML = '';
         _aiOpenPanel();
     };
+    // ── Custom-instruction prompt helpers (shared by module AI flows) ──
+    // Truncate an auto-built user prompt at the instruction marker, keeping
+    // just the context/data part; modules then append their own instruction.
+    window._aiPromptContext = function (autoUser) {
+        var end = autoUser.lastIndexOf("\n\nPropose ");
+        if (end === -1)
+            end = autoUser.lastIndexOf("\n\nRespond in ");
+        return end > 0 ? autoUser.substring(0, end) : autoUser;
+    };
+    // Extract the "JSON schema: ..." tail of an auto prompt, or "" if none.
+    window._aiPromptSchema = function (autoUser) {
+        var m = autoUser.match(/JSON schema: (.+)$/);
+        return m ? m[1] : "";
+    };
+    // ── Suggestion-card review loop (render → accept/ignore/accept-all →
+    // empty-done). renderCard + onAccept are module-specific; the scaffolding
+    // (cards, buttons wired via onclick closures, removal, completion) is shared.
+    window._aiRenderCards = function (opts) {
+        var p = _aiEnsurePanel();
+        if (opts.title)
+            p.title.textContent = opts.title;
+        var items = (opts.suggestions || []).slice();
+        var accL = opts.acceptLabel || t("ai.accept");
+        var ignL = opts.ignoreLabel || t("ai.ignore");
+        function draw() {
+            if (!items.length) {
+                p.body.innerHTML = '<div style="text-align:center;padding:20px 16px;color:#6c757d">' +
+                    '<div style="font-size:2em;margin-bottom:8px">✓</div>' +
+                    '<div style="font-size:0.9em">' + esc(opts.doneLabel || t("ai.all_done")) + '</div></div>';
+                p.footer.innerHTML = '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>';
+                p.footer.querySelector(".ai-btn-close").onclick = function () { window._aiClosePanel(); };
+                return;
+            }
+            var h = "";
+            items.forEach(function (s, i) {
+                h += '<div class="ai-card"><div class="ai-card-content">' + opts.renderCard(s, i) + '</div>' +
+                    '<div class="ai-card-actions">' +
+                    '<button class="ai-btn-accept" data-ci="' + i + '">' + esc(accL) + '</button>' +
+                    '<button class="ai-btn-ignore" data-ci="' + i + '">' + esc(ignL) + '</button></div></div>';
+            });
+            p.body.innerHTML = h;
+            Array.prototype.forEach.call(p.body.querySelectorAll(".ai-btn-accept"), function (b) {
+                b.onclick = function () { doAccept(+b.getAttribute("data-ci")); };
+            });
+            Array.prototype.forEach.call(p.body.querySelectorAll(".ai-btn-ignore"), function (b) {
+                b.onclick = function () { items.splice(+b.getAttribute("data-ci"), 1); draw(); };
+            });
+            p.footer.innerHTML = '<button class="ai-btn-all">' + esc(opts.acceptAllLabel || t("ai.accept_all")) + '</button>' +
+                '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>';
+            p.footer.querySelector(".ai-btn-all").onclick = function () {
+                items.slice().forEach(function (s, i) { opts.onAccept(s, i); });
+                items.length = 0;
+                if (opts.onChange)
+                    opts.onChange();
+                draw();
+            };
+            p.footer.querySelector(".ai-btn-close").onclick = function () { window._aiClosePanel(); };
+        }
+        function doAccept(i) {
+            var s = items[i];
+            if (!s)
+                return;
+            opts.onAccept(s, i);
+            items.splice(i, 1);
+            if (opts.onChange)
+                opts.onChange();
+            draw();
+        }
+        draw();
+        window._aiOpenPanel();
+    };
     // ═══════════════════════════════════════════════════════════════════
     // I18N — shared settings + AI keys
     // ═══════════════════════════════════════════════════════════════════
@@ -381,6 +452,7 @@
         "ai.ignore": "Ignorer",
         "ai.accept_all": "Tout accepter",
         "ai.close": "Fermer",
+        "ai.all_done": "Terminé",
         "ai.no_suggestions": "Aucune suggestion générée."
     });
     _registerTranslations("en", {
@@ -391,6 +463,7 @@
         "ai.ignore": "Ignore",
         "ai.accept_all": "Accept all",
         "ai.close": "Close",
+        "ai.all_done": "All done",
         "ai.no_suggestions": "No suggestions generated."
     });
     // ═══════════════════════════════════════════════════════════════════

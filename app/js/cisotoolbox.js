@@ -832,6 +832,88 @@ function _loadAsset(filename, cb) {
     s.onerror = function () { s.dataset.loaded = "err"; cb(); };
     document.head.appendChild(s);
 }
+// ── Lazy <script> loader (Promise) for heavy CDN libs (ExcelJS, JSZip…) ──
+// Memoized per URL. opts.onStart/onDone surface a status message; integrity
+// enables SRI. Replaces per-app _loadExcelJS/_loadJSZip copies (and gives the
+// callers that lacked it the SRI hash for free).
+var _scriptPromises = {};
+function _loadScript(url, opts) {
+    var cached = _scriptPromises[url];
+    if (cached)
+        return cached;
+    var o = opts || {};
+    var p = new Promise(function (resolve, reject) {
+        if (o.onStart)
+            o.onStart();
+        var s = document.createElement("script");
+        s.src = url;
+        if (o.integrity) {
+            s.integrity = o.integrity;
+            s.crossOrigin = o.crossOrigin || "anonymous";
+        }
+        else if (o.crossOrigin) {
+            s.crossOrigin = o.crossOrigin;
+        }
+        s.onload = function () { if (o.onDone)
+            o.onDone(); resolve(); };
+        s.onerror = function () { delete _scriptPromises[url]; reject(new Error("script load failed: " + url)); };
+        document.head.appendChild(s);
+    });
+    _scriptPromises[url] = p;
+    return p;
+}
+// ── File download helpers ──
+function _safeFileName(name, max) {
+    var n = String(name || "").replace(/[\/\\:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
+    if (max && n.length > max)
+        n = n.slice(0, max);
+    return n || "export";
+}
+function _downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+}
+// ── CSV helpers: template download (BOM + CRLF) and permissive parse ──
+function _downloadCSV(filename, headerLine, exampleRows) {
+    var body = [headerLine].concat(exampleRows || []).join("\r\n");
+    _downloadBlob(new Blob(["﻿" + body], { type: "text/csv;charset=utf-8" }), filename);
+}
+function _parseCSV(text) {
+    var lines = String(text || "").replace(/\r\n?/g, "\n").split("\n").filter(function (l) { return l.trim() !== ""; });
+    if (!lines.length)
+        return { headers: [], rows: [] };
+    var first = lines[0];
+    var sep = first.indexOf("\t") >= 0 ? "\t" : (first.indexOf(";") >= 0 ? ";" : ",");
+    var deq = function (c) { return c.replace(/^["']|["']$/g, "").trim(); };
+    var headers = first.split(sep).map(function (h) { return deq(h).toLowerCase(); });
+    var rows = lines.slice(1).map(function (l) { return l.split(sep).map(deq); });
+    return { headers: headers, rows: rows };
+}
+// ── Classify a date vs now: expired / soon (within soonDays) / valid ──
+function ctDateStatus(dateStr, soonDays) {
+    if (!dateStr)
+        return "";
+    var d = new Date(dateStr);
+    if (isNaN(d.getTime()))
+        return "";
+    var now = Date.now(), tt = d.getTime();
+    if (tt < now)
+        return "expired";
+    if (tt < now + soonDays * 86400000)
+        return "soon";
+    return "valid";
+}
+// ── Append "{id} - {label}" to a comma-separated reference string ──
+function _csvAppendRef(current, id, label) {
+    var ref = id + " - " + label;
+    return current ? current + ", " + ref : ref;
+}
 var _descriptionsLoaded = false;
 function _ensureDescriptions(cb) {
     if (_descriptionsLoaded) {
@@ -943,12 +1025,18 @@ function _saveState() {
     _redoStack.length = 0;
 }
 function _updateUndoButtons() {
-    var u = document.querySelector(".btn-undo");
-    var r = document.querySelector(".btn-redo");
-    if (u)
+    // Match both the class form (.btn-undo, most apps) and the id form
+    // (#btn-undo, Risk/Compliance) so a single shared impl serves every app.
+    var u = document.querySelector(".btn-undo, #btn-undo");
+    var r = document.querySelector(".btn-redo, #btn-redo");
+    if (u) {
         u.style.opacity = _undoStack.length ? "1" : "0.3";
-    if (r)
+        u.disabled = !_undoStack.length;
+    }
+    if (r) {
         r.style.opacity = _redoStack.length ? "1" : "0.3";
+        r.disabled = !_redoStack.length;
+    }
 }
 function _replaceD(json) {
     var parsed = JSON.parse(json);

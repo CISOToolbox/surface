@@ -289,6 +289,22 @@ declare var _resizing: CtResizing | null;
 declare function _doResize(e: MouseEvent): void;
 declare function _stopResize(): void;
 declare function _loadAsset(filename: string, cb: () => void): void;
+declare var _scriptPromises: Record<string, Promise<void> | undefined>;
+declare function _loadScript(url: string, opts?: {
+    integrity?: string;
+    crossOrigin?: string;
+    onStart?: () => void;
+    onDone?: () => void;
+}): Promise<void>;
+declare function _safeFileName(name: string, max?: number): string;
+declare function _downloadBlob(blob: Blob, filename: string): void;
+declare function _downloadCSV(filename: string, headerLine: string, exampleRows?: string[]): void;
+declare function _parseCSV(text: string): {
+    headers: string[];
+    rows: string[][];
+};
+declare function ctDateStatus(dateStr: string | null | undefined, soonDays: number): "expired" | "soon" | "valid" | "";
+declare function _csvAppendRef(current: string, id: string, label: string): string;
 declare var _descriptionsLoaded: boolean;
 declare function _ensureDescriptions(cb: () => void): void;
 declare function _ensureFramework(fwId: string, cb: () => void): void;
