@@ -80,4 +80,6 @@ interface CtAiCardsOpts {
     acceptAllLabel?: string;
     closeLabel?: string;
     doneLabel?: string;
+    extraHTML?: string;
+    onRendered?: () => void;
 }

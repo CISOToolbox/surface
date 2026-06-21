@@ -399,8 +399,10 @@
                 p.body.innerHTML = '<div style="text-align:center;padding:20px 16px;color:#6c757d">' +
                     '<div style="font-size:2em;margin-bottom:8px">✓</div>' +
                     '<div style="font-size:0.9em">' + esc(opts.doneLabel || t("ai.all_done")) + '</div></div>';
-                p.footer.innerHTML = '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>';
+                p.footer.innerHTML = '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>' + (opts.extraHTML || "");
                 p.footer.querySelector(".ai-btn-close").onclick = function () { window._aiClosePanel(); };
+                if (opts.onRendered)
+                    opts.onRendered();
                 return;
             }
             var h = "";
@@ -418,7 +420,7 @@
                 b.onclick = function () { items.splice(+b.getAttribute("data-ci"), 1); draw(); };
             });
             p.footer.innerHTML = '<button class="ai-btn-all">' + esc(opts.acceptAllLabel || t("ai.accept_all")) + '</button>' +
-                '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>';
+                '<button class="ai-btn-close">' + esc(opts.closeLabel || t("ai.close")) + '</button>' + (opts.extraHTML || "");
             p.footer.querySelector(".ai-btn-all").onclick = function () {
                 items.slice().forEach(function (s, i) { opts.onAccept(s, i); });
                 items.length = 0;
@@ -427,6 +429,8 @@
                 draw();
             };
             p.footer.querySelector(".ai-btn-close").onclick = function () { window._aiClosePanel(); };
+            if (opts.onRendered)
+                opts.onRendered();
         }
         function doAccept(i) {
             var s = items[i];

@@ -321,12 +321,11 @@
             .catch(function () { return { pilot_available: false }; })
             .then(function (meta) {
             // Picker only makes sense when there's a writable directory
-            // behind the proxy. That's the case when the effective
-            // source is "pilot". `pilot_available` alone is not enough —
-            // a module can have PILOT_URL configured but the admin can
-            // still have forced source=local.
+            // behind the proxy: the Pilot central directory (source=pilot)
+            // OR the module's own local personnel base (local_writable, the
+            // standalone case). Otherwise fall back to a plain text input.
             var effective = (meta && meta.source) || "local";
-            if (effective === "pilot") {
+            if (effective === "pilot" || (meta && meta.local_writable)) {
                 return fetchUsers().then(function (users) { return _mountPicker(opts, users); });
             }
             return _mountPlain(opts);

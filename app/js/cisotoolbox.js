@@ -1027,16 +1027,16 @@ function _saveState() {
 function _updateUndoButtons() {
     // Match both the class form (.btn-undo, most apps) and the id form
     // (#btn-undo, Risk/Compliance) so a single shared impl serves every app.
+    // NB: opacity only — never the `disabled` attribute. Several actions render
+    // partially (no renderAll → no _updateUndoButtons refresh), so a disabled
+    // button would stay stuck after such an action even though the stack grew,
+    // making undo unclickable. Opacity is a hint; the button stays clickable.
     var u = document.querySelector(".btn-undo, #btn-undo");
     var r = document.querySelector(".btn-redo, #btn-redo");
-    if (u) {
+    if (u)
         u.style.opacity = _undoStack.length ? "1" : "0.3";
-        u.disabled = !_undoStack.length;
-    }
-    if (r) {
+    if (r)
         r.style.opacity = _redoStack.length ? "1" : "0.3";
-        r.disabled = !_redoStack.length;
-    }
 }
 function _replaceD(json) {
     var parsed = JSON.parse(json);
