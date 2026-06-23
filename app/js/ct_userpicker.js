@@ -48,7 +48,7 @@
  */
 (function () {
     "use strict";
-    // pickerId → { users, value, onCreate } — registered by render()
+    // pickerId → { users, value, onCreate, onChange } — registered by render()
     var _instances = {};
     function _userLabel(u) {
         if (!u)
@@ -77,7 +77,8 @@
         _instances[id] = {
             users: Array.isArray(opts.users) ? opts.users : [],
             value: opts.value || "",
-            onCreate: opts.onCreate || null
+            onCreate: opts.onCreate || null,
+            onChange: opts.onChange || null
         };
         var ph = opts.placeholder || "";
         return ''
@@ -110,7 +111,7 @@
         matches.forEach(function (u) {
             var lbl = _userLabel(u);
             h += '<div class="ct-userpicker-item" data-click="_ctUpPick" data-args=\''
-                + _da(id, lbl) + '\' data-stop>'
+                + _da(id, lbl, u.email || "") + '\' data-stop>'
                 + '<div style="font-weight:600">' + esc(lbl) + '</div>'
                 + (u.email ? '<div style="font-size:0.75em;color:var(--text-muted)">' + esc(u.email) + '</div>' : '')
                 + '</div>';
@@ -201,7 +202,7 @@
             inst.value = (query || "").trim();
         _renderDropdown(id, query || "");
     };
-    window._ctUpPick = function (id, label) {
+    window._ctUpPick = function (id, label, email) {
         var inst = _instances[id];
         if (!inst)
             return;
@@ -212,6 +213,10 @@
         var dd = document.getElementById(id + "-dd");
         if (dd)
             dd.hidden = true;
+        // Inline usage (e.g. _dirPicker cells): emit the selected email so the
+        // caller can save immediately. Modal callers don't pass onChange.
+        if (inst.onChange)
+            inst.onChange(email || "");
     };
     window._ctUpCreate = function (id, query) {
         var inst = _instances[id];
@@ -235,6 +240,8 @@
             var inp = document.getElementById(id + "-search");
             if (inp)
                 inp.value = lbl;
+            if (inst.onChange)
+                inst.onChange(created.email || "");
         }).catch(function (e) {
             if (typeof showStatus === "function")
                 showStatus(e.message || "Erreur", true);
@@ -326,7 +333,14 @@
             // standalone case). Otherwise fall back to a plain text input.
             var effective = (meta && meta.source) || "local";
             if (effective === "pilot" || (meta && meta.local_writable)) {
-                return fetchUsers().then(function (users) { return _mountPicker(opts, users); });
+                // FEAT-15 Lot 5: when the directory is the central Pilot hub,
+                // identities are owned by Access (the source). Consuming
+                // modules may search/select but NOT create here — drop the
+                // "+ Créer" affordance. Local-writable directories keep it.
+                var mountOpts = effective === "pilot"
+                    ? Object.assign({}, opts, { onCreate: undefined })
+                    : opts;
+                return fetchUsers().then(function (users) { return _mountPicker(mountOpts, users); });
             }
             return _mountPlain(opts);
         });

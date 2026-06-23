@@ -60,6 +60,9 @@ interface CtUserpickerRenderOpts {
     value?: string;
     placeholder?: string;
     onCreate?: ((query: string) => Promise<CtUser | null> | CtUser | null) | null;
+    /** Fired with the picked user's email on selection/creation. Lets the
+     *  picker be used inline with immediate save (e.g. _dirPicker cells). */
+    onChange?: ((email: string) => void) | null;
 }
 interface CtUserpickerMountOpts {
     slotId: string;
@@ -87,6 +90,6 @@ interface Window {
     ct_userpicker?: CtUserpickerApi;
     _ctUpFocus?: (id: string) => void;
     _ctUpSearch?: (id: string, query: string) => void;
-    _ctUpPick?: (id: string, label: string) => void;
+    _ctUpPick?: (id: string, label: string, email?: string) => void;
     _ctUpCreate?: (id: string, query: string) => void;
 }
