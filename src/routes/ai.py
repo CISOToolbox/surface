@@ -340,7 +340,9 @@ async def get_ai_config(user: User = Depends(get_current_user), db: AsyncSession
 async def set_ai_keys(body: dict, request: Request, db: AsyncSession = Depends(get_db)):
     """Set API keys. Authorized via service token (from Pilot) or admin user."""
     service_token = request.headers.get("X-Service-Token", "")
-    if not (service_token and service_token == os.getenv("SERVICE_TOKEN", "")):
+    import secrets as _secrets
+    _expected_token = os.getenv("SERVICE_TOKEN", "")
+    if not (service_token and _expected_token and _secrets.compare_digest(service_token, _expected_token)):
         try:
             user = await get_current_user(request, db)
         except HTTPException:
