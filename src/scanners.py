@@ -3776,6 +3776,12 @@ SCANNER_REGISTRY: dict[str, dict[str, Any]] = {
         "callable": lambda t: scan_host_ports(t, profile="standard"),
         "returns_discovered": False,
     },
+    "nmap_deep": {
+        "label": "Nmap (tous les ports + détection services)",
+        "kinds": {"host", "ip_range"},
+        "callable": lambda t: scan_host_ports(t, profile="deep"),
+        "returns_discovered": False,
+    },
     "nuclei": {
         "label": "Nuclei (templates DAST)",
         "kinds": {"host"},
