@@ -300,8 +300,58 @@ function renderPanel() {
         var _sh = _getSettingsButtonHTML();
         if (_sh) tr.insertAdjacentHTML("afterbegin", '<span class="toolbar-settings">' + _sh + '</span>');
     }
+    _loadAddonHelpDocs();
 }
 window.renderPanel = renderPanel;
+
+// In-app help for add-ons is NOT in the core i18n bundle: it is fetched from
+// the backend (GET /api/monitored-assets/addon-docs), which returns doc only
+// for add-ons actually loaded in this image. So an image built without an
+// add-on never even ships its help text. The HTML is injected into the
+// Méthodologie / Utilisation tabs. Fetched once, then re-injected on every
+// renderPanel — which covers boot, navigation and switchLang (the latter
+// resets the tabs' data-i18n-html, wiping our injected nodes; we re-add them
+// in the current language).
+var _addonHelpDocs: CtAddonDoc[] | null = null;
+var _addonHelpDocsLoading = false;
+
+function _loadAddonHelpDocs(): void {
+    if (_addonHelpDocs !== null) { _renderAddonHelpDocs(); return; }
+    if (_addonHelpDocsLoading) return;
+    _addonHelpDocsLoading = true;
+    SurfaceAPI.get("/api/monitored-assets/addon-docs").then(function(d: any) {
+        _addonHelpDocs = (d && d.addons) || [];
+    }).catch(function() {
+        _addonHelpDocs = [];
+    }).then(function() {
+        _addonHelpDocsLoading = false;
+        _renderAddonHelpDocs();
+    });
+}
+
+function _renderAddonHelpDocs(): void {
+    if (!_addonHelpDocs || !_addonHelpDocs.length) return;
+    var lang = document.documentElement.lang === "en" ? "en" : "fr";
+    (["methodo", "usage"] as const).forEach(function(tab) {
+        var parent = document.getElementById("help-content-" + tab);
+        if (!parent) return;
+        var parentEl = parent;
+        parentEl.querySelectorAll("[data-addon-injected]").forEach(function(n) {
+            if (n.parentNode) n.parentNode.removeChild(n);
+        });
+        _addonHelpDocs!.forEach(function(ad) {
+            var byLang = ad.doc && ad.doc[lang];
+            var html = byLang && byLang[tab];
+            if (!html) return;
+            var div = document.createElement("div");
+            div.setAttribute("data-addon-injected", ad.scanner || "");
+            // Developer-authored add-on doc served by our own backend (not user
+            // input) — same trust level as the data-i18n-html help content.
+            div.innerHTML = html;
+            parentEl.appendChild(div);
+        });
+    });
+}
 // ═══════════════════════════════════════════════════════════════
 // AUDIT LOG (admin-only)
 // ═══════════════════════════════════════════════════════════════
@@ -427,7 +477,7 @@ function _renderJobs(c: HTMLElement) {
     h += '</select>';
     h += '<select class="surface-filter" data-change="_setJobsStatusFilter" data-pass-value>';
     h += '<option value=""' + (_jobsFilterStatus === "" ? " selected" : "") + '>' + esc(t("jobs.filter.all")) + '</option>';
-    ["pending", "running", "completed", "failed"].forEach(function(s) {
+    ["pending", "running", "completed", "partial", "failed"].forEach(function(s) {
         var count = _jobs.filter(function(j) { return j.status === s; }).length;
         if (!count) return;
         h += '<option value="' + s + '"' + (_jobsFilterStatus === s ? " selected" : "") + '>' + _jobStatusLabel(s) + ' (' + count + ')</option>';
@@ -480,6 +530,14 @@ function _renderJobs(c: HTMLElement) {
         h += '<td>' + sourceBadge + '</td>';
         h += '<td><span class="job-status job-' + esc(j.status) + '">' + _jobStatusLabel(j.status) + '</span>';
         if (j.error) h += '<div style="font-size:0.72em;color:#991b1b;margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
+        if (j.status === "partial" && j.diff && j.diff.partial) {
+            var pp = j.diff.partial;
+            var msgs = [];
+            if (pp.limit === "files") msgs.push(t("jobs.partial.stopped").replace("{n}", String(pp.scanned != null ? pp.scanned : "?")) + " " + t("jobs.partial.files"));
+            else if (pp.limit === "time") msgs.push(t("jobs.partial.stopped").replace("{n}", String(pp.scanned != null ? pp.scanned : "?")) + " " + t("jobs.partial.time"));
+            if (pp.inaccessible_dirs) msgs.push(t("jobs.partial.inaccessible").replace("{n}", String(pp.inaccessible_dirs)));
+            if (msgs.length) h += '<div style="font-size:0.72em;color:#92400e;margin-top:2px">' + esc(msgs.join(" · ")) + '</div>';
+        }
         h += '</td>';
         h += '<td style="text-align:center;font-weight:600">' + j.findings_count;
         if (j.diff && (j.diff.added || j.diff.reopened)) {
@@ -490,7 +548,9 @@ function _renderJobs(c: HTMLElement) {
         }
         h += '</td>';
         h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(_fmtDate(j.created_at || "")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
-        h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur) + '</td>';
+        h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur);
+        if (j.diff && j.diff.scanned != null) h += '<div style="font-size:0.92em">' + esc(t("jobs.scanned_files").replace("{n}", String(j.diff.scanned))) + '</div>';
+        h += '</td>';
         h += '<td style="white-space:nowrap">';
         // Rerun is offered on every completed/failed job. The handler picks
         // the right path: manual nmap → POST /scans/jobs, scheduled jobs →
@@ -918,17 +978,21 @@ function _ensureMonitoredModal() {
         document.body.appendChild(ov);
         var _md: EventTarget | null = null; ov.addEventListener("mousedown", function(e) { _md = e.target; }); ov.addEventListener("click", function(e) { if (e.target === ov && _md === ov) _closeMonitoredModal(); });
     }
+    // Kind radios are derived from the scanners catalogue: the base kinds plus
+    // any extra kind a loaded scanner add-on contributes (e.g. file_share from
+    // the SMB add-on). A kind only appears if a scanner supports it.
+    var _kinds = Object.keys(_scannersCatalog || {});
+    if (!_kinds.length) _kinds = ["domain", "host", "ip_range"];
+    var kindRadios = _kinds.map(function(k, i) {
+        return '<label class="ct-radio"><input type="radio" name="monitored-kind" value="' + esc(k) + '"' + (i === 0 ? " checked" : "") + '> <span>' + esc(t("kind." + k) || k) + '</span></label>';
+    }).join("");
     // Rebuild innerHTML on every open so the locale is always current.
     ov.innerHTML =
         '<div class="ct-modal">' +
             '<div class="ct-modal-header"><span id="monitored-modal-title">' + esc(t("mon_modal.title_add")) + '</span><button class="ct-modal-close" data-click="_closeMonitoredModal">' + _icon("x", 18) + '</button></div>' +
             '<div class="ct-modal-body">' +
                 '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.type")) + '</label>' +
-                    '<div class="ct-radio-group">' +
-                        '<label class="ct-radio"><input type="radio" name="monitored-kind" value="domain" checked> <span>' + esc(t("kind.domain")) + '</span></label>' +
-                        '<label class="ct-radio"><input type="radio" name="monitored-kind" value="host"> <span>' + esc(t("kind.host")) + '</span></label>' +
-                        '<label class="ct-radio"><input type="radio" name="monitored-kind" value="ip_range"> <span>' + esc(t("kind.ip_range")) + '</span></label>' +
-                    '</div>' +
+                    '<div class="ct-radio-group">' + kindRadios + '</div>' +
                     '<div class="ct-field-help" id="monitored-kind-help"></div>' +
                 '</div>' +
                 '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.value")) + '</label>' +
@@ -968,11 +1032,43 @@ function _ensureMonitoredModal() {
                     '<div id="monitored-scanners" class="scanner-checklist"></div>' +
                     '<div class="ct-field-help">' + esc(t("mon_modal.scanners_help")) + '</div>' +
                 '</div>' +
+                // File-share (SMB) options — shown only for kind=file_share.
+                '<div id="monitored-fileshare" style="display:none">' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_user")) + '</label>' +
+                        '<input type="text" class="ct-input" id="monitored-fs-user" placeholder="svc-scan" autocomplete="off">' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_domain")) + '</label>' +
+                        '<input type="text" class="ct-input" id="monitored-fs-domain" placeholder="' + esc(t("mon_modal.fs_domain_ph")) + '" autocomplete="off">' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_pwd")) + '</label>' +
+                        '<input type="password" class="ct-input" id="monitored-fs-pwd" placeholder="' + esc(t("mon_modal.fs_pwd_ph")) + '" autocomplete="new-password">' +
+                        '<div class="ct-field-help">' + esc(t("mon_modal.fs_creds_help")) + '</div>' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_regex")) + '</label>' +
+                        '<textarea class="ct-input" id="monitored-fs-regex" rows="3" placeholder="' + esc(t("mon_modal.fs_regex_ph")) + '"></textarea>' +
+                        '<div class="ct-field-help">' + esc(t("mon_modal.fs_regex_help")) + '</div>' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_ext")) + '</label>' +
+                        '<input type="text" class="ct-input" id="monitored-fs-ext" placeholder="' + esc(t("mon_modal.fs_ext_ph")) + '">' +
+                        '<div class="ct-field-help">' + esc(t("mon_modal.fs_ext_help")) + '</div>' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_maxsize")) + '</label>' +
+                        '<input type="number" class="ct-input" id="monitored-fs-maxsize" min="1" placeholder="50">' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_maxfiles")) + '</label>' +
+                        '<input type="number" class="ct-input" id="monitored-fs-maxfiles" min="1" placeholder="∞">' +
+                        '<div class="ct-field-help">' + esc(t("mon_modal.fs_maxfiles_help")) + '</div>' +
+                    '</div>' +
+                    '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_timebudget")) + '</label>' +
+                        '<input type="number" class="ct-input" id="monitored-fs-timebudget" min="1" placeholder="30">' +
+                        '<div class="ct-field-help">' + esc(t("mon_modal.fs_timebudget_help")) + '</div>' +
+                    '</div>' +
+                '</div>' +
                 '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-enabled" checked> <span>' + esc(t("mon_modal.enabled")) + '</span></label></div>' +
-                '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-auto-enroll"> <span>' + esc(t("mon_modal.auto_enroll")) + '</span></label>' +
+                '<div class="ct-field" id="monitored-row-autoenroll"><label class="ct-checkbox"><input type="checkbox" id="monitored-auto-enroll"> <span>' + esc(t("mon_modal.auto_enroll")) + '</span></label>' +
                     '<div class="ct-field-help">' + esc(t("mon_modal.auto_enroll_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-stealth"> <span>' + esc(t("mon_modal.stealth")) + '</span></label>' +
+                '<div class="ct-field" id="monitored-row-stealth"><label class="ct-checkbox"><input type="checkbox" id="monitored-stealth"> <span>' + esc(t("mon_modal.stealth")) + '</span></label>' +
                     '<div class="ct-field-help">' + esc(t("mon_modal.stealth_help")) + '</div>' +
                 '</div>' +
                 '<div class="ct-error" id="monitored-error" style="display:none"></div>' +
@@ -986,9 +1082,22 @@ function _ensureMonitoredModal() {
         r.addEventListener("change", function() {
             _updateMonitoredKindHelp();
             _renderScannerChecklist(null);
+            _toggleFileShareConfig();
         });
     });
     return ov;
+}
+
+function _toggleFileShareConfig() {
+    var sel = document.querySelector('input[name="monitored-kind"]:checked') as HTMLInputElement | null;
+    var isFs = !!(sel && sel.value === "file_share");
+    var fs = document.getElementById("monitored-fileshare");
+    if (fs) fs.style.display = isFs ? "" : "none";
+    // Auto-enroll and stealth are network-scan concepts — irrelevant for a share.
+    var ae = document.getElementById("monitored-row-autoenroll");
+    var st = document.getElementById("monitored-row-stealth");
+    if (ae) ae.style.display = isFs ? "none" : "";
+    if (st) st.style.display = isFs ? "none" : "";
 }
 
 function _renderScannerChecklist(currentSelection: string[] | null) {
@@ -1041,9 +1150,19 @@ window._newMonitoredDialog = function() {
     (document.getElementById("monitored-frequency") as HTMLSelectElement).value = "24";
     (document.getElementById("monitored-criticality") as HTMLSelectElement).value = "medium";
     (document.getElementById("monitored-tags") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-regex") as HTMLTextAreaElement).value = "";
+    (document.getElementById("monitored-fs-ext") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-maxsize") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-maxfiles") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-timebudget") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-user") as HTMLInputElement).value = "";
+    (document.getElementById("monitored-fs-domain") as HTMLInputElement).value = "";
+    var _pw0 = document.getElementById("monitored-fs-pwd") as HTMLInputElement;
+    _pw0.value = ""; _pw0.placeholder = t("mon_modal.fs_pwd_ph");
     document.getElementById("monitored-error")!.style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(null);
+    _toggleFileShareConfig();
     ov.classList.add("open");
     setTimeout(function() {
         var v = document.getElementById("monitored-value");
@@ -1144,9 +1263,21 @@ window._editMonitoredDialog = function(id) {
     (document.getElementById("monitored-frequency") as HTMLSelectElement).value = String(a.scan_frequency_hours != null ? a.scan_frequency_hours : 24);
     (document.getElementById("monitored-criticality") as HTMLSelectElement).value = a.criticality || "medium";
     (document.getElementById("monitored-tags") as HTMLInputElement).value = (a.tags || []).join(", ");
+    var cfg = (a.config || {}) as Record<string, any>;
+    (document.getElementById("monitored-fs-regex") as HTMLTextAreaElement).value = (cfg.custom_regex || []).join("\n");
+    (document.getElementById("monitored-fs-ext") as HTMLInputElement).value = (cfg.extensions || []).join(", ");
+    (document.getElementById("monitored-fs-maxsize") as HTMLInputElement).value = cfg.max_size_mb != null ? String(cfg.max_size_mb) : "";
+    (document.getElementById("monitored-fs-maxfiles") as HTMLInputElement).value = cfg.max_files != null ? String(cfg.max_files) : "";
+    (document.getElementById("monitored-fs-timebudget") as HTMLInputElement).value = cfg.time_budget_s != null ? String(Math.round(cfg.time_budget_s / 60)) : "";
+    (document.getElementById("monitored-fs-user") as HTMLInputElement).value = cfg.smb_username || "";
+    (document.getElementById("monitored-fs-domain") as HTMLInputElement).value = cfg.smb_domain || "";
+    var _pwE = document.getElementById("monitored-fs-pwd") as HTMLInputElement;
+    _pwE.value = "";
+    _pwE.placeholder = cfg.smb_password_set ? t("mon_modal.fs_pwd_keep") : t("mon_modal.fs_pwd_ph");
     document.getElementById("monitored-error")!.style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(a.enabled_scanners || null);
+    _toggleFileShareConfig();
     ov.classList.add("open");
 };
 
@@ -1175,7 +1306,30 @@ window._saveMonitored = function() {
         tags: rawTags,
         auto_enroll_discoveries: (document.getElementById("monitored-auto-enroll") as HTMLInputElement).checked,
         stealth_mode: (document.getElementById("monitored-stealth") as HTMLInputElement).checked,
+        config: {},
     };
+    // File-share options → config (only when relevant; harmless otherwise).
+    if (data.kind === "file_share") {
+        var rx = ((document.getElementById("monitored-fs-regex") as HTMLTextAreaElement).value || "")
+            .split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
+        var exts = ((document.getElementById("monitored-fs-ext") as HTMLInputElement).value || "")
+            .split(",").map(function(s) { return s.trim().replace(/^\./, "").toLowerCase(); }).filter(Boolean);
+        var maxsz = parseInt((document.getElementById("monitored-fs-maxsize") as HTMLInputElement).value, 10);
+        var maxf = parseInt((document.getElementById("monitored-fs-maxfiles") as HTMLInputElement).value, 10);
+        var tbMin = parseInt((document.getElementById("monitored-fs-timebudget") as HTMLInputElement).value, 10);
+        data.config = {
+            custom_regex: rx,
+            extensions: exts,
+            max_size_mb: isNaN(maxsz) ? undefined : maxsz,
+            max_files: isNaN(maxf) ? undefined : maxf,
+            time_budget_s: isNaN(tbMin) ? undefined : tbMin * 60,
+            smb_username: (document.getElementById("monitored-fs-user") as HTMLInputElement).value.trim(),
+            smb_domain: (document.getElementById("monitored-fs-domain") as HTMLInputElement).value.trim(),
+        };
+        // Only send the password when (re)entered; empty keeps the stored one.
+        var _pwVal = (document.getElementById("monitored-fs-pwd") as HTMLInputElement).value;
+        if (_pwVal) (data.config as Record<string, any>).smb_password = _pwVal;
+    }
     var err = document.getElementById("monitored-error")!;
     err.style.display = "none";
     if (!data.value) {
@@ -1377,7 +1531,7 @@ function _timelineDaily(days: number) {
 }
 
 function _surfaceInventory() {
-    var byKind = { domain: 0, host: 0, ip_range: 0 };
+    var byKind: Record<string, number> = { domain: 0, host: 0, ip_range: 0, file_share: 0 };
     var hostsSource = { auto: 0, manual: 0 };
     var discoveredThisWeek = 0;
     var sevenDaysAgo = Date.now() - 7 * _DAY_MS;
@@ -1432,7 +1586,7 @@ function _schedulerHealth() {
     var jobs24 = _jobs.filter(function(j) {
         return j.created_at && new Date(j.created_at).getTime() > last24;
     });
-    var ok = jobs24.filter(function(j) { return j.status === "completed"; }).length;
+    var ok = jobs24.filter(function(j) { return j.status === "completed" || j.status === "partial"; }).length;
     var failed = jobs24.filter(function(j) { return j.status === "failed"; }).length;
     var running = _jobs.filter(function(j) { return j.status === "running" || j.status === "pending"; }).length;
     var lastJob = _jobs.length ? _jobs[0] : null;
@@ -2912,6 +3066,10 @@ window._editSurfaceMeasureRow = function(row) {
         ],
         defaultStatus: "a_faire",
         ownerPicker: { pickerId: "surface-measure-owner", directoryUrl: "api/directory" },
+        onAddNote: function(_entry, fullLog) {
+            (m as Record<string, any>).progress_log = fullLog;
+            return SurfaceAPI.updateMeasure(m!.id, { progress_log: fullLog } as any);
+        },
         onDelete: function() {
             ct_modal.confirm({
                 title: "Supprimer la mesure",
@@ -2986,6 +3144,57 @@ function _screenshotB64ForHost(values: string | string[]) {
     return null;
 }
 
+// A file share lives ON a host. We surface its findings under that host so
+// SMB results are visible in the Hosts view like every other scan. The share
+// asset keeps its UNC value; the "host key" is the server name parsed from it.
+function _shareHostname(value: string): string {
+    var v = (value || "").trim().replace(/^smb:\/\//i, "").replace(/^[\\/]+/, "").replace(/\\/g, "/");
+    var i = v.indexOf("/");
+    return (i >= 0 ? v.slice(0, i) : v).toLowerCase();
+}
+
+// The grouping key for a monitored asset in the Hosts view.
+function _assetHostKey(a: SurfaceMonitoredAsset): string {
+    return a.kind === "file_share" ? _shareHostname(a.value) : a.value;
+}
+
+// All file-share assets hosted on a given server (hostname). A single file
+// server can expose several shares, each its own MonitoredAsset; they all roll
+// up onto the one host card for that server, so the card/detail must list every
+// share, not just the first one.
+function _sharesForHost(hostKey: string): SurfaceMonitoredAsset[] {
+    var k = String(hostKey || "").toLowerCase();
+    return (_monitored || []).filter(function(a) {
+        return a.kind === "file_share" && _shareHostname(a.value) === k;
+    }).sort(function(a, b) { return (a.value || "").localeCompare(b.value || ""); });
+}
+
+// Does a finding's target belong to the given host key?
+function _findingMatchesHost(target: string, key: string): boolean {
+    var t = target || "";
+    if (/^(\\\\|\/\/|smb:\/\/)/i.test(t)) return _shareHostname(t) === String(key).toLowerCase();
+    return t === key || t.indexOf(key + ":") === 0;
+}
+
+// Assets shown as cards in the Hosts view: every host, plus one card per
+// file-share hostname that isn't already a monitored host (its findings would
+// otherwise be invisible). When a host of the same name exists, the share's
+// findings already roll up onto that host card, so we don't duplicate it.
+function _hostsViewAssets(): SurfaceMonitoredAsset[] {
+    var hostAssets = _monitored.filter(function(a) { return a.kind === "host"; });
+    var hostNames: Record<string, boolean> = {};
+    hostAssets.forEach(function(a) { hostNames[(a.value || "").toLowerCase()] = true; });
+    var seenShare: Record<string, boolean> = {};
+    var shareAssets = _monitored.filter(function(a) {
+        if (a.kind !== "file_share") return false;
+        var hn = _shareHostname(a.value);
+        if (hostNames[hn] || seenShare[hn]) return false;
+        seenShare[hn] = true;
+        return true;
+    });
+    return hostAssets.concat(shareAssets);
+}
+
 function _countFindingsByHost(hostValue: string): SurfaceHostCounts {
     // `total`          — all findings on this host (audit)
     // `active`         — new/to_fix + not info (actionable work)
@@ -3001,8 +3210,7 @@ function _countFindingsByHost(hostValue: string): SurfaceHostCounts {
         false_positive: 0, fixed: 0,
     };
     _findings.forEach(function(f) {
-        var tgt = f.target || "";
-        if (tgt !== hostValue && tgt.indexOf(hostValue + ":") !== 0) return;
+        if (!_findingMatchesHost(f.target || "", hostValue)) return;
         out.total++;
         if (f.status === "false_positive") { out.false_positive++; return; }
         if (f.status === "fixed")          { out.fixed++;          return; }
@@ -3017,7 +3225,7 @@ function _countFindingsByHost(hostValue: string): SurfaceHostCounts {
 
 function _renderHosts(c: HTMLElement) {
     if (_selectedHost) { _renderHostDetail(c); return; }
-    var hosts = _monitored.filter(function(a) { return a.kind === "host"; });
+    var hosts = _hostsViewAssets();
 
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<h2 style="margin:0">' + esc(t("hosts.title")) + '</h2>';
@@ -3052,11 +3260,12 @@ function _refreshHostCards() {
     var wrap = document.getElementById("host-cards-wrap");
     if (!wrap) return;
 
-    var hosts = _monitored.filter(function(a) { return a.kind === "host"; });
+    var hosts = _hostsViewAssets();
     var q = _hostSearch.trim().toLowerCase();
     var filtered = hosts.filter(function(a) {
         if (!q) return true;
         return (a.value || "").toLowerCase().indexOf(q) >= 0
+            || _assetHostKey(a).indexOf(q) >= 0
             || (a.label || "").toLowerCase().indexOf(q) >= 0
             || (a.notes || "").toLowerCase().indexOf(q) >= 0;
     });
@@ -3099,8 +3308,8 @@ function _refreshHostCards() {
 
     // Sort: entries with most ACTIVE (non-triaged) findings first, then alpha.
     entries.sort(function(a, b) {
-        var ca = _countFindingsByHost(a.primary.value).active;
-        var cb = _countFindingsByHost(b.primary.value).active;
+        var ca = _countFindingsByHost(_assetHostKey(a.primary)).active;
+        var cb = _countFindingsByHost(_assetHostKey(b.primary)).active;
         if (ca !== cb) return cb - ca;
         return (a.primary.value || "").localeCompare(b.primary.value || "");
     });
@@ -3117,12 +3326,13 @@ function _refreshHostCards() {
     h += '<div class="host-cards-grid">';
     entries.forEach(function(entry) {
         var a = entry.primary;
+        var isShare = a.kind === "file_share";
         // Aggregate counts across primary + aliases so the card reflects
         // everything that's observable at this IP, even though each alias
         // keeps its own MonitoredAsset row under the hood.
-        var counts = _countFindingsByHost(a.value);
+        var counts = _countFindingsByHost(_assetHostKey(a));
         entry.aliases.forEach(function(al) {
-            var cc = _countFindingsByHost(al.value);
+            var cc = _countFindingsByHost(_assetHostKey(al));
             Object.keys(counts).forEach(function(k) { counts[k] = (counts[k]||0) + (cc[k]||0); });
         });
         var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
@@ -3131,7 +3341,8 @@ function _refreshHostCards() {
         var tier = _riskTier(score);
         h += '<div class="host-card" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
         h += '<div class="host-card-top">';
-        h += '<div class="host-card-value">' + esc(a.value) + '</div>';
+        h += '<div class="host-card-value">' + esc(isShare ? _assetHostKey(a) : a.value) + '</div>';
+        if (isShare) h += '<span class="host-badge host-badge-share">' + esc(t("hosts.badge.share")) + '</span>';
         if (!a.enabled) h += '<span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>';
         if (autoDiscovered) h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
         else h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
@@ -3145,6 +3356,17 @@ function _refreshHostCards() {
         var shotB64 = _screenshotB64ForHost(shotValues);
         if (shotB64) {
             h += '<div class="host-card-thumb"><img src="data:image/png;base64,' + shotB64 + '" alt="" loading="lazy"/></div>';
+        }
+        if (isShare) {
+            // A file server can host several shares — list every one, not just
+            // the card's primary asset.
+            var cardShares = _sharesForHost(_assetHostKey(a));
+            if (cardShares.length > 1) {
+                h += '<div class="host-card-sharecount">' + _icon("folder", 11) + ' ' + esc(t("hosts.share_count").replace("{n}", String(cardShares.length))) + '</div>';
+            }
+            cardShares.forEach(function(sh) {
+                h += '<div class="host-card-ip" title="' + esc(sh.value) + '">' + _icon("folder", 11) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>';
+            });
         }
         if (a.label) h += '<div class="host-card-label">' + esc(a.label) + '</div>';
         if (entry.ip) {
@@ -3213,7 +3435,7 @@ window._clearHostSearch = function() {
 
 window._openHost = function(id) {
     var a = _monitored.find(function(x) { return x.id === id; });
-    if (!a || a.kind !== "host") return;
+    if (!a || (a.kind !== "host" && a.kind !== "file_share")) return;
     _selectedHost = a;
     _bulkSelection = {};  // fresh selection when entering the host detail
     renderPanel();
@@ -3247,7 +3469,9 @@ function _renderHostFindingInline(c: HTMLElement, hostValue?: string) {
 function _renderHostDetail(c: HTMLElement) {
     if (_hostSelectedFinding) { _renderHostFindingInline(c); return; }
     var a = _selectedHost!;
-    var counts = _countFindingsByHost(a.value);
+    var isShare = a.kind === "file_share";
+    var hostKey = _assetHostKey(a);
+    var counts = _countFindingsByHost(hostKey);
     var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
     var last = a.last_scan_at ? _fmtDate(a.last_scan_at, "long") : t("monitored.last.never");
 
@@ -3255,7 +3479,8 @@ function _renderHostDetail(c: HTMLElement) {
     var tier = _riskTier(score);
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<button class="btn-add btn-icon" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back")) + '</button>';
-    h += '<h2 style="margin:0;flex:1">' + esc(a.value) + '</h2>';
+    h += '<h2 style="margin:0;flex:1">' + esc(isShare ? hostKey : a.value) + '</h2>';
+    if (isShare) h += '<span class="host-badge host-badge-share">' + esc(t("hosts.badge.share")) + '</span>';
     if (autoDiscovered) h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
     else h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
     if (a.criticality && a.criticality !== "medium") {
@@ -3264,9 +3489,32 @@ function _renderHostDetail(c: HTMLElement) {
     h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + ' — ' + esc(tier.lbl) + '</span>';
     h += '</div>';
 
+    // A file server can host several shares (each its own asset) — list every
+    // one with its own scan/edit/delete actions, so the detail isn't limited to
+    // the single share the card was opened from.
+    var detailShares = isShare ? _sharesForHost(hostKey) : [];
+
     // Info card
     h += '<div class="surface-card">';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.value")) + '</div><div style="font-family:monospace">' + esc(a.value) + '</div></div>';
+    if (isShare) {
+        var sharesRows = detailShares.map(function(sh) {
+            var acts =
+                '<button class="btn-mini" data-click="_scanHost" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.scan_now")) + '">' + _icon("search", 12) + '</button>' +
+                '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.edit")) + '">' + _icon("edit", 12) + '</button>' +
+                '<button class="btn-mini" data-click="_deleteHostFromDetail" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("action.delete")) + '">' + _icon("trash", 12) + '</button>';
+            var shScanners = (sh.enabled_scanners || []).map(function(s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ");
+            var shLast = sh.last_scan_at ? _fmtDate(sh.last_scan_at) : t("monitored.last.never");
+            return '<div class="host-share-row">' +
+                '<div class="host-share-path" style="font-family:monospace" title="' + esc(sh.value) + '">' + _icon("folder", 12) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>' +
+                '<div class="host-share-acts">' + acts + '</div>' +
+                (shScanners ? '<div class="host-share-scanners">' + shScanners + '</div>' : '') +
+                '<div class="host-share-meta">' + esc(t("hosts.last_scan")) + ' : ' + esc(shLast) + '</div>' +
+                '</div>';
+        }).join("");
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.shares")) + ' (' + detailShares.length + ')</div><div style="flex:1">' + sharesRows + '</div></div>';
+    } else {
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.value")) + '</div><div style="font-family:monospace">' + esc(a.value) + '</div></div>';
+    }
     if (a.resolved_ip && a.resolved_ip !== a.value) {
         h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.resolved_ip")) + '</div><div style="font-family:monospace">' + esc(a.resolved_ip) + '</div></div>';
     }
@@ -3283,28 +3531,40 @@ function _renderHostDetail(c: HTMLElement) {
         }
     }
     if (a.label) h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.label")) + '</div><div>' + esc(a.label) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.enabled")) + '</div><div>' + (a.enabled ? "✓" : "✗") + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.frequency")) + '</div><div>' + _tn("host.frequency_hours", a.scan_frequency_hours || 0) + '</div></div>';
-    h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.last_scan")) + '</div><div>' + esc(last) + '</div></div>';
-    if (a.enabled_scanners && a.enabled_scanners.length) {
+    // enabled / frequency / last-scan are per-share for a file server — shown
+    // in the per-share list above, so skip the single-asset rows there.
+    if (!isShare) {
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.enabled")) + '</div><div>' + (a.enabled ? "✓" : "✗") + '</div></div>';
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.frequency")) + '</div><div>' + _tn("host.frequency_hours", a.scan_frequency_hours || 0) + '</div></div>';
+        h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.last_scan")) + '</div><div>' + esc(last) + '</div></div>';
+    }
+    if (!isShare && a.enabled_scanners && a.enabled_scanners.length) {
         h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.scanners")) + '</div><div>' + a.enabled_scanners.map(function(s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ") + '</div></div>';
     }
     if (a.notes) h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.notes")) + '</div><div style="white-space:pre-wrap;font-size:0.85em;color:var(--text-muted)">' + esc(a.notes) + '</div></div>';
     h += '</div>';
 
-    // Action buttons
+    // Action buttons. For a multi-share server, "scan now" fans out to every
+    // share and per-share edit/delete live in the shares list above, so we only
+    // offer the bulk scan here. A single share keeps the usual scan/edit/delete.
     h += '<div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
-    h += '<button class="btn-add" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.edit")) + '</button>';
-    h += '<span style="flex:1"></span>';
-    h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
+    if (isShare && detailShares.length > 1) {
+        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanSharesOnHost" data-args=\'' + _da(hostKey) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_all_shares")) + '</button>';
+    } else {
+        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
+        h += '<button class="btn-add" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.edit")) + '</button>';
+        h += '<span style="flex:1"></span>';
+        h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
+    }
     h += '</div>';
 
     // Per-host scan timeline — list the last 8 scan jobs that targeted
     // this asset, newest first. Each entry shows the scanner, the time
     // delta, and the diff bubble (+N / ↻N) so the operator can see at
     // a glance what changed between runs.
-    var hostJobs = (_jobs || []).filter(function(j) { return j.target === a.value; }).slice(0, 8);
+    // History covers every share on this server, not just the opened one.
+    var histTargets = isShare ? detailShares.map(function(s) { return s.value; }) : [a.value];
+    var hostJobs = (_jobs || []).filter(function(j) { return histTargets.indexOf(j.target) >= 0; }).slice(0, 8);
     if (hostJobs.length) {
         h += '<h3 style="margin-top:20px">' + esc(t("host.scan_history")) + '</h3>';
         h += '<div class="host-timeline">';
@@ -3322,6 +3582,7 @@ function _renderHostDetail(c: HTMLElement) {
             if (diff.refreshed) bits.push('<span class="job-diff-refreshed">~' + diff.refreshed + '</span>');
             if (bits.length) h += '<span class="host-timeline-diff">' + bits.join(" ") + '</span>';
             else h += '<span class="host-timeline-diff text-muted">—</span>';
+            if (diff.scanned != null) h += '<span class="host-timeline-scanned text-muted">' + esc(t("jobs.scanned_files").replace("{n}", String(diff.scanned))) + '</span>';
             if (j.error) h += '<span class="host-timeline-err" title="' + esc(j.error) + '">' + _icon("alert", 12) + '</span>';
             h += '</div>';
         });
@@ -3346,8 +3607,7 @@ function _renderHostDetail(c: HTMLElement) {
     }
 
     var hostFindingsAll = _findings.filter(function(f) {
-        var tgt = f.target || "";
-        return tgt === a.value || tgt.indexOf(a.value + ":") === 0;
+        return _findingMatchesHost(f.target || "", hostKey);
     });
     var fpCount = hostFindingsAll.filter(function(f) { return f.status === "false_positive"; }).length;
     var hostFindings = _hostHideFP ? hostFindingsAll.filter(function(f) { return f.status !== "false_positive"; }) : hostFindingsAll;
@@ -3484,6 +3744,19 @@ window._openFindingFromHost = function(id) {
     });
 };
 
+window._scanSharesOnHost = function(hostKey) {
+    // Trigger a scan on every share hosted on this server.
+    var shares = _sharesForHost(hostKey).filter(function(s) { return s.enabled; });
+    if (!shares.length) { showStatus(t("common.error"), true); return; }
+    showStatus(t("mon_modal.scan_in_progress"));
+    shares.forEach(function(sh) {
+        SurfaceAPI.scanMonitored(sh.id).then(function(r) {
+            _loadAndRender();
+            if (r && r.job_id) _pollScanJob(r.job_id, r.target);
+        }).catch(function() {});
+    });
+};
+
 window._scanHost = function(id) {
     showStatus(t("mon_modal.scan_in_progress"));
     SurfaceAPI.scanMonitored(id).then(function(r) {
@@ -3514,7 +3787,7 @@ function _pollScanJob(jobId: string, target?: string) {
                 return;
             }
             clearInterval(iv);
-            var label = (job.status === "completed") ? "host.scan_done" : "host.scan_failed";
+            var label = (job.status === "completed" || job.status === "partial") ? "host.scan_done" : "host.scan_failed";
             showStatus(
                 t(label)
                     .replace("{target}", target || job.target)
@@ -3656,6 +3929,14 @@ window._nucleiUpdateTemplates = function() {
 //   2. Wrap openSettings so that, after ai_common.js builds the shared side
 //      panel, we populate the Nuclei section.
 document.addEventListener("DOMContentLoaded", function() {
+    // Apply static translations now that the app i18n dicts are registered.
+    // i18n.js only auto-applies at boot when the locale is EN (or on a manual
+    // switchLang); in the default FR locale nothing applies the dictionaries,
+    // so data-i18n-html blocks (the Méthodologie / Utilisation help content,
+    // which have no baked fallback) would render empty. Apply once here so the
+    // help core content is present before any add-on doc is injected.
+    if (typeof _applyStaticTranslations === "function") _applyStaticTranslations();
+
     // Initial data load + render
     if (typeof _loadAndRender === "function") _loadAndRender();
 

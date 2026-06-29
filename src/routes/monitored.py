@@ -9,17 +9,18 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user
+from src.crypto import encrypt_secret
 from src.database import async_session, get_db
-from src.findings_dedup import diff_summary, insert_many
+from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import Finding, MonitoredAsset, ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.routes.scans import _quick_scan_sync
-from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
+from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 from src.audit import log_action
 
 router = APIRouter(prefix="/api/monitored-assets", tags=["monitored"])
@@ -51,6 +52,22 @@ def _validate(kind: str, value: str) -> str:
             ipaddress.ip_network(v, strict=False)
         except ValueError as e:
             raise ValueError(f"Plage CIDR invalide : {e}")
+    elif kind == "file_share":
+        # Accept \\host\share, //host/share or smb://host/share. Internal file
+        # servers (RFC1918 / internal DNS names) are legitimate, so we do NOT
+        # resolve+SSRF-block like the other kinds — only reject loopback /
+        # link-local / cloud-metadata literals (SMB to those is never valid).
+        raw = v.replace("\\", "/")
+        if raw.lower().startswith("smb://"):
+            raw = raw[6:]
+        raw = raw.lstrip("/")
+        parts = [p for p in raw.split("/") if p]
+        if len(parts) < 2:
+            raise ValueError(f"Partage invalide (attendu \\\\serveur\\partage) : {value}")
+        host = parts[0].lower()
+        if host in ("localhost",) or host.startswith(("127.", "169.254.", "::1")) or host in ("0.0.0.0",):
+            raise ValueError(f"Hôte de partage bloqué : {host}")
+        return v
     else:
         raise ValueError(f"Type inconnu : {kind}")
 
@@ -81,8 +98,22 @@ def _clean_tags(tags: list[str] | None) -> list[str]:
     return out
 
 
+_BASE_KINDS = {"domain", "host", "ip_range"}
+
+
+def _validate_kind(v: str) -> str:
+    """Accept the base kinds + any kind contributed by a loaded scanner
+    add-on (e.g. file_share from the SMB add-on)."""
+    if v in _BASE_KINDS:
+        return v
+    addon_kinds = {k for meta in SCANNER_REGISTRY.values() for k in meta.get("kinds", ())}
+    if v in addon_kinds:
+        return v
+    raise ValueError(f"Unknown asset kind: {v}")
+
+
 class MonitoredAssetCreate(BaseModel):
-    kind: str = Field(..., pattern="^(domain|host|ip_range)$")
+    kind: str
     value: str
     label: Optional[str] = ""
     notes: Optional[str] = ""
@@ -93,6 +124,12 @@ class MonitoredAssetCreate(BaseModel):
     criticality: Optional[str] = "medium"
     auto_enroll_discoveries: bool = False
     stealth_mode: bool = False
+    config: Optional[dict] = None
+
+    @field_validator("kind")
+    @classmethod
+    def _ck(cls, v: str) -> str:
+        return _validate_kind(v)
 
 
 class MonitoredAssetUpdate(BaseModel):
@@ -107,6 +144,36 @@ class MonitoredAssetUpdate(BaseModel):
     criticality: Optional[str] = None
     auto_enroll_discoveries: Optional[bool] = None
     stealth_mode: Optional[bool] = None
+    config: Optional[dict] = None
+
+    @field_validator("kind")
+    @classmethod
+    def _ck(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_kind(v) if v is not None else v
+
+
+# Per-target config may carry an SMB password. It is stored encrypted
+# (smb_password_enc) and NEVER returned to the client.
+def _redact_config_out(config: dict) -> dict:
+    out = {k: v for k, v in (config or {}).items() if k != "smb_password_enc"}
+    out["smb_password_set"] = bool((config or {}).get("smb_password_enc"))
+    return out
+
+
+def _merge_config_secrets(new_config: dict | None, existing: dict | None) -> dict:
+    """Encrypt a freshly-entered smb_password into smb_password_enc; preserve
+    the existing one when the client sends none. Strip server-controlled keys
+    the client must not set directly."""
+    cfg = dict(new_config or {})
+    existing = existing or {}
+    cfg.pop("smb_password_enc", None)
+    cfg.pop("smb_password_set", None)
+    pw = cfg.pop("smb_password", None)
+    if pw:
+        cfg["smb_password_enc"] = encrypt_secret(str(pw))
+    elif existing.get("smb_password_enc"):
+        cfg["smb_password_enc"] = existing["smb_password_enc"]
+    return cfg
 
 
 def _to_dict(a: MonitoredAsset) -> dict:
@@ -119,6 +186,7 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "criticality": a.criticality or "medium",
         "auto_enroll_discoveries": bool(a.auto_enroll_discoveries),
         "stealth_mode": bool(a.stealth_mode),
+        "config": _redact_config_out(a.config or {}),
         "resolved_ip": a.resolved_ip,
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
     }
@@ -126,14 +194,31 @@ def _to_dict(a: MonitoredAsset) -> dict:
 
 @router.get("/scanners-catalog")
 async def scanners_catalog(user: User = Depends(get_current_user)):
-    """Return the list of available scanners per asset kind for the UI."""
+    """Return the available scanners per asset kind for the UI.
+
+    Kinds are derived from the loaded scanners: the 3 base kinds are always
+    present, plus any extra kind contributed by an add-on scanner (e.g.
+    `file_share` from the SMB add-on). This way the add-target UI only offers
+    a target type when a scanner actually supports it."""
+    base = ["domain", "host", "ip_range"]
+    extra = sorted({k for meta in SCANNER_REGISTRY.values() for k in meta.get("kinds", ())} - set(base))
     return {
         kind: {
             "scanners": available_scanners_for_kind(kind),
             "defaults": DEFAULT_SCANNERS_BY_KIND.get(kind, []),
         }
-        for kind in ("domain", "host", "ip_range")
+        for kind in base + extra
     }
+
+
+@router.get("/addon-docs")
+async def addon_docs(user: User = Depends(get_current_user)):
+    """In-app help documentation contributed by loaded add-on scanners.
+
+    Returns [] on a core/public image (no add-on doc is bundled). The frontend
+    injects these into the Méthodologie / Utilisation tabs, so the doc for an
+    add-on appears strictly when that add-on is installed in this image."""
+    return {"addons": addon_help_docs()}
 
 
 @router.get("")
@@ -181,6 +266,7 @@ async def create_asset(
         criticality=crit,
         auto_enroll_discoveries=bool(body.auto_enroll_discoveries),
         stealth_mode=bool(body.stealth_mode),
+        config=_merge_config_secrets(body.config, {}),
         resolved_ip=resolved_ip,
     )
     db.add(a)
@@ -233,6 +319,8 @@ async def update_asset(
         a.auto_enroll_discoveries = bool(body.auto_enroll_discoveries)
     if body.stealth_mode is not None:
         a.stealth_mode = bool(body.stealth_mode)
+    if body.config is not None:
+        a.config = _merge_config_secrets(body.config, a.config or {})
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)
@@ -260,16 +348,25 @@ async def _run_manual_scan(
     value: str,
     enabled_scanners: list[str],
     stealth: bool = False,
+    config: dict | None = None,
 ) -> None:
     """Background task: run the full scanner chain on a single asset.
     Lives in its own DB session so we never share a connection with the
     request that kicked us off. Mirrors scheduler._scan_one."""
     error_msg: str | None = None
-    try:
-        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners, stealth)
-    except Exception as e:
-        findings, discovered = [], []
-        error_msg = str(e)[:1000]
+    # Incremental sink (see scheduler._scan_one): a sink-aware scanner commits
+    # findings batch-by-batch through `sink_db` while it runs, so a killed /
+    # timed-out scan keeps everything found so far.
+    loop = asyncio.get_running_loop()
+    sink_counts: dict | None = None
+    async with async_session() as sink_db:
+        sink, sink_counts = make_thread_sink(sink_db, loop)
+        try:
+            findings, discovered = await asyncio.to_thread(
+                run_enabled_scanners, kind, value, enabled_scanners, stealth, config or {}, sink)
+        except Exception as e:
+            findings, discovered = [], []
+            error_msg = str(e)[:1000]
 
     async with async_session() as db:
         asset = await db.get(MonitoredAsset, asset_id)
@@ -277,7 +374,10 @@ async def _run_manual_scan(
         if asset is None or job is None:
             return
 
+        findings, scan_state = apply_scanner_state(asset, findings)
         counts = await insert_many(db, findings)
+        if sink_counts:
+            merge_counts(counts, sink_counts)
 
         # Auto-enrol discovered hosts like the scheduler — only when the
         # parent asset opted in. Discovery findings/evidence are kept
@@ -324,11 +424,20 @@ async def _run_manual_scan(
             except Exception:
                 pass
         job.completed_at = datetime.now(timezone.utc)
-        job.diff = diff_summary(counts)
+        diff = diff_summary(counts)
+        if scan_state:
+            if scan_state.get("scanned") is not None:
+                diff["scanned"] = scan_state.get("scanned")
+            if scan_state.get("partial"):
+                diff["partial"] = {"scanned": scan_state.get("scanned"), "limit": scan_state.get("limit"),
+                                   "inaccessible_dirs": scan_state.get("inaccessible_dirs")}
+        job.diff = diff
         job.findings_count = counts.get("inserted", 0) + counts.get("reopened", 0)
         if error_msg:
             job.status = "failed"
             job.error = error_msg
+        elif scan_state and scan_state.get("partial"):
+            job.status = "partial"
         else:
             job.status = "completed"
         await db.commit()
@@ -354,6 +463,7 @@ async def scan_asset(
     value = a.value
     enabled_scanners = list(a.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
     stealth = bool(a.stealth_mode)
+    cfg = dict(a.config or {})
 
     # Manual scan → distinct tag so the Scans page shows it as "manual"
     # not "scheduled" (even though it uses the same pipeline)
@@ -371,7 +481,7 @@ async def scan_asset(
     await db.commit()
     await db.refresh(job)
 
-    background.add_task(_run_manual_scan, asset_id, job.id, kind, value, enabled_scanners, stealth)
+    background.add_task(_run_manual_scan, asset_id, job.id, kind, value, enabled_scanners, stealth, cfg)
 
     return {
         "target": value,
@@ -398,19 +508,27 @@ async def scan_all(
 
     sem = asyncio.Semaphore(3)
 
-    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str], stealth: bool) -> tuple[uuid.UUID, str, dict | None, str | None]:
+    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str], stealth: bool, config: dict) -> tuple[uuid.UUID, str, dict | None, str | None]:
         """Run the configured scanners on one asset in a dedicated DB
         session (SQLAlchemy async sessions are not coroutine-safe)."""
         async with sem:
             scanners = list(enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
+            loop = asyncio.get_running_loop()
+            sink_counts: dict | None = None
             try:
-                findings, _discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, scanners, stealth)
+                async with async_session() as sink_db:
+                    sink, sink_counts = make_thread_sink(sink_db, loop)
+                    findings, _discovered = await asyncio.to_thread(
+                        run_enabled_scanners, kind, value, scanners, stealth, config or {}, sink)
             except Exception as e:
                 return asset_id, value, None, str(e)
             try:
                 async with async_session() as own_db:
-                    counts = await insert_many(own_db, findings)
                     asset = await own_db.get(MonitoredAsset, asset_id)
+                    findings, _state = apply_scanner_state(asset, findings)
+                    counts = await insert_many(own_db, findings)
+                    if sink_counts:
+                        merge_counts(counts, sink_counts)
                     if asset is not None:
                         asset.last_scan_at = datetime.now(timezone.utc)
                     await own_db.commit()
@@ -419,7 +537,7 @@ async def scan_all(
                 return asset_id, value, None, f"persist: {e}"
 
     results = await asyncio.gather(*(
-        _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []), bool(a.stealth_mode))
+        _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []), bool(a.stealth_mode), dict(a.config or {}))
         for a in assets
     ))
     for _, value, counts, err in results:

@@ -190,6 +190,8 @@
         var v_stat = initial("statut") || opts.defaultStatus || "";
         var v_resp = initial("responsable");
         var v_due = initial("echeance");
+        var _rawLog = initial("progress_log");
+        var v_log = Array.isArray(_rawLog) ? _rawLog : [];
         // ── Picker config ────────────────────────────────────────────
         var pickerEnabled = !!opts.ownerPicker;
         var pickerOpts = (opts.ownerPicker && typeof opts.ownerPicker === "object") ? opts.ownerPicker : {};
@@ -228,6 +230,77 @@
             h += '<label>' + esc(_t("measure.field.description", "Description"))
                 + '<textarea id="' + _fieldId("description") + '" rows="3">' + esc(v_desc) + '</textarea>'
                 + '</label>';
+        }
+        // Progress journal — timestamped notes on where the measure stands,
+        // distinct from the discrete status. The form shows only the latest
+        // note (one line: date · author · text); the full history opens in a
+        // secondary overlay. A note can be added inline without saving the
+        // measure (persisted immediately via opts.onAddNote when it exists).
+        var journalVisible = !_hidden("progress_log", hide);
+        // Author for a new note: explicit opt, else the logged-in user (backend
+        // apps set window._currentUser), else empty (opensource).
+        function _journalAuthor() {
+            var cu = window._currentUser;
+            return opts.currentUser || (cu && cu.name) || "";
+        }
+        // One compact line: "<date> · <author> — <text>".
+        function _journalLineHtml(e) {
+            var when = (e && e.at ? String(e.at) : "").slice(0, 16).replace("T", " ");
+            var meta = [when, (e && e.by) ? String(e.by) : ""].filter(Boolean).join(" · ");
+            return '<span class="ct-journal-meta">' + esc(meta) + '</span>'
+                + (meta ? '<span class="ct-journal-sep"> — </span>' : '')
+                + '<span class="ct-journal-text">' + esc((e && e.text) ? String(e.text) : "") + '</span>';
+        }
+        // Collapsed body = latest entry + a "history (N)" link when N > 1.
+        function _journalBodyHtml() {
+            if (!v_log.length)
+                return '<div class="ct-journal-empty">' + esc(_t("measure.field.progress_log_empty", "Aucune note pour l'instant.")) + '</div>';
+            var last = v_log[v_log.length - 1];
+            var out = '<div class="ct-journal-entry">' + _journalLineHtml(last) + '</div>';
+            if (v_log.length > 1)
+                out += '<button type="button" class="ct-journal-history-link" id="ctm-journal-history">'
+                    + esc(_t("measure.field.progress_log_history", "Voir l'historique")) + ' (' + v_log.length + ')</button>';
+            return out;
+        }
+        // Full history in a secondary overlay (ct_modal is a single shared
+        // overlay, so the history gets its own lightweight layer on top).
+        function _openJournalHistory() {
+            var ov = document.createElement("div");
+            ov.className = "ct-journal-hist-overlay";
+            var rows = v_log.slice().reverse().map(function (e) {
+                return '<div class="ct-journal-entry">' + _journalLineHtml(e) + '</div>';
+            }).join("");
+            ov.innerHTML = '<div class="ct-journal-hist-box">'
+                + '<div class="ct-journal-hist-head"><strong>' + esc(_t("measure.field.progress_log", "Journal d'avancement")) + '</strong>'
+                + '<button type="button" class="ct-journal-hist-close" aria-label="Close">&times;</button></div>'
+                + '<div class="ct-journal-hist-list">' + rows + '</div></div>';
+            document.body.appendChild(ov);
+            function close() { if (ov.parentNode)
+                ov.parentNode.removeChild(ov); }
+            ov.addEventListener("click", function (ev) { if (ev.target === ov)
+                close(); });
+            var cb = ov.querySelector(".ct-journal-hist-close");
+            if (cb)
+                cb.addEventListener("click", close);
+            function onEsc(ev) {
+                if (ev.key === "Escape") {
+                    close();
+                    document.removeEventListener("keydown", onEsc);
+                }
+            }
+            document.addEventListener("keydown", onEsc);
+        }
+        if (journalVisible) {
+            h += '<div class="ct-measure-journal">';
+            h += '<label class="ct-journal-lbl">' + esc(_t("measure.field.progress_log", "Journal d'avancement")) + '</label>';
+            h += '<div class="ct-journal-body" id="ctm-journal-body">' + _journalBodyHtml() + '</div>';
+            if (!opts.journalReadOnly) {
+                h += '<div class="ct-journal-add">'
+                    + '<textarea id="' + _fieldId("progress_log_new") + '" rows="2" placeholder="' + esc(_t("measure.field.progress_log_ph", "Ajouter une note d'avancement…")) + '"></textarea>'
+                    + '<button type="button" class="ct-btn ct-journal-add-btn" id="ctm-journal-add">' + esc(_t("measure.field.progress_log_add", "Ajouter")) + '</button>'
+                    + '</div>';
+            }
+            h += '</div>';
         }
         // Row: type + status (collapsed together if both visible)
         var typeVisible = !_hidden("type", hide) && typeOpts.length > 0;
@@ -285,6 +358,16 @@
         if (opts.extraContent)
             h += opts.extraContent;
         // ── Snapshot / collect helpers ───────────────────────────────
+        // The full journal = entries collected so far (including any added
+        // inline via the "Ajouter" button) plus a trailing one if the author
+        // typed text but did not click Add. at/by are stamped client-side.
+        function buildLog() {
+            var out = v_log.slice();
+            var nt = (_val(_fieldId("progress_log_new")) || "").trim();
+            if (nt)
+                out.push({ at: new Date().toISOString(), by: _journalAuthor(), text: nt });
+            return out;
+        }
         function snapshot() {
             var snap = {};
             if (!_hidden("title", hide) && !opts.titleReadOnly)
@@ -299,6 +382,8 @@
                 snap[outKey("responsable")] = (ownerHandle ? ownerHandle.getValue() : _val(_fieldId("responsable"))) || v_resp;
             if (dueVisible)
                 snap[outKey("echeance")] = _val(_fieldId("echeance")) || v_due;
+            if (journalVisible && !opts.journalReadOnly)
+                snap[outKey("progress_log")] = buildLog();
             if (Array.isArray(opts.extraFields)) {
                 opts.extraFields.forEach(function (f) {
                     var v = _readExtra(f);
@@ -329,6 +414,8 @@
             }
             if (dueVisible)
                 data[outKey("echeance")] = _val(_fieldId("echeance"));
+            if (journalVisible && !opts.journalReadOnly)
+                data[outKey("progress_log")] = buildLog();
             if (Array.isArray(opts.extraFields)) {
                 opts.extraFields.forEach(function (f) {
                     var v = _readExtra(f);
@@ -433,6 +520,52 @@
                     autoGrow();
                     el.addEventListener("input", autoGrow);
                 });
+                // Progress journal — inline "Ajouter" + history overlay.
+                if (journalVisible && !opts.journalReadOnly) {
+                    var jbody = overlay.querySelector("#ctm-journal-body");
+                    var bindHistory = function () {
+                        var hl = overlay.querySelector("#ctm-journal-history");
+                        if (hl)
+                            hl.addEventListener("click", function () { _openJournalHistory(); });
+                    };
+                    bindHistory();
+                    var addBtn = overlay.querySelector("#ctm-journal-add");
+                    if (addBtn)
+                        addBtn.addEventListener("click", function () {
+                            var ta = overlay.querySelector("#" + _fieldId("progress_log_new"));
+                            var txt = ((ta && ta.value) || "").trim();
+                            if (!txt) {
+                                if (ta)
+                                    ta.focus();
+                                return;
+                            }
+                            var entry = { at: new Date().toISOString(), by: _journalAuthor(), text: txt };
+                            var commit = function () {
+                                v_log.push(entry);
+                                if (ta) {
+                                    ta.value = "";
+                                    ta.style.height = "auto";
+                                }
+                                if (jbody)
+                                    jbody.innerHTML = _journalBodyHtml();
+                                bindHistory();
+                            };
+                            if (m && m.id && typeof opts.onAddNote === "function") {
+                                addBtn.disabled = true;
+                                Promise.resolve(opts.onAddNote(entry, v_log.concat([entry])))
+                                    .then(function () { commit(); })
+                                    .catch(function () {
+                                    if (typeof showStatus === "function")
+                                        showStatus(_t("measure.field.progress_log_add_err", "Échec de l'ajout de la note"), true);
+                                })
+                                    .then(function () { if (addBtn)
+                                    addBtn.disabled = false; });
+                            }
+                            else {
+                                commit();
+                            }
+                        });
+                }
                 if (!opts.titleReadOnly && !_hidden("title", hide)) {
                     var tf = overlay.querySelector("#" + _fieldId("title"));
                     if (tf) {

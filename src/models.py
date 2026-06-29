@@ -117,6 +117,7 @@ class Measure(Base):
     statut = Column(String(50), nullable=False, default="a_faire")  # a_faire | en_cours | termine
     responsable = Column(String(255), nullable=True, default="")
     echeance = Column(String(20), nullable=True, default="")
+    progress_log = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
 
@@ -159,6 +160,10 @@ class MonitoredAsset(Base):
     enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     scan_frequency_hours = Column(Integer, nullable=False, default=24, server_default=text("24"))
     enabled_scanners = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    # Generic, non-secret per-asset scanner options consumed by scanners that
+    # declare `wants_config` (e.g. the SMB add-on: custom regex, extensions,
+    # max file size). Secrets (SMB credentials) come from the environment.
+    config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     # v0.2: free-form tags + business criticality so the operator can rank
     # what to fix first. `tags` is a JSON array of short strings (e.g.
     # ["production", "pci-scope", "customer-facing"]). `criticality` is the

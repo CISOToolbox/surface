@@ -104,6 +104,26 @@ interface CtMeasureModalOpts {
     extraFields?: CtMeasureExtraField[];
     extraButtons?: CtModalButton[];
     onDelete?: () => void;
+    /** Author stamped on a new progress-journal entry (backend apps pass the
+     *  current user's name; opensource may omit it). */
+    currentUser?: string;
+    /** Show the progress journal read-only: render the history but no add-entry
+     *  box, and never emit progress_log. */
+    journalReadOnly?: boolean;
+    /** Persist a single new journal note immediately, without closing the modal.
+     *  Called when the user clicks "Ajouter" on an existing measure (m.id set).
+     *  Receives the new entry and the full updated log; may return a Promise —
+     *  the entry is only shown once it resolves. When omitted (or for a not-yet
+     *  created measure) the note is kept in memory and saved with the measure. */
+    onAddNote?: (entry: {
+        at?: string;
+        by?: string;
+        text?: string;
+    }, fullLog: Array<{
+        at?: string;
+        by?: string;
+        text?: string;
+    }>) => void | Promise<any>;
     /** Internal — field snapshot used by the reopen-after-sub-modal flow. */
     _prefill?: Record<string, any>;
 }

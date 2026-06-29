@@ -1,8 +1,9 @@
 # ┌──────────────────────────────────────────────────────────────────┐
-# │  CISO Toolbox — Surface (ASM) hardened image                    │
-# │  Multi-stage: pip deps → tools → hardened runtime               │
-# │  Non-root (surface:1000), read-only rootfs friendly,            │
-# │  minimal packages, no compiler/shell utilities in final layer.  │
+# │  CISO Toolbox — Surface (ASM) hardened LEAN image                │
+# │  Non-root (surface:1000), read-only rootfs friendly.            │
+# │  Heavy/optional scanner deps (nuclei binary+templates,          │
+# │  Playwright/Chromium) are NOT here — they ship WITH their        │
+# │  generic add-on (nuclei, screenshot) via Dockerfile.addons.     │
 # └──────────────────────────────────────────────────────────────────┘
 
 # ── Stage 1: pip dependencies ────────────────────────────────────
@@ -12,36 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ── Stage 2: scanning tools (nuclei, nmap, Playwright/Chromium) ──
-FROM python:3.12-slim AS tools
-
-ARG NUCLEI_VERSION=3.8.0
-ARG NUCLEI_TEMPLATES_TAG=v10.4.2
-
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends \
-       nmap curl unzip git ca-certificates \
-    && ARCH=$(dpkg --print-architecture) \
-    && case "$ARCH" in \
-         amd64)  NUCLEI_ARCH=amd64 ;; \
-         arm64)  NUCLEI_ARCH=arm64 ;; \
-         *)      NUCLEI_ARCH=amd64 ;; \
-       esac \
-    && curl -fsSL -o /tmp/nuclei.zip \
-       "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${NUCLEI_ARCH}.zip" \
-    && unzip -d /tmp/nuclei /tmp/nuclei.zip \
-    && mv /tmp/nuclei/nuclei /usr/local/bin/nuclei \
-    && chmod +x /usr/local/bin/nuclei \
-    && rm -rf /tmp/nuclei /tmp/nuclei.zip
-
-# Pin templates to a specific tag — deterministic + supply-chain safe.
-RUN git clone --depth 1 --branch ${NUCLEI_TEMPLATES_TAG} \
-        https://github.com/projectdiscovery/nuclei-templates /nuclei-templates \
-    && find /nuclei-templates -name '*.yaml' | wc -l \
-    && rm -rf /nuclei-templates/.git
-
-# ── Stage 3: hardened runtime ────────────────────────────────────
+# ── Stage 2: hardened runtime ────────────────────────────────────
 FROM python:3.12-slim
 
 # Metadata labels (OCI standard)
@@ -51,42 +23,33 @@ LABEL org.opencontainers.image.title="ciso-surface" \
       org.opencontainers.image.source="https://github.com/CISOToolbox/demo-docker" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
-# Install only the runtime system packages — no compilers, no curl/wget/git.
+# Runtime system packages only — no compilers, no curl/wget/git. nmap is the
+# one always-on scanner binary (the nmap core add-on). Chromium libs, nuclei,
+# Playwright are NOT installed here — they come with their add-on.
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         nmap ca-certificates dumb-init \
-        # Playwright / Chromium runtime deps
-        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
-        libatspi2.0-0 libx11-6 libxcb1 libxext6 \
-        fonts-liberation fonts-unifont \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
-    # Remove package manager caches and unnecessary utilities.
     && rm -f /usr/bin/wget /usr/bin/curl 2>/dev/null || true
 
 # Copy pip packages from builder.
 COPY --from=builder /install /usr/local
 
-# Playwright: install only Chromium browser.
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install chromium \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-
-# Copy nuclei binary + templates from the tools stage.
-COPY --from=tools /usr/local/bin/nuclei /usr/local/bin/nuclei
-COPY --from=tools /nuclei-templates /opt/nuclei-templates
-
 # Non-root user — UID 1000 chosen for compatibility with OpenShift
 # arbitrary UID ranges and standard Docker-on-host permission mapping.
 RUN useradd -r -m -u 1000 -s /usr/sbin/nologin surface \
     && mkdir -p /app /data/wordlists \
-    && chown -R surface:surface /app /data /opt/nuclei-templates /ms-playwright
+    && chown -R surface:surface /app /data
 
 WORKDIR /app
 
 COPY --chown=surface:surface src/ src/
 COPY --chown=surface:surface app/ app/
+# Core scanners ship as add-on modules under /app/addons (the loader walks it
+# recursively). Their Python deps are already in requirements.txt. Optional
+# add-ons (generic/custom) are layered on top by Dockerfile.addons, which also
+# installs their heavy deps (nuclei binary, Chromium) so the base stays lean.
+COPY --chown=surface:surface addons/core/ addons/core/
 COPY --chown=surface:surface alembic/ alembic/
 COPY --chown=surface:surface alembic.ini .
 COPY --chown=surface:surface docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
@@ -94,8 +57,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Hardening: Python optimisations + disable .pyc cache on read-only rootfs.
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
+    PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8080
 

@@ -84,6 +84,7 @@ class MeasureUpdate(BaseModel):
     statut: Optional[str] = None
     responsable: Optional[str] = None
     echeance: Optional[str] = None
+    progress_log: list[Any] | None = None
 
 
 class MeasureResponse(BaseModel):
@@ -94,6 +95,7 @@ class MeasureResponse(BaseModel):
     statut: str
     responsable: str
     echeance: str
+    progress_log: list[Any]
     created_at: datetime
     model_config = {"from_attributes": True}
 

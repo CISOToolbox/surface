@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from src.database import async_session
-from src.findings_dedup import diff_summary, insert_many
+from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import Finding, MonitoredAsset, ScanJob
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, resolve_first_ip, run_enabled_scanners
 
@@ -55,6 +55,7 @@ async def _scan_one(asset_id) -> None:
         enabled_scanners = list(asset.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
         scanner_name = _SCANNER_BY_KIND.get(kind, "scheduled")
         stealth = bool(asset.stealth_mode)
+        cfg = dict(asset.config or {})
 
         # Create the job record (status=running, started_at=now)
         job = ScanJob(
@@ -69,12 +70,22 @@ async def _scan_one(asset_id) -> None:
 
     logger.info("scheduler: running scanners %s for %s/%s (job=%s, stealth=%s)", enabled_scanners, kind, value, job_id, stealth)
     error_msg = None
-    try:
-        findings, discovered = await asyncio.to_thread(run_enabled_scanners, kind, value, enabled_scanners, stealth)
-    except Exception as e:
-        logger.exception("scanners crashed for %s/%s", kind, value)
-        findings, discovered = [], []
-        error_msg = str(e)[:1000]
+    # Incremental-persistence sink: a sink-aware scanner (e.g. smb_scan_rs)
+    # commits findings batch-by-batch through `sink_db` while it runs, so a
+    # scan that is later killed / times out keeps everything found so far.
+    # The session stays open for the whole scan; the loop runs the persists
+    # while we're parked on `await to_thread(...)`.
+    loop = asyncio.get_running_loop()
+    sink_counts: dict | None = None
+    async with async_session() as sink_db:
+        sink, sink_counts = make_thread_sink(sink_db, loop)
+        try:
+            findings, discovered = await asyncio.to_thread(
+                run_enabled_scanners, kind, value, enabled_scanners, stealth, cfg, sink)
+        except Exception as e:
+            logger.exception("scanners crashed for %s/%s", kind, value)
+            findings, discovered = [], []
+            error_msg = str(e)[:1000]
 
     async with async_session() as db:
         # Re-fetch (the previous session is closed)
@@ -82,8 +93,18 @@ async def _scan_one(asset_id) -> None:
         job = await db.get(ScanJob, job_id)
         if asset is None or job is None:
             return
+        findings, scan_state = apply_scanner_state(asset, findings)
         dedup_counts = await insert_many(db, findings)
-        job.diff = diff_summary(dedup_counts)
+        if sink_counts:
+            merge_counts(dedup_counts, sink_counts)
+        diff = diff_summary(dedup_counts)
+        if scan_state:
+            if scan_state.get("scanned") is not None:
+                diff["scanned"] = scan_state.get("scanned")
+            if scan_state.get("partial"):
+                diff["partial"] = {"scanned": scan_state.get("scanned"), "limit": scan_state.get("limit"),
+                                   "inaccessible_dirs": scan_state.get("inaccessible_dirs")}
+        job.diff = diff
 
         # Auto-add discovered hosts to monitored_assets if not already present.
         # Dedup against BOTH host and domain kinds (a hostname from CT / SAN
@@ -152,6 +173,8 @@ async def _scan_one(asset_id) -> None:
         if error_msg:
             job.status = "failed"
             job.error = error_msg
+        elif scan_state and scan_state.get("partial"):
+            job.status = "partial"
         else:
             job.status = "completed"
         await db.commit()

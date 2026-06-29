@@ -25,6 +25,7 @@ def _to_dict(m: Measure) -> dict:
         "statut": m.statut,
         "responsable": m.responsable or "",
         "echeance": m.echeance or "",
+        "progress_log": m.progress_log or [],
         "created_at": m.created_at,
     }
 
@@ -59,6 +60,8 @@ async def update_measure(
         m.responsable = body.responsable
     if body.echeance is not None:
         m.echeance = body.echeance
+    if body.progress_log is not None:
+        m.progress_log = body.progress_log
     await log_action(db, user, request, "measure.update", target=m.title[:60] if m.title else "")
     await db.commit()
     await db.refresh(m)

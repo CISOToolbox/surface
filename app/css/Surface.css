@@ -340,6 +340,7 @@
 .job-pending   { background: #f3f4f6; color: #6b7280; }
 .job-running   { background: #dbeafe; color: #1e40af; animation: pulse 1.5s ease-in-out infinite; }
 .job-completed { background: #dcfce7; color: #166534; }
+.job-partial   { background: #fef3c7; color: #92400e; }
 .job-failed    { background: #fee2e2; color: #991b1b; }
 @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -574,6 +575,7 @@
 .host-badge-auto   { background: #ede9fe; color: #6d28d9; }
 .host-badge-manual { background: #dbeafe; color: #1e40af; }
 .host-badge-off    { background: #f3f4f6; color: #6b7280; }
+.host-badge-share  { background: #fef3c7; color: #92400e; }
 .host-badge-scanner{ background: #f0fdf4; color: #166534; margin-right: 4px; }
 /* v0.2 — criticality badges + risk score chip on host cards */
 .host-badge-crit-low      { background: #f0fdf4; color: #166534; }
@@ -719,6 +721,29 @@
     color: var(--text-muted);
     margin: 2px 0;
 }
+.host-card-sharecount {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.76em;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 2px 0;
+}
+/* Per-share rows in the host detail (a file server hosting several shares) */
+.host-share-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 6px 0;
+    border-top: 1px solid var(--border, #e5e7eb);
+}
+.host-share-row:first-child { border-top: none; }
+.host-share-path { flex: 1 1 240px; font-size: 0.85em; word-break: break-all; }
+.host-share-acts { display: inline-flex; gap: 4px; }
+.host-share-scanners { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px; }
+.host-share-meta { flex-basis: 100%; font-size: 0.74em; color: var(--text-muted); }
 .host-card-aliases {
     display: flex;
     flex-wrap: wrap;

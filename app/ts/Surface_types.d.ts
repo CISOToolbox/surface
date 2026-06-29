@@ -15,8 +15,8 @@
 
 type SurfaceSeverity = "critical" | "high" | "medium" | "low" | "info";
 type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed";
-type SurfaceAssetKind = "domain" | "host" | "ip_range";
-type SurfaceJobStatus = "pending" | "running" | "completed" | "failed";
+type SurfaceAssetKind = "domain" | "host" | "ip_range" | "file_share";
+type SurfaceJobStatus = "pending" | "running" | "completed" | "partial" | "failed";
 
 interface SurfaceFinding {
     id: string;
@@ -49,12 +49,13 @@ interface SurfaceMonitoredAsset {
     tags?: string[];
     auto_enroll_discoveries?: boolean;
     stealth_mode?: boolean;
+    config?: Record<string, any>;
     resolved_ip?: string;
     last_scan_at?: string;
     created_at?: string;
 }
 
-interface SurfaceScanJobDiff { added?: number; reopened?: number; refreshed?: number; }
+interface SurfaceScanJobDiff { added?: number; reopened?: number; refreshed?: number; scanned?: number; partial?: { scanned?: number; limit?: string; inaccessible_dirs?: number }; }
 
 interface SurfaceScanJob {
     id: string;
@@ -89,6 +90,14 @@ interface SurfaceScannerCatalogEntry {
     defaults?: string[];
 }
 type SurfaceScannersCatalog = Record<string, SurfaceScannerCatalogEntry>;
+
+/** In-app help doc contributed by a loaded add-on scanner (GET /addon-docs).
+ *  `doc` is bilingual: doc[lang] = { methodo?: html, usage?: html }. */
+interface CtAddonDoc {
+    scanner: string;
+    kinds?: string[];
+    doc: Record<string, { methodo?: string; usage?: string }>;
+}
 
 /** Point quotidien de la timeline dashboard (cumuls par sévérité + triage du jour). */
 interface SurfaceTimelineBucket {
@@ -153,6 +162,7 @@ interface SurfaceMonitoredPayload {
     tags?: string[];
     auto_enroll_discoveries?: boolean;
     stealth_mode?: boolean;
+    config?: Record<string, any>;
 }
 
 interface SurfaceNucleiConfig {
@@ -359,6 +369,7 @@ interface Window {
     _toggleHostHideFP?: () => void;
     _toggleHostBulkAll?: () => void;
     _scanHost?: (id: string) => void;
+    _scanSharesOnHost?: (hostKey: string) => void;
     _deleteHostFromDetail?: (id: string) => void;
 
     // Settings (nuclei / smtp)
