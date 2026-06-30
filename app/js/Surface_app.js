@@ -1262,6 +1262,32 @@ window.AI_APP_CONFIG = {
         else {
             listH = '<div class="ct-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
         }
+        // FEAT-23: per-domain typosquatting tuning (single domain asset only).
+        // Reads/writes the typosquat_* keys of asset.config that the scanner honours.
+        var showTypo = ids.length === 1 && kind === "domain";
+        var typoH = "";
+        if (showTypo) {
+            var tc = first.config || {};
+            var mv = tc.typosquat_max_variants != null ? tc.typosquat_max_variants : 80;
+            var useCt = tc.typosquat_use_ct != null ? !!tc.typosquat_use_ct : true;
+            var maxCt = tc.typosquat_max_ct != null ? tc.typosquat_max_ct : 40;
+            typoH =
+                '<div class="ct-field-help" style="margin-top:14px;font-weight:600">' + esc(t("mon_typo.title")) + '</div>' +
+                    '<div id="typo-config" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">' +
+                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
+                    '<span style="flex:1">' + esc(t("mon_typo.max_variants")) + '</span>' +
+                    '<input type="number" id="typo-max-variants" min="1" max="500" value="' + esc(String(mv)) + '" style="width:90px">' +
+                    '</label>' +
+                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
+                    '<input type="checkbox" id="typo-use-ct"' + (useCt ? " checked" : "") + '>' +
+                    '<span>' + esc(t("mon_typo.use_ct")) + '</span>' +
+                    '</label>' +
+                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
+                    '<span style="flex:1">' + esc(t("mon_typo.max_ct")) + '</span>' +
+                    '<input type="number" id="typo-max-ct" min="0" max="200" value="' + esc(String(maxCt)) + '" style="width:90px">' +
+                    '</label>' +
+                    '</div>';
+        }
         var subtitle = ids.length > 1
             ? t("hosts.bulk_scanners_subtitle").replace("{n}", String(ids.length))
             : esc(first.value);
@@ -1270,6 +1296,7 @@ window.AI_APP_CONFIG = {
                 '<div class="ct-modal-header"><span>' + esc(t("hosts.configure_scans")) + ' — ' + subtitle + '</span><button class="ct-modal-close" data-click="_closeScannersDialog">' + _icon("x", 18) + '</button></div>' +
                 '<div class="ct-modal-body">' +
                 '<div id="scanners-list" data-ids=\'' + _da.apply(null, ids) + '\'>' + listH + '</div>' +
+                typoH +
                 '</div>' +
                 '<div class="ct-modal-footer">' +
                 '<button class="btn-add" data-click="_closeScannersDialog">' + esc(t("action.cancel")) + '</button>' +
@@ -1294,8 +1321,25 @@ window.AI_APP_CONFIG = {
         ov.querySelectorAll("#scanners-list input[type=checkbox]:checked").forEach(function (cb) {
             picked.push(cb.value);
         });
+        // FEAT-23: persist the per-domain typosquatting tuning (single domain only).
+        var typoVarEl = document.getElementById("typo-max-variants");
+        var typoConfig = null;
+        if (typoVarEl && ids.length === 1) {
+            var mv = parseInt(typoVarEl.value, 10);
+            var maxCt = parseInt(document.getElementById("typo-max-ct").value, 10);
+            var useCt = document.getElementById("typo-use-ct").checked;
+            var asset = _monitored.find(function (a) { return a.id === ids[0]; });
+            typoConfig = Object.assign({}, (asset && asset.config) || {}, {
+                typosquat_max_variants: isNaN(mv) ? 80 : Math.max(1, Math.min(mv, 500)),
+                typosquat_use_ct: useCt,
+                typosquat_max_ct: isNaN(maxCt) ? 40 : Math.max(0, Math.min(maxCt, 200)),
+            });
+        }
         Promise.all(ids.map(function (id) {
-            return SurfaceAPI.updateMonitored(id, { enabled_scanners: picked });
+            var patch = { enabled_scanners: picked };
+            if (typoConfig)
+                patch.config = typoConfig;
+            return SurfaceAPI.updateMonitored(id, patch);
         })).then(function () {
             ov.classList.remove("open");
             showStatus(t("hosts.scanners_updated").replace("{n}", String(ids.length)));
