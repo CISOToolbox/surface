@@ -302,6 +302,7 @@ interface Window {
     _clearMonitoredBulk?: () => void;
     _bulkDeleteMonitored?: () => void;
     _bulkConfigureScanners?: () => void;
+    _bulkScanMonitored?: () => void;
     _setMonitoredSearch?: (v: string) => void;
     _clearMonitoredSearch?: () => void;
     _newMonitoredDialog?: () => void;

@@ -473,7 +473,6 @@ window.AI_APP_CONFIG = {
         var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
         h += '<h2 style="margin:0">' + esc(t("jobs.title")) + '</h2>';
         h += '<span style="flex:1"></span>';
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_newJobDialog">' + _icon("plus", 14) + ' ' + esc(t("jobs.new")) + '</button>';
         h += '</div>';
         h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("jobs.help")) + '</div>';
         if (!_jobs.length) {
@@ -669,98 +668,6 @@ window.AI_APP_CONFIG = {
         // Fallback: try a quick port scan
         SurfaceAPI.quickScan(job.target).then(ok).catch(fail);
     };
-    function _ensureJobModal() {
-        var ov = document.getElementById("job-overlay");
-        if (!ov) {
-            ov = document.createElement("div");
-            ov.id = "job-overlay";
-            ov.className = "ct-modal-overlay";
-            document.body.appendChild(ov);
-            var _md = null;
-            ov.addEventListener("mousedown", function (e) { _md = e.target; });
-            ov.addEventListener("click", function (e) { if (e.target === ov && _md === ov)
-                _closeJobModal(); });
-        }
-        // Rebuild innerHTML on every call so the modal picks up the current locale
-        // (user may have switched FR↔EN after the first render).
-        ov.innerHTML =
-            '<div class="ct-modal">' +
-                '<div class="ct-modal-header"><span>' + esc(t("jobs.new_title")) + '</span><button class="ct-modal-close" data-click="_closeJobModal">' + _icon("x", 18) + '</button></div>' +
-                '<div class="ct-modal-body">' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("jobs.target")) + '</label>' +
-                '<input type="text" class="ct-input" id="job-target" placeholder="' + esc(t("jobs.target_placeholder")) + '">' +
-                '<div class="ct-field-help">' + esc(t("jobs.target_help")) + '</div>' +
-                '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("jobs.profile")) + '</label>' +
-                '<div class="ct-radio-group">' +
-                '<label class="ct-radio"><input type="radio" name="job-profile" value="quick" checked> <span>' + esc(t("jobs.profile.quick")) + '<br><small>' + esc(t("jobs.profile.quick_help")) + '</small></span></label>' +
-                '<label class="ct-radio"><input type="radio" name="job-profile" value="standard"> <span>' + esc(t("jobs.profile.standard")) + '<br><small>' + esc(t("jobs.profile.standard_help")) + '</small></span></label>' +
-                '<label class="ct-radio"><input type="radio" name="job-profile" value="deep"> <span>' + esc(t("jobs.profile.deep")) + '<br><small>' + esc(t("jobs.profile.deep_help")) + '</small></span></label>' +
-                '</div>' +
-                '</div>' +
-                '<div class="ct-field" id="job-monitored-shortcut" style="display:none">' +
-                '<label class="ct-field-lbl">' + esc(t("jobs.pick_monitored")) + '</label>' +
-                '<select class="ct-input" id="job-monitored-select" data-change="_pickMonitoredTarget" data-pass-value>' +
-                '<option value="">-</option>' +
-                '</select>' +
-                '</div>' +
-                '<div class="ct-error" id="job-error" style="display:none"></div>' +
-                '</div>' +
-                '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeJobModal">' + esc(t("action.cancel")) + '</button>' +
-                '<button class="btn-add" style="background:#dc2626;color:white" data-click="_launchJob">' + esc(t("jobs.launch")) + '</button>' +
-                '</div>' +
-                '</div>';
-        return ov;
-    }
-    window._newJobDialog = function () {
-        var ov = _ensureJobModal();
-        document.getElementById("job-target").value = "";
-        document.querySelector('input[name="job-profile"][value="quick"]').checked = true;
-        document.getElementById("job-error").style.display = "none";
-        // Populate monitored shortcut
-        var sel = document.getElementById("job-monitored-select");
-        var shortcut = document.getElementById("job-monitored-shortcut");
-        if (_monitored.length) {
-            sel.innerHTML = '<option value="">-</option>' + _monitored.map(function (a) {
-                return '<option value="' + esc(a.value) + '">[' + _kindLabel(a.kind) + '] ' + esc(a.value) + (a.label ? ' — ' + esc(a.label) : '') + '</option>';
-            }).join("");
-            shortcut.style.display = "";
-        }
-        else {
-            shortcut.style.display = "none";
-        }
-        ov.classList.add("open");
-        setTimeout(function () { document.getElementById("job-target").focus(); }, 50);
-    };
-    window._closeJobModal = function () {
-        var ov = document.getElementById("job-overlay");
-        if (ov)
-            ov.classList.remove("open");
-    };
-    window._pickMonitoredTarget = function (val) {
-        if (val)
-            document.getElementById("job-target").value = val;
-    };
-    window._launchJob = function () {
-        var target = document.getElementById("job-target").value.trim();
-        var profile = (document.querySelector('input[name="job-profile"]:checked') || {}).value || "quick";
-        var err = document.getElementById("job-error");
-        err.style.display = "none";
-        if (!target) {
-            err.textContent = t("jobs.target_required");
-            err.style.display = "block";
-            return;
-        }
-        SurfaceAPI.createJob({ target: target, profile: profile }).then(function (job) {
-            _closeJobModal();
-            showStatus(t("jobs.launched") + " : " + job.target);
-            _loadAndRender();
-        }).catch(function (e) {
-            err.textContent = e.message || t("common.error");
-            err.style.display = "block";
-        });
-    };
     // ═══════════════════════════════════════════════════════════════
     // MONITORED ASSETS
     // ═══════════════════════════════════════════════════════════════
@@ -910,6 +817,7 @@ window.AI_APP_CONFIG = {
             h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(a.last_scan_at ? _fmtDate(a.last_scan_at || "") : t("monitored.last.never")) + '</td>';
             h += '<td style="font-size:0.78em">' + nextStr + '</td>';
             h += '<td style="white-space:nowrap">';
+            h += '<button class="btn-mini" style="background:#dc2626;color:white" data-click="_scanMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("host.scan_now")) + '">' + _icon("search", 14) + '</button> ';
             h += '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.edit")) + '">' + _icon("edit", 14) + '</button> ';
             h += '<button class="btn-mini" data-click="_deleteMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
             h += '</td>';
@@ -919,7 +827,8 @@ window.AI_APP_CONFIG = {
         var selCount = Object.keys(_monitoredBulkSelection).length;
         if (selCount > 0) {
             h += '<div class="bulk-action-bar">';
-            h += '<span class="bulk-count">' + selCount + ' ' + esc(t("bulk.selected")) + '</span>';
+            h += '<span class="bulk-count">' + esc(t("bulk.selected", { n: selCount })) + '</span>';
+            h += '<button class="btn-add btn-icon" style="background:#dc2626;color:#fff" data-click="_bulkScanMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.bulk_scan")) + '</button>';
             h += '<button class="btn-add btn-icon" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
             h += '<button class="btn-add btn-icon" style="background:#dc2626;color:#fff" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
             h += '<span style="flex:1"></span>';
@@ -995,6 +904,28 @@ window.AI_APP_CONFIG = {
             return;
         _editScannersDialog(ids);
     };
+    window._bulkScanMonitored = function () {
+        var ids = Object.keys(_monitoredBulkSelection);
+        if (!ids.length)
+            return;
+        showStatus(t("monitored.bulk_scan_started", { n: ids.length }));
+        var done = 0, errors = 0;
+        ids.forEach(function (id) {
+            SurfaceAPI.scanMonitored(id)
+                .then(function () { done++; _checkBulkScanDone(done, errors, ids.length); })
+                .catch(function () { errors++; _checkBulkScanDone(done, errors, ids.length); });
+        });
+    };
+    function _checkBulkScanDone(done, errors, total) {
+        if (done + errors < total)
+            return;
+        _monitoredBulkSelection = {};
+        _loadAndRender();
+        if (errors)
+            showStatus(t("monitored.bulk_scan_partial", { done: done, errors: errors }), true);
+        else
+            showStatus(t("monitored.bulk_scan_done", { n: done }));
+    }
     window._setMonitoredSearch = function (v) {
         _monitoredSearch = v || "";
         _refreshMonitoredTable();
@@ -1469,7 +1400,9 @@ window.AI_APP_CONFIG = {
     window._scanMonitored = function (id) {
         showStatus(t("mon_modal.scan_in_progress"));
         SurfaceAPI.scanMonitored(id).then(function (r) {
-            showStatus(t("mon_modal.scan_done").replace("{n}", String(r.findings_created)).replace("{target}", String(r.target)));
+            // The asset scan runs in the background (returns a job_id, no findings
+            // count yet) — announce the launch, the Scans list tracks completion.
+            showStatus(t("mon_modal.scan_launched").replace("{target}", String(r.target)));
             _loadAndRender();
         }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
     };
