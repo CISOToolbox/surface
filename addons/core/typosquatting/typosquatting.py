@@ -33,6 +33,10 @@ from src.scan_common import _safe_target, logger
 # highest-confidence impersonation vectors. Kept small to bound crt.sh load.
 _CT_HIGH_RISK = {"homoglyph", "replacement", "tld-swap", "bitsquatting", "addition", "hyphenation"}
 
+# Permutation classes emitted in full before the round-robin cap kicks in:
+# few in number, highest-confidence impersonation, must never be dropped.
+_PRIORITY_CLASSES = ("tld-swap",)
+
 _DEF_MAX_VARIANTS = 80
 _DEF_MAX_CT = 40
 _DEF_USE_CT = True
@@ -72,23 +76,49 @@ def _builtin_permutations(domain: str) -> list[tuple[str, str]]:
     return list(out.items())
 
 
+def _seeds_for(domain: str) -> list[str]:
+    """Seeds fed to dnstwist. dnstwist applies ONE transform per seed, so a
+    hyphenated domain also gets a de-hyphenated seed — otherwise double
+    mutations (drop the hyphen AND swap TLD/typo, e.g. ``bdf-gestion.com`` →
+    ``bdfgestion.fr``) are never generated."""
+    seeds = [domain]
+    parts = domain.split(".")
+    sld, tld = parts[0], ".".join(parts[1:])
+    if "-" in sld and tld:
+        dehyphen = sld.replace("-", "") + "." + tld
+        if dehyphen != domain:
+            seeds.append(dehyphen)
+    return seeds
+
+
 def _dnstwist_permutations(domain: str, max_variants: int) -> list[tuple[str, str]]:
-    """[(permuted_domain, fuzzer_class), …] via dnstwist; [] if unavailable."""
+    """[(permuted_domain, fuzzer_class), …] via dnstwist; [] if unavailable.
+
+    A ``tld_dictionary`` is passed so dnstwist actually emits TLD-swaps (same
+    name, different extension) — its ``tld`` fuzzer is a no-op without one, so
+    a primary typosquat vector (``…​.net`` / ``.fr`` / …) was otherwise missed."""
     try:
         import dnstwist
     except Exception:
         return []
     try:
-        fuzz = dnstwist.Fuzzer(domain)
-        fuzz.generate()
-        raw = getattr(fuzz, "domains", None)
-        if raw is None and hasattr(fuzz, "permutations"):
-            raw = fuzz.permutations()
-        # Bucket by permutation class, then round-robin into the capped list so
-        # a class that dominates (homoglyph easily yields 1000+) can't crowd out
-        # bitsquatting / tld-swap / replacement / … under max_variants.
+        seeds = _seeds_for(domain)
+        raw: list[dict] = []
+        for seed in seeds:
+            try:
+                fuzz = dnstwist.Fuzzer(seed, tld_dictionary=_EXTRA_TLDS)
+            except TypeError:  # older dnstwist without the kwarg
+                fuzz = dnstwist.Fuzzer(seed)
+            fuzz.generate()
+            got = getattr(fuzz, "domains", None)
+            if got is None and hasattr(fuzz, "permutations"):
+                got = fuzz.permutations()
+            raw.extend(got or [])
+        # Bucket by permutation class. Only the monitored domain itself is
+        # excluded; the de-hyphenated seed (e.g. bdfgestion.com) IS a
+        # legitimate lookalike we want to keep.
         by_class: dict[str, list[str]] = {}
-        for d in (raw or []):
+        for d in raw:
             dom = (d.get("domain") or d.get("domain-name") or "").lower()
             klass = d.get("fuzzer", "")
             if not dom or dom == domain or klass in ("*original", "original"):
@@ -96,17 +126,35 @@ def _dnstwist_permutations(domain: str, max_variants: int) -> list[tuple[str, st
             by_class.setdefault(klass, []).append(dom)
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
+
+        def _emit(dom: str, klass: str) -> bool:
+            if dom in seen:
+                return len(out) >= max_variants
+            seen.add(dom)
+            out.append((dom, klass))
+            return len(out) >= max_variants
+
+        # The de-hyphenated exact name (extra seed, e.g. bdfgestion.com) is a
+        # top-value lookalike but sits deep in the omission bucket — guarantee
+        # it, else the cap drops the exact brand-without-hyphen.
+        for seed in seeds[1:]:
+            if seed != domain and _emit(seed, "hyphen-removal"):
+                return out
+        # TLD-swaps (same name, other extension) are few — bounded by the seed
+        # count × len(_EXTRA_TLDS) — and the highest-value brand-impersonation
+        # vector, so emit them ALL first: the cap must never drop a lookalike
+        # like <brand>.net / <brand>.fr. Then round-robin the remaining classes
+        # so a huge class (homoglyph easily yields 1000+) can't crowd them out.
+        for klass in _PRIORITY_CLASSES:
+            for dom in by_class.pop(klass, []):
+                if _emit(dom, klass):
+                    return out
         while len(out) < max_variants and any(by_class.values()):
             for klass in list(by_class.keys()):
                 bucket = by_class[klass]
                 if not bucket:
                     continue
-                dom = bucket.pop(0)
-                if dom in seen:
-                    continue
-                seen.add(dom)
-                out.append((dom, klass))
-                if len(out) >= max_variants:
+                if _emit(bucket.pop(0), klass):
                     break
         return out
     except Exception as e:  # noqa: BLE001
