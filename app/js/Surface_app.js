@@ -2340,6 +2340,10 @@ window.AI_APP_CONFIG = {
         var ids = Array.from(ct_bulkbar.getSelection(scope));
         if (!ids.length)
             return;
+        if (ids.length > 10000) {
+            showStatus("Sélection trop grande : " + ids.length + " findings (max 10000 par mesure). Réduisez la sélection.", true);
+            return;
+        }
         var selected = _findings.filter(function (f) { return ids.indexOf(f.id) >= 0; });
         // Interpolate {n} — t() returns the raw key/value, no placeholder handling.
         var interp = function (key, fallback) {

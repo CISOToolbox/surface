@@ -235,7 +235,7 @@ from pydantic import BaseModel, Field as _PField
 
 
 class BulkTriageRequest(BaseModel):
-    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=500)
+    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=10000)
     status: str
     notes: str | None = None
     measure_title: str | None = None
@@ -343,7 +343,7 @@ async def bulk_triage(
 
 
 class BulkDeleteRequest(BaseModel):
-    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=500)
+    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=10000)
 
 
 @router.post("/bulk-delete")
