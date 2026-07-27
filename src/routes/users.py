@@ -10,7 +10,6 @@ from src.auth import get_current_user, require_admin
 from src.database import get_db
 from src.models import User
 from src.schemas import UserResponse, UserUpdate
-from src.audit import log_action
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 

@@ -79,6 +79,12 @@ window.AI_APP_CONFIG = {
 (function() {
 "use strict";
 
+window.CT_CONFIG = {
+    edition: "suite",
+    module: "surface",
+    deployed: ["risk", "compliance", "vendor", "asset", "pilot", "appsec", "surface", "access"],
+};
+
 // ═══════════════════════════════════════════════════════════════
 // SVG icon set (Feather-style stroke icons, 24×24 viewBox)
 // ═══════════════════════════════════════════════════════════════
@@ -118,6 +124,7 @@ var _ICON_PATHS: Record<string, string> = {
 
 function _icon(name: string, size?: number, extraClass?: string) {
     var path = _ICON_PATHS[name];
+    if (!path) { var _sh = (window as any).CT_ICONS; if (_sh) path = _sh[name]; }  // fall back to shared CT_ICONS (moon, sun, settings…)
     if (!path) return "";
     var sz = size || 16;
     var cls = extraClass ? ' class="' + extraClass + '"' : '';
@@ -262,11 +269,11 @@ window.selectPanel = function(id) {
         ct_bulkbar.clear("surface-findings");
         ct_bulkbar.clear("surface-measures");
     }
-    document.querySelectorAll(".sidebar-item").forEach(function(el) {
+    document.querySelectorAll(".ct-rail-item").forEach(function(el) {
         var args = el.getAttribute("data-args");
-        if (args) try { el.classList.toggle("active", JSON.parse(args)[0] === id); } catch(e) {}
+        if (args) try { if (JSON.parse(args)[0] === id) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current"); } catch(e) {}
     });
-    document.querySelector(".sidebar")!.classList.remove("open");
+    document.querySelector(".ct-rail, .sidebar")?.classList.remove("open");
     _loadAndRender();
 };
 
@@ -381,7 +388,7 @@ async function _refreshAuditBody() {
         if (items.length === 0) {
             h = '<p class="text-muted">' + t("audit.empty") + '</p>';
         } else {
-            h = '<table class="surface-table" style="font-size:0.85em"><thead><tr>';
+            h = '<table class="ct-table" style="font-size:0.85em"><thead><tr>';
             h += '<th>' + t("audit.col_date") + '</th>';
             h += '<th>' + t("audit.col_user") + '</th>';
             h += '<th>' + t("audit.col_action") + '</th>';
@@ -447,6 +454,16 @@ function _scannerLabel(s: string | undefined) {
     return s;
 }
 
+// Badge class for a scanner type. Only a few types have a dedicated
+// .scanner-<type> style in Surface.css; anything else (e.g. "manual",
+// "scheduled") falls back to the neutral .scanner-unknown pill so TYPE
+// columns render a pill on every row instead of mixing pills and raw text.
+function _scannerBadgeCls(s: string | undefined) {
+    var key = (s || "unknown").replace(/[^a-z0-9]/g, "-");
+    var known = ["nmap", "scheduled-host", "scheduled-domain", "scheduled-discovery"];
+    return "scanner-" + (known.indexOf(key) >= 0 ? key : "unknown");
+}
+
 function _renderJobs(c: HTMLElement) {
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<h2 style="margin:0">' + esc(t("jobs.title")) + '</h2>';
@@ -499,7 +516,7 @@ function _renderJobs(c: HTMLElement) {
     var hasRunning = filtered.some(function(j) { return j.status === "pending" || j.status === "running"; });
 
     h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + filtered.length + ' / ' + _jobs.length + ' ' + esc(t("jobs.title").toLowerCase()) + '</div>';
-    h += '<table class="surface-table"><thead><tr>'
+    h += '<table class="ct-table"><thead><tr>'
       + '<th>' + esc(t("jobs.col.target")) + '</th>'
       + '<th>' + esc(t("jobs.col.scanner")) + '</th>'
       + '<th>' + esc(t("jobs.col.source")) + '</th>'
@@ -520,7 +537,7 @@ function _renderJobs(c: HTMLElement) {
         var sourceBadge = isScheduled
             ? '<span class="source-badge source-auto">' + _icon("clock", 12) + ' ' + esc(t("jobs.source.auto").toUpperCase()) + '</span>'
             : '<span class="source-badge source-manual">' + _icon("pin", 12) + ' ' + esc(t("jobs.source.manual").toUpperCase()) + '</span>';
-        var scannerCls = "scanner-" + (j.scanner || "unknown").replace(/[^a-z0-9]/g, "-");
+        var scannerCls = _scannerBadgeCls(j.scanner);
         h += '<tr>';
         h += '<td style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(j.target) + '</td>';
         h += '<td><span class="scanner-badge ' + scannerCls + '" title="' + esc(j.scanner || "") + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
@@ -528,14 +545,14 @@ function _renderJobs(c: HTMLElement) {
         h += '</td>';
         h += '<td>' + sourceBadge + '</td>';
         h += '<td><span class="job-status job-' + esc(j.status) + '">' + _jobStatusLabel(j.status) + '</span>';
-        if (j.error) h += '<div style="font-size:0.72em;color:#991b1b;margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
+        if (j.error) h += '<div style="font-size:0.72em;color:var(--ct-critical);margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
         if (j.status === "partial" && j.diff && j.diff.partial) {
             var pp = j.diff.partial;
             var msgs = [];
             if (pp.limit === "files") msgs.push(t("jobs.partial.stopped").replace("{n}", String(pp.scanned != null ? pp.scanned : "?")) + " " + t("jobs.partial.files"));
             else if (pp.limit === "time") msgs.push(t("jobs.partial.stopped").replace("{n}", String(pp.scanned != null ? pp.scanned : "?")) + " " + t("jobs.partial.time"));
             if (pp.inaccessible_dirs) msgs.push(t("jobs.partial.inaccessible").replace("{n}", String(pp.inaccessible_dirs)));
-            if (msgs.length) h += '<div style="font-size:0.72em;color:#92400e;margin-top:2px">' + esc(msgs.join(" · ")) + '</div>';
+            if (msgs.length) h += '<div style="font-size:0.72em;color:var(--ct-medium);margin-top:2px">' + esc(msgs.join(" · ")) + '</div>';
         }
         h += '</td>';
         h += '<td style="text-align:center;font-weight:600">' + j.findings_count;
@@ -557,7 +574,7 @@ function _renderJobs(c: HTMLElement) {
         if (j.status !== "pending" && j.status !== "running") {
             h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' data-pass-el title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
         }
-        h += '<button class="btn-mini" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
+        h += '<button class="btn-del" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
         h += '</td>';
         h += '</tr>';
     });
@@ -646,7 +663,7 @@ function _renderMonitored(c: HTMLElement) {
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<h2 style="margin:0">' + esc(t("monitored.title")) + '</h2>';
     h += '<span style="flex:1"></span>';
-    if (_monitored.length) h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanAllMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
+    if (_monitored.length) h += '<button class="btn-add btn-icon" data-click="_scanAllMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
     h += '</div>';
     h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("monitored.help")) + '</div>';
@@ -732,7 +749,7 @@ function _refreshMonitoredTable() {
     });
     var allChecked = filtered.length > 0 && filtered.every(function(a) { return _monitoredBulkSelection[a.id]; });
 
-    h += '<table class="surface-table"><thead><tr>'
+    h += '<table class="ct-table"><thead><tr>'
       + '<th style="width:28px"><input type="checkbox" id="mon-bulk-all"' + (allChecked ? " checked" : "") + ' data-change="_toggleMonBulkAll" data-pass-value></th>'
       + '<th>' + esc(t("monitored.col.type")) + '</th>'
       + '<th>' + esc(t("monitored.col.value")) + '</th>'
@@ -750,10 +767,10 @@ function _refreshMonitoredTable() {
         var nextStr = "—";
         if (freq > 0) {
             if (!a.last_scan_at) {
-                nextStr = '<span style="color:#16a34a">' + esc(t("monitored.next.imminent")) + '</span>';
+                nextStr = '<span style="color:var(--ct-low)">' + esc(t("monitored.next.imminent")) + '</span>';
             } else {
                 var nextMs = new Date(a.last_scan_at).getTime() + freq * 3600 * 1000;
-                if (nextMs <= now) nextStr = '<span style="color:#16a34a">' + esc(t("monitored.next.imminent")) + '</span>';
+                if (nextMs <= now) nextStr = '<span style="color:var(--ct-low)">' + esc(t("monitored.next.imminent")) + '</span>';
                 else {
                     var inH = Math.round((nextMs - now) / 3600000);
                     nextStr = inH < 1 ? "< 1 h" : inH + " h";
@@ -780,9 +797,9 @@ function _refreshMonitoredTable() {
         h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(a.last_scan_at ? _fmtDate(a.last_scan_at || "") : t("monitored.last.never")) + '</td>';
         h += '<td style="font-size:0.78em">' + nextStr + '</td>';
         h += '<td style="white-space:nowrap">';
-        h += '<button class="btn-mini" style="background:#dc2626;color:white" data-click="_scanMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("host.scan_now")) + '">' + _icon("search", 14) + '</button> ';
+        h += '<button class="btn-mini" data-click="_scanMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("host.scan_now")) + '">' + _icon("search", 14) + '</button> ';
         h += '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.edit")) + '">' + _icon("edit", 14) + '</button> ';
-        h += '<button class="btn-mini" data-click="_deleteMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
+        h += '<button class="btn-del" data-click="_deleteMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
         h += '</td>';
         h += '</tr>';
     });
@@ -792,9 +809,9 @@ function _refreshMonitoredTable() {
     if (selCount > 0) {
         h += '<div class="bulk-action-bar">';
         h += '<span class="bulk-count">' + esc(t("bulk.selected", {n: selCount})) + '</span>';
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:#fff" data-click="_bulkScanMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.bulk_scan")) + '</button>';
+        h += '<button class="btn-add btn-icon" data-click="_bulkScanMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.bulk_scan")) + '</button>';
         h += '<button class="btn-add btn-icon" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:#fff" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
+        h += '<button class="btn-add btn-icon surface-danger" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
         h += '<span style="flex:1"></span>';
         h += '<button class="btn-add" data-click="_clearMonitoredBulk">' + esc(t("bulk.clear")) + '</button>';
         h += '</div>';
@@ -1008,8 +1025,8 @@ function _ensureMonitoredModal() {
                 '<div class="ct-error" id="monitored-error" style="display:none"></div>' +
             '</div>' +
             '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeMonitoredModal">' + esc(t("action.cancel")) + '</button>' +
-                '<button class="btn-add" style="background:#dc2626;color:white" data-click="_saveMonitored">' + esc(t("action.save")) + '</button>' +
+                '<button class="ct-modal-btn" data-click="_closeMonitoredModal">' + esc(t("action.cancel")) + '</button>' +
+                '<button class="ct-modal-btn ct-modal-btn--primary" data-click="_saveMonitored">' + esc(t("action.save")) + '</button>' +
             '</div>' +
         '</div>';
     document.querySelectorAll('input[name="monitored-kind"]').forEach(function(r) {
@@ -1175,8 +1192,8 @@ window._editScannersDialog = function(idOrIds) {
                 typoH +
             '</div>' +
             '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeScannersDialog">' + esc(t("action.cancel")) + '</button>' +
-                '<button class="btn-add" style="background:#dc2626;color:white" data-click="_saveScannersDialog">' + esc(t("action.save")) + '</button>' +
+                '<button class="ct-modal-btn" data-click="_closeScannersDialog">' + esc(t("action.cancel")) + '</button>' +
+                '<button class="ct-modal-btn ct-modal-btn--primary" data-click="_saveScannersDialog">' + esc(t("action.save")) + '</button>' +
             '</div>' +
         '</div>';
     // Stash the ids on the modal so the save handler knows what to patch
@@ -1629,7 +1646,6 @@ function _renderDashboard(c: HTMLElement) {
     h += '<button class="btn-add btn-icon" data-click="_scanAllMonitored" title="' + esc(t("monitored.scan_all")) + '">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
-    h += '<button class="btn-add btn-icon" data-click="_openExecutiveReport" title="' + esc(t("report.exec_tooltip")) + '">' + _icon("activity", 14) + ' ' + esc(t("report.exec_button")) + '</button>';
     h += '</div></div>';
 
     // ── A. Critical banner ────────────────────────────────────
@@ -1748,14 +1764,14 @@ function _dashTimeline() {
     // Same hues used everywhere in the app — filter pills, badges, host
     // counters — so the chart reads instantly.
     // Shifted from the badge palette to give critical/high more chromatic
-    // distance — at 1.4px stroke #dc2626 and #ea580c looked nearly identical.
+    // distance — at 1.4px stroke var(--ct-critical) and var(--ct-high) looked nearly identical.
     // Critical stays the deepest red, high jumps to a clearly brighter orange.
     var colors: Record<SurfaceSeverity, string> = {
-        critical: "#b91c1c",
-        high:     "#f97316",
-        medium:   "#eab308",
-        low:      "#65a30d",
-        info:     "#0284c7",
+        critical: "var(--ct-critical)",
+        high:     "var(--ct-high)",
+        medium:   "var(--ct-medium)",
+        low:      "var(--ct-low)",
+        info:     "var(--ct-info)",
     };
 
     // Per-severity max for the Y scale (lines, not stacked)
@@ -1766,11 +1782,21 @@ function _dashTimeline() {
         });
     });
 
-    var W = 800, H = 260, ML = 32, MR = 12, MT = 14, MB = 44;
+    // When one severity dwarfs the others (e.g. thousands of criticals vs a
+    // handful of lows) a linear scale flattens every small series onto the
+    // baseline and they become invisible. Switch to a log scale so every
+    // non-zero series stays readable; 0 still maps to the baseline.
+    var useLog = maxVal > 50;
+    var logMax = Math.log(maxVal + 1);
+
+    var W = 800, H = 260, ML = 40, MR = 12, MT = 14, MB = 44;
     var cW = W - ML - MR, cH = H - MT - MB;
 
     function xFor(i: number) { return ML + (i / Math.max(1, days.length - 1)) * cW; }
-    function yFor(v: number) { return MT + cH - (v / maxVal) * cH; }
+    function yFor(v: number) {
+        if (useLog) return MT + cH - (Math.log((v || 0) + 1) / logMax) * cH;
+        return MT + cH - (v / maxVal) * cH;
+    }
 
     function smoothPath(pts: { x: number; y: number }[]) {
         if (pts.length < 2) return "";
@@ -1798,8 +1824,9 @@ function _dashTimeline() {
     // Grid lines + Y labels (5 levels)
     for (var g = 0; g <= 4; g++) {
         var gy = MT + cH - (g / 4 * cH);
-        svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="#e2e8f0" stroke-width="0.6"/>';
-        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 4) + '" text-anchor="end" font-size="10" fill="#94a3b8">' + Math.round(g / 4 * maxVal) + '</text>';
+        var gLabel = useLog ? Math.round(Math.exp((g / 4) * logMax) - 1) : Math.round(g / 4 * maxVal);
+        svg += '<line x1="' + ML + '" y1="' + gy + '" x2="' + (W - MR) + '" y2="' + gy + '" stroke="var(--ct-line)" stroke-width="0.6"/>';
+        svg += '<text x="' + (ML - 4) + '" y="' + (gy + 4) + '" text-anchor="end" font-size="10" fill="var(--ct-ink-2)">' + gLabel + '</text>';
     }
 
     // One smooth thin line per severity, painted from low → critical so
@@ -1821,13 +1848,13 @@ function _dashTimeline() {
         var linePts = triagedPoints.map(function(y, i) {
             return { x: xFor(i), y: MT + cH - (y / maxCum) * cH };
         });
-        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3"/>';
+        svg += '<path d="' + smoothPath(linePts) + '" fill="none" stroke="var(--ct-ink-2)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3"/>';
     }
 
     // X axis labels (every ~5 days)
     days.forEach(function(d, i) {
         if (i % 5 !== 0 && i !== days.length - 1) return;
-        svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 16) + '" text-anchor="middle" font-size="10" fill="#94a3b8">' + esc(d.label) + '</text>';
+        svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 16) + '" text-anchor="middle" font-size="10" fill="var(--ct-ink-2)">' + esc(d.label) + '</text>';
     });
 
     svg += '</svg>';
@@ -1841,7 +1868,7 @@ function _dashTimeline() {
             '</span>';
     });
     legend += '<span style="display:flex;align-items:center;gap:3px">' +
-        '<span style="width:14px;height:0;border-top:1px dashed #94a3b8"></span>' +
+        '<span style="width:14px;height:0;border-top:1px dashed var(--ct-ink-2)"></span>' +
         esc(t("dash.timeline_triaged")) +
         '</span>';
     legend += '</div>';
@@ -1924,7 +1951,7 @@ function _dashSurface() {
 
     // Bars per kind
     var kinds = [
-        { k: "domain", color: "#3b82f6", v: inv.byKind.domain },
+        { k: "domain", color: "var(--ct-info)", v: inv.byKind.domain },
         { k: "host", color: "#10b981", v: inv.byKind.host },
         { k: "ip_range", color: "#8b5cf6", v: inv.byKind.ip_range },
     ];
@@ -1969,9 +1996,9 @@ function _dashMeasures() {
     var total = m.total || 1;
     // Stacked bar: a_faire / en_cours / termine
     var segments = [
-        { key: "a_faire", label: t("measures.status.a_faire"), color: "#f59e0b", v: m.byStatus.a_faire },
-        { key: "en_cours", label: t("measures.status.en_cours"), color: "#3b82f6", v: m.byStatus.en_cours },
-        { key: "termine", label: t("measures.status.termine"), color: "#16a34a", v: m.byStatus.termine },
+        { key: "a_faire", label: t("measures.status.a_faire"), color: "var(--ct-medium)", v: m.byStatus.a_faire },
+        { key: "en_cours", label: t("measures.status.en_cours"), color: "var(--ct-info)", v: m.byStatus.en_cours },
+        { key: "termine", label: t("measures.status.termine"), color: "var(--ct-low)", v: m.byStatus.termine },
     ];
     h += '<div class="dash-burndown">';
     h += '<div class="dash-burndown-bar">';
@@ -2044,44 +2071,6 @@ function _dashHealth() {
 }
 
 // ── Coverage gaps ────────────────────────────────────────────
-function _dashGaps() {
-    var g = _coverageGaps();
-    var h = '<div class="dash-card">';
-    h += '<div class="dash-card-head">' + _icon("alert", 16) + ' ' + esc(t("dash.gaps_title")) + '</div>';
-
-    // Counters
-    h += '<div class="dash-gaps-counts">';
-    h += '<div class="dash-gap-tile' + (g.staleHosts.length ? " warning" : "") + '" data-click="_dashShowStale">';
-    h += '<div class="dash-gap-val">' + g.staleHosts.length + '</div>';
-    h += '<div class="dash-gap-lbl">' + esc(t("dash.gaps_stale_hosts")) + '</div>';
-    h += '</div>';
-    h += '<div class="dash-gap-tile' + (g.sparseHosts.length ? " warning" : "") + '">';
-    h += '<div class="dash-gap-val">' + g.sparseHosts.length + '</div>';
-    h += '<div class="dash-gap-lbl">' + esc(t("dash.gaps_sparse_hosts")) + '</div>';
-    h += '</div>';
-    h += '<div class="dash-gap-tile' + (g.disabledLong.length ? " muted" : "") + '">';
-    h += '<div class="dash-gap-val">' + g.disabledLong.length + '</div>';
-    h += '<div class="dash-gap-lbl">' + esc(t("dash.gaps_disabled_long")) + '</div>';
-    h += '</div>';
-    h += '</div>';
-
-    if (g.staleHosts.length) {
-        h += '<div class="dash-gaps-sub">' + esc(t("dash.gaps_stale_list")) + '</div>';
-        h += '<div class="dash-list">';
-        g.staleHosts.slice(0, 5).forEach(function(row) {
-            var ageStr = row.age === Infinity ? t("monitored.last.never") : (row.age + " j");
-            h += '<div class="dash-list-row" data-click="_openHost" data-args=\'' + _da(row.id) + '\'>';
-            h += '<span class="dash-list-main mono" title="' + esc(row.host) + '">' + esc(row.host) + '</span>';
-            h += '<span class="dash-list-count">' + esc(ageStr) + '</span>';
-            h += '</div>';
-        });
-        h += '</div>';
-    }
-
-    h += '</div>';
-    return h;
-}
-
 // ── Navigation helpers ───────────────────────────────────────
 window._dashGotoSeverity = function(sev) {
     _filterStatus = "open";
@@ -2133,7 +2122,7 @@ function _renderFindings(c: HTMLElement) {
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
     h += '<h2 style="margin:0">' + esc(t("findings.title")) + '</h2>';
     h += '<span style="flex:1"></span>';
-    h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_quickScanDialog">' + _icon("search", 14) + ' ' + esc(t("findings.quick_scan")) + '</button>';
+    h += '<button class="btn-add btn-icon" data-click="_quickScanDialog">' + _icon("search", 14) + ' ' + esc(t("findings.quick_scan")) + '</button>';
     h += '<button class="btn-add btn-icon" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
     h += '</div>';
 
@@ -2371,7 +2360,7 @@ window._bulkSurfaceFP = function(scope) {
              + '</div>'
              + '<div class="ct-measure-form">'
              +   '<label>' + esc(t("bulk.fp_justification") || "Justification") + ' *'
-             +     '<textarea id="surface-bulk-fp-notes" rows="5" placeholder="'
+             +     '<textarea class="ct-input" id="surface-bulk-fp-notes" rows="5" placeholder="'
              +     esc(t("bulk.fp_placeholder") || "Expliquer pourquoi ces findings sont des faux positifs") + '"></textarea>'
              +   '</label>'
              + '</div>';
@@ -2420,10 +2409,10 @@ function _statusLabel(s: string) {
 // Measure status badge — colored span reused by the Plan d'action table.
 function _measureStatusBadge(statut: string | undefined) {
     var palette: Record<string, string> = {
-        a_faire:   "background:#f3f4f6;color:#6b7280",
-        en_cours:  "background:#dbeafe;color:#1e40af",
-        termine:   "background:#dcfce7;color:#166534",
-        annule:    "background:#fee2e2;color:#991b1b"
+        a_faire:   "background:var(--ct-surface-2);color:var(--ct-ink-2)",
+        en_cours:  "background:var(--ct-info-tint);color:var(--ct-info)",
+        termine:   "background:var(--ct-low-tint);color:var(--ct-low-ink)",
+        annule:    "background:var(--ct-critical-tint);color:var(--ct-critical)"
     };
     var style = (statut && palette[statut]) || palette.a_faire;
     var label = t("measures.status." + statut) || statut || "";
@@ -2495,92 +2484,6 @@ function _renderFindingDetail(c: HTMLElement) {
 
 // v0.3 — AI triage button: sends the finding to the configured LLM
 // (via ai_common.js) and asks for a structured JSON response.
-// v0.3 — Executive PDF report. Fetches aggregated data from the backend
-// and opens a print-friendly HTML in a new tab. User clicks their
-// browser's print dialog to save as PDF — no server-side PDF lib needed.
-window._openExecutiveReport = async function() {
-    try {
-        var r = await SurfaceAPI.executiveReport();
-        var html = _buildExecutiveHtml(r);
-        var w = window.open("", "_blank");
-        if (!w) {
-            showStatus(t("report.popup_blocked"), true);
-            return;
-        }
-        w.document.write(html);
-        w.document.close();
-    } catch (e: any) {
-        showStatus(e.message || t("common.error"), true);
-    }
-};
-
-function _buildExecutiveHtml(d: SurfaceExecutiveReport) {
-    var sev = d.totals.by_severity || {};
-    var topF = (d.top_findings || []).map(function(f) {
-        return '<tr><td class="sev-td"><span class="sev sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>' +
-               '<td>' + esc(f.title) + '</td>' +
-               '<td class="mono">' + esc(f.target || "") + '</td></tr>';
-    }).join("");
-    var topH = (d.top_hosts || []).map(function(h) {
-        var c = h.counts || {};
-        return '<tr><td class="mono">' + esc(h.value) + '</td>' +
-               '<td>' +
-               '<span class="sev sev-critical">' + (c.critical||0) + '</span> ' +
-               '<span class="sev sev-high">' + (c.high||0) + '</span> ' +
-               '<span class="sev sev-medium">' + (c.medium||0) + '</span> ' +
-               '<span class="sev sev-low">' + (c.low||0) + '</span> ' +
-               '<span class="sev sev-info">' + (c.info||0) + '</span>' +
-               '</td></tr>';
-    }).join("");
-    var now = _fmtDate(d.generated_at, "long");
-    return '<!doctype html><html lang="fr"><head><meta charset="utf-8">' +
-        '<title>Surface — Rapport exécutif</title>' +
-        '<style>' +
-        '@page{size:A4;margin:15mm}' +
-        'body{font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f2937;max-width:800px;margin:0 auto;padding:20px;line-height:1.5;background:white}' +
-        'h1{color:#1e40af;margin:0 0 4px;font-size:1.6em}' +
-        'h2{color:#334155;font-size:1.1em;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #e5e7eb}' +
-        '.subtitle{color:#6b7280;margin:0 0 24px}' +
-        '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}' +
-        '.kpi{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;text-align:center}' +
-        '.kpi-val{font-size:2em;font-weight:700;color:#1e40af;line-height:1}' +
-        '.kpi-lbl{font-size:0.72em;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;margin-top:4px}' +
-        '.kpi.critical .kpi-val{color:#b91c1c}' +
-        '.kpi.high .kpi-val{color:#f97316}' +
-        '.kpi.medium .kpi-val{color:#eab308}' +
-        'table{width:100%;border-collapse:collapse;font-size:0.85em;margin-bottom:12px}' +
-        'th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left}' +
-        'th{background:#f9fafb;font-weight:600;text-transform:uppercase;font-size:0.72em;color:#6b7280}' +
-        '.mono{font-family:monospace}' +
-        '.sev{display:inline-block;padding:1px 6px;border-radius:3px;font-size:0.72em;font-weight:700;color:white;text-transform:uppercase}' +
-        '.sev-critical{background:#b91c1c}.sev-high{background:#f97316}.sev-medium{background:#eab308;color:#1f2937}.sev-low{background:#65a30d}.sev-info{background:#0284c7}' +
-        '.footer{color:#9ca3af;font-size:0.78em;margin-top:24px;border-top:1px solid #e5e7eb;padding-top:12px}' +
-        '.print{float:right;padding:8px 16px;background:#1e40af;color:white;border:none;border-radius:6px;cursor:pointer}' +
-        '@media print{.print{display:none}}' +
-        '</style></head><body>' +
-        '<button class="print" onclick="window.print()">🖨 Imprimer / Sauvegarder en PDF</button>' +
-        '<h1>Surface — Rapport exécutif</h1>' +
-        '<p class="subtitle">Généré le ' + esc(now) + '</p>' +
-        '<div class="kpis">' +
-            '<div class="kpi"><div class="kpi-val">' + d.totals.active_findings + '</div><div class="kpi-lbl">Findings actifs</div></div>' +
-            '<div class="kpi critical"><div class="kpi-val">' + (sev.critical||0) + '</div><div class="kpi-lbl">Critical</div></div>' +
-            '<div class="kpi high"><div class="kpi-val">' + (sev.high||0) + '</div><div class="kpi-lbl">High</div></div>' +
-            '<div class="kpi"><div class="kpi-val">' + d.totals.new_last_7d + '</div><div class="kpi-lbl">Nouveaux 7j</div></div>' +
-        '</div>' +
-        '<h2>Périmètre</h2>' +
-        '<p><strong>' + d.scope.hosts + '</strong> hosts surveillés · <strong>' + d.scope.domains + '</strong> domaines · <strong>' + d.scope.assets_total + '</strong> assets au total</p>' +
-        '<h2>Top 10 findings à traiter</h2>' +
-        '<table><tr><th style="width:80px">Sévérité</th><th>Titre</th><th>Cible</th></tr>' + topF + '</table>' +
-        '<h2>Top 10 hosts exposés</h2>' +
-        '<table><tr><th>Host</th><th>Findings (critical · high · medium · low · info)</th></tr>' + topH + '</table>' +
-        '<h2>Santé des scans (7 jours)</h2>' +
-        '<p><strong>' + d.scans.last_7d + '</strong> scans lancés · <strong>' + d.scans.success_rate + '%</strong> de succès · <strong>' + d.scans.failed + '</strong> échecs</p>' +
-        '<h2>Plan d\'action</h2>' +
-        '<p><strong>' + d.measures.done + ' / ' + d.measures.total + '</strong> mesures correctives terminées (' + d.measures.burn_down + '% burndown)</p>' +
-        '<div class="footer">Rapport généré automatiquement par Surface (CISO Toolbox). Les données couvrent les ' + d.period.days + ' derniers jours. ' +
-        'Ce document est destiné à un usage interne uniquement.</div>' +
-        '</body></html>';
-}
 
 window._aiTriageFinding = async function() {
     var f = _selectedFinding;
@@ -2615,8 +2518,8 @@ window._aiTriageFinding = async function() {
         var html = '';
         html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_verdict")) + ' :</strong> ';
         html += fp
-            ? '<span style="color:#9a3412">' + esc(t("fd.ai_fp_probable")) + ' (' + conf + '%)</span>'
-            : '<span style="color:#166534">' + esc(t("fd.ai_genuine")) + ' (' + conf + '%)</span>';
+            ? '<span style="color:var(--ct-high)">' + esc(t("fd.ai_fp_probable")) + ' (' + conf + '%)</span>'
+            : '<span style="color:var(--ct-low-ink)">' + esc(t("fd.ai_genuine")) + ' (' + conf + '%)</span>';
         html += ' &mdash; <span>' + esc(t("fd.ai_sev_rec")) + ' : <strong>' + esc(sev) + '</strong></span></div>';
         if (parsed.summary) {
             html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_summary")) + ' :</strong><br>' + esc(parsed.summary) + '</div>';
@@ -2761,7 +2664,7 @@ function _bulkImportMarkup(tt: (k: string) => string) {
     fields.forEach(function(f) {
         h += '<tr>';
         h += '<td><code>' + esc(f.name) + '</code></td>';
-        h += '<td style="text-align:center">' + (f.required ? '<span style="color:#dc2626;font-weight:600">*</span>' : '–') + '</td>';
+        h += '<td style="text-align:center">' + (f.required ? '<span style="color:var(--ct-critical);font-weight:600">*</span>' : '–') + '</td>';
         h += '<td>' + esc(f.desc) + '</td>';
         h += '</tr>';
     });
@@ -2812,8 +2715,8 @@ function _ensureBulkImportModal() {
             '<div class="ct-modal-header"><span>' + esc(tt("bulk_import.title")) + '</span><button class="ct-modal-close" data-click="_closeBulkImportModal">' + _icon("x", 18) + '</button></div>' +
             '<div class="ct-modal-body" id="bulk-import-body"></div>' +
             '<div class="ct-modal-footer">' +
-                '<button class="btn-add" data-click="_closeBulkImportModal">' + esc(tt("action.cancel")) + '</button>' +
-                '<button class="btn-add btn-icon" id="bulk-import-submit" style="background:#dc2626;color:white">' + _icon("check", 14) + ' ' + esc(tt("bulk_import.submit")) + '</button>' +
+                '<button class="ct-modal-btn" data-click="_closeBulkImportModal">' + esc(tt("action.cancel")) + '</button>' +
+                '<button class="ct-modal-btn ct-modal-btn--primary" id="bulk-import-submit">' + _icon("check", 14) + ' ' + esc(tt("bulk_import.submit")) + '</button>' +
             '</div>' +
         '</div>';
     var body = ov.querySelector("#bulk-import-body")!;
@@ -2968,9 +2871,9 @@ function _renderMeasures(c: HTMLElement) {
     h += '<h2 style="margin:0">' + esc(t("measures.title")) + '</h2>';
     h += '<span style="flex:1"></span>';
     if (total > 0) {
-        h += '<span class="sev-badge" style="background:#dcfce7;color:#166534">' + done + ' ' + esc(t("measures.status.termine")) + '</span>';
-        h += '<span class="sev-badge" style="background:#dbeafe;color:#1e40af">' + inProg + ' ' + esc(t("measures.status.en_cours")) + '</span>';
-        h += '<span class="sev-badge" style="background:#f3f4f6;color:#6b7280">' + todo + ' ' + esc(t("measures.status.a_faire")) + '</span>';
+        h += '<span class="sev-badge" style="background:var(--ct-low-tint);color:var(--ct-low-ink)">' + done + ' ' + esc(t("measures.status.termine")) + '</span>';
+        h += '<span class="sev-badge" style="background:var(--ct-info-tint);color:var(--ct-info)">' + inProg + ' ' + esc(t("measures.status.en_cours")) + '</span>';
+        h += '<span class="sev-badge" style="background:var(--ct-surface-2);color:var(--ct-ink-2)">' + todo + ' ' + esc(t("measures.status.a_faire")) + '</span>';
     }
     h += '</div>';
     h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("measures.help")) + '</div>';
@@ -3011,7 +2914,7 @@ function _renderMeasures(c: HTMLElement) {
                   if (!m.echeance) return "";
                   var overdue = m.statut !== "termine" && m.echeance < today;
                   return overdue
-                      ? '<span style="color:#dc2626;font-weight:600">' + esc(m.echeance) + ' ⚠</span>'
+                      ? '<span style="color:var(--ct-critical);font-weight:600">' + esc(m.echeance) + ' ⚠</span>'
                       : esc(m.echeance);
               } }
         ]
@@ -3386,7 +3289,7 @@ function _refreshHostCards() {
         var scs = a.enabled_scanners || [];
         h += '<div class="host-card-footer">';
         h += '<span class="host-card-scancount">' + _icon("search", 12) + ' ' + scs.length + ' ' + esc(t("hosts.scanners")) + '</span>';
-        h += '<button class="btn-mini" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
+        h += '<button class="ct-btn" data-size="sm" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
         h += '</div>';
         h += '</div>';
     });
@@ -3458,7 +3361,7 @@ function _renderHostDetail(c: HTMLElement) {
     var score = _riskScoreFor(a, counts);
     var tier = _riskTier(score);
     var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-    h += '<button class="btn-add btn-icon" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back")) + '</button>';
+    h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back")) + '</button>';
     h += '<h2 style="margin:0;flex:1">' + esc(isShare ? hostKey : a.value) + '</h2>';
     if (isShare) h += '<span class="host-badge host-badge-share">' + esc(t("hosts.badge.share")) + '</span>';
     if (autoDiscovered) h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
@@ -3479,9 +3382,9 @@ function _renderHostDetail(c: HTMLElement) {
     if (isShare) {
         var sharesRows = detailShares.map(function(sh) {
             var acts =
-                '<button class="btn-mini" data-click="_scanHost" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.scan_now")) + '">' + _icon("search", 12) + '</button>' +
-                '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.edit")) + '">' + _icon("edit", 12) + '</button>' +
-                '<button class="btn-mini" data-click="_deleteHostFromDetail" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("action.delete")) + '">' + _icon("trash", 12) + '</button>';
+                '<button class="ct-btn" data-size="sm" data-click="_scanHost" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.scan_now")) + '">' + _icon("search", 12) + '</button>' +
+                '<button class="ct-btn" data-size="sm" data-click="_editMonitoredDialog" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.edit")) + '">' + _icon("edit", 12) + '</button>' +
+                '<button class="ct-btn" data-size="sm" data-variant="danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("action.delete")) + '">' + _icon("trash", 12) + '</button>';
             var shScanners = (sh.enabled_scanners || []).map(function(s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ");
             var shLast = sh.last_scan_at ? _fmtDate(sh.last_scan_at) : t("monitored.last.never");
             return '<div class="host-share-row">' +
@@ -3529,12 +3432,12 @@ function _renderHostDetail(c: HTMLElement) {
     // offer the bulk scan here. A single share keeps the usual scan/edit/delete.
     h += '<div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">';
     if (isShare && detailShares.length > 1) {
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanSharesOnHost" data-args=\'' + _da(hostKey) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_all_shares")) + '</button>';
+        h += '<button class="btn-add btn-icon" data-click="_scanSharesOnHost" data-args=\'' + _da(hostKey) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_all_shares")) + '</button>';
     } else {
-        h += '<button class="btn-add btn-icon" style="background:#dc2626;color:white" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
+        h += '<button class="btn-add btn-icon" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
         h += '<button class="btn-add" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.edit")) + '</button>';
         h += '<span style="flex:1"></span>';
-        h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
+        h += '<button class="btn-add surface-danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
     }
     h += '</div>';
 
@@ -3554,7 +3457,7 @@ function _renderHostDetail(c: HTMLElement) {
             h += '<div class="host-timeline-row">';
             h += '<span class="host-timeline-dot"></span>';
             h += '<span class="host-timeline-date">' + esc(dateStr) + '</span>';
-            h += '<span class="scanner-badge scanner-' + esc((j.scanner||"").replace(/[^a-z0-9]/g,"-")) + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
+            h += '<span class="scanner-badge ' + _scannerBadgeCls(j.scanner) + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
             h += '<span class="host-timeline-status job-status job-' + esc(j.status) + '">' + esc(_jobStatusLabel(j.status)) + '</span>';
             var bits = [];
             if (diff.added)    bits.push('<span class="job-diff-added">+' + diff.added + '</span>');
@@ -3801,7 +3704,7 @@ function _surfaceWireNucleiSection() {
     SurfaceAPI.nucleiConfig().then(function(cfg) {
         _renderNucleiFormInto(holder!, cfg);
     }).catch(function(e) {
-        holder!.innerHTML = '<div style="color:#dc2626">' + esc(e.message || t("nuclei.config_error")) + '</div>';
+        holder!.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("nuclei.config_error")) + '</div>';
     });
 }
 
@@ -3812,7 +3715,7 @@ var _nucleiLastConfig: SurfaceNucleiConfig | null = null;
 function _renderNucleiFormInto(holder: HTMLElement, cfg: SurfaceNucleiConfig) {
     _nucleiLastConfig = cfg;
     if (!cfg || !cfg.installed) {
-        holder.innerHTML = '<div style="color:#dc2626">' + esc(t("nuclei.not_installed")) + '</div>';
+        holder.innerHTML = '<div style="color:var(--ct-critical)">' + esc(t("nuclei.not_installed")) + '</div>';
         return;
     }
     var tuning = cfg.tuning || {};
@@ -3834,7 +3737,7 @@ function _renderNucleiFormInto(holder: HTMLElement, cfg: SurfaceNucleiConfig) {
     }
 
     var h = "";
-    h += '<div style="background:#f9fafb;border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:10px">';
+    h += '<div style="background:var(--ct-surface-2);border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:10px">';
     h += '<div><strong>' + esc(t("nuclei.version")) + '</strong> ' + esc(cfg.version || "?") + '</div>';
     h += '<div><strong>' + esc(t("nuclei.templates")) + '</strong> ' + esc(String(cfg.templates_count)) + ' <span style="color:var(--text-muted)">(' + esc(t("nuclei.last_update")) + ' ' + esc(last) + ')</span></div>';
     h += '</div>';
@@ -3893,13 +3796,13 @@ window._nucleiUpdateTemplates = function() {
     if (res) res.innerHTML = "";
     SurfaceAPI.nucleiUpdateTemplates().then(function(r) {
         if (res) {
-            res.innerHTML = '<div style="color:#16a34a;margin-bottom:6px;display:flex;align-items:center;gap:6px">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>'
-                + (r.stdout ? '<pre style="background:white;padding:6px;border-radius:3px;font-size:0.7em;overflow:auto;max-height:140px">' + esc(r.stdout) + '</pre>' : '');
+            res.innerHTML = '<div style="color:var(--ct-low);margin-bottom:6px;display:flex;align-items:center;gap:6px">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>'
+                + (r.stdout ? '<pre style="background:var(--ct-surface);padding:6px;border-radius:3px;font-size:0.7em;overflow:auto;max-height:140px">' + esc(r.stdout) + '</pre>' : '');
         }
         var holder = document.getElementById("surface-nuclei-section");
         if (holder) SurfaceAPI.nucleiConfig().then(function(cfg) { _renderNucleiFormInto(holder!, cfg); });
     }).catch(function(e) {
-        if (res) res.innerHTML = '<div style="color:#dc2626">' + esc(e.message || t("common.error")) + '</div>';
+        if (res) res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
         if (btn) { btn.disabled = false; btn.textContent = "\u21bb " + t("nuclei.update_btn"); }
     });
 };
@@ -3961,7 +3864,7 @@ function _surfaceWireShodanSection() {
     SurfaceAPI.shodanConfig().then(function(cfg) {
         _renderShodanFormInto(holder!, cfg);
     }).catch(function(e) {
-        holder!.innerHTML = '<div style="color:#dc2626">' + esc(e.message || t("common.error")) + '</div>';
+        holder!.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
     });
 }
 
@@ -3975,8 +3878,8 @@ function _renderShodanFormInto(holder: HTMLElement, cfg: SurfaceShodanConfig) {
     h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:10px">' + esc(tt("shodan.help")) + '</div>';
 
     if (isConfigured) {
-        h += '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:10px;margin-bottom:12px">';
-        h += '<div style="display:flex;align-items:center;gap:8px;font-weight:600;color:#166534">' + _icon("check_circle", 16) + ' ' + esc(tt("shodan.configured")) + '</div>';
+        h += '<div style="background:var(--ct-low-tint);border:1px solid var(--ct-low-tint);border-radius:4px;padding:10px;margin-bottom:12px">';
+        h += '<div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ct-low-ink)">' + _icon("check_circle", 16) + ' ' + esc(tt("shodan.configured")) + '</div>';
         h += '<div style="font-family:monospace;font-size:0.9em;margin-top:6px">' + esc(masked) + '</div>';
         if (lastCheck) {
             h += '<div style="font-size:0.72em;color:var(--text-muted);margin-top:4px">' + esc(tt("shodan.last_check")) + ' : ' + esc(lastCheck) + '</div>';
@@ -3984,10 +3887,10 @@ function _renderShodanFormInto(holder: HTMLElement, cfg: SurfaceShodanConfig) {
         h += '</div>';
         h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
         h += '<button class="ai-btn-accept btn-icon" id="shodan-replace-btn">' + _icon("edit", 14) + ' ' + esc(tt("shodan.replace")) + '</button>';
-        h += '<button class="ai-btn-close btn-icon" style="color:#dc2626" id="shodan-delete-btn">' + _icon("trash", 14) + ' ' + esc(tt("shodan.delete")) + '</button>';
+        h += '<button class="ct-btn" data-variant="danger" data-size="sm" id="shodan-delete-btn">' + _icon("trash", 14) + ' ' + esc(tt("shodan.delete")) + '</button>';
         h += '</div>';
     } else {
-        h += '<div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:10px;margin-bottom:12px;border-radius:0 6px 6px 0;font-size:0.82em;color:#78350f">';
+        h += '<div style="background:var(--ct-medium-tint);border-left:4px solid var(--ct-medium);padding:10px;margin-bottom:12px;border-radius:0 6px 6px 0;font-size:0.82em;color:#78350f">';
         h += '<strong>' + esc(tt("shodan.warning_title")) + '</strong> ' + esc(tt("shodan.warning_body"));
         h += '</div>';
         _renderShodanKeyInput(h, holder, tt);
@@ -4056,7 +3959,7 @@ function _shodanSaveKey() {
     var saveBtn = document.getElementById("shodan-save-btn") as HTMLButtonElement | null;
     var res = document.getElementById("shodan-save-result");
     if (!key) {
-        if (res) res.innerHTML = '<div style="color:#dc2626">' + esc(t("shodan.key_required")) + '</div>';
+        if (res) res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(t("shodan.key_required")) + '</div>';
         return;
     }
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "..."; }
@@ -4065,7 +3968,7 @@ function _shodanSaveKey() {
         showStatus(t("shodan.saved"));
         _surfaceWireShodanSection();
     }).catch(function(e) {
-        if (res) res.innerHTML = '<div style="color:#dc2626">' + esc(e.message || t("common.error")) + '</div>';
+        if (res) res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t("shodan.save"); }
     });
 }
@@ -4144,7 +4047,7 @@ function _renderSmtpFormInto(holder: HTMLElement, cfg: SurfaceSmtpConfig) {
     h += '</div>';
     h += '<label class="surface-settings-check"><input type="checkbox" id="surface-smtp-tls"' + (cfg.use_tls !== false ? " checked" : "") + '> ' + esc(t("smtp.use_tls")) + '</label>';
     h += '<div style="display:flex;gap:8px;margin-top:10px">';
-    h += '<button class="btn-add" style="background:#1f2937;color:white" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
+    h += '<button class="btn-add" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
     h += '<button class="btn-add" data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
     h += '</div>';
     holder.innerHTML = h;

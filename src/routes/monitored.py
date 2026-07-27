@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,9 +17,8 @@ from src.auth import get_current_user
 from src.crypto import encrypt_secret
 from src.database import async_session, get_db
 from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
-from src.models import Finding, MonitoredAsset, ScanJob, User
+from src.models import MonitoredAsset, ScanJob, User
 from src.rate_limit import check_scan_quota
-from src.routes.scans import _quick_scan_sync
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 from src.audit import log_action
 

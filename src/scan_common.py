@@ -46,11 +46,13 @@ _DOCKER_SIBLING_NAMES: frozenset[str] = frozenset({
     "compliance-app", "compliance-db",
     "asset-app", "asset-db",
     "access-app", "access-db",
+    "appsec-app", "appsec-db",
+    # Legacy names kept defensively (pre-rename scan -> appsec)
     "scan-app", "scan-db",
     "surface-app", "surface-db",
     "proxy",
     # Bare service names without suffix (docker uses both)
-    "pilot", "risk", "vendor", "compliance", "asset", "access", "scan", "surface",
+    "pilot", "risk", "vendor", "compliance", "asset", "access", "appsec", "scan", "surface",
 })
 
 # Known cloud metadata IPs (AWS, GCP, Azure, Alibaba, DigitalOcean).

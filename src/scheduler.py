@@ -15,7 +15,6 @@ themselves are blocking (subprocess, sockets), so we use asyncio.to_thread.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import os
 import shutil
@@ -26,7 +25,7 @@ from sqlalchemy import select
 
 from src.database import async_session
 from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
-from src.models import Finding, MonitoredAsset, ScanJob
+from src.models import MonitoredAsset, ScanJob
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, resolve_first_ip, run_enabled_scanners
 
 logger = logging.getLogger("surface.scheduler")

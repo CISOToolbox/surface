@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.auth import assert_auth_configured
 from src.database import engine
 from src.models import Base
 from src.routes.ai import router as ai_router
@@ -105,8 +104,6 @@ async def on_startup():
     from src.database import async_session
     from src.models import AppSettings
     from src.scanners import set_shodan_api_key_cache, set_nuclei_tuning_cache, _NUCLEI_TUNING_KEYS
-
-    assert_auth_configured()
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

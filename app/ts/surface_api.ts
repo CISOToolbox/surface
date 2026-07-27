@@ -91,8 +91,6 @@ window.SurfaceAPI = {
     listMeasures: function() { return _fetch("/measures"); },
     updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data as Record<string, unknown> }); },
     deleteMeasure: function(id) { return _fetch("/measures/" + id, { method: "DELETE" }); },
-    // v0.3 — executive report + smtp config
-    executiveReport: function() { return _fetch("/reports/executive"); },
     smtpConfig: function() { return _fetch("/reports/smtp/config"); },
     smtpSetConfig: function(data) { return _fetch("/reports/smtp/config", { method: "PUT", body: data as Record<string, unknown> }); },
     sendEmailDigest: function() { return _fetch("/reports/email-digest/send", { method: "POST" }); },
@@ -119,8 +117,8 @@ function _initAuth(): void {
             var right = document.getElementById("toolbar-right");
             if (!right) return;
             var h = "";
-            h += '<span style="color:rgba(255,255,255,0.8);font-size:0.8em;margin:0 6px">' + esc(user.name || user.email) + '</span>';
-            h += '<button style="font-size:0.75em;color:rgba(255,255,255,0.5);background:none;border:none;cursor:pointer;padding:4px 8px" data-click="_logout" title="Sign out">&#x23FB;</button>';
+            h += '<span style="color:var(--ct-ink-1);font-size:0.8em;margin:0 6px">' + esc(user.name || user.email) + '</span>';
+            h += '<button style="font-size:0.75em;color:var(--ct-ink-2);background:none;border:none;cursor:pointer;padding:4px 8px" data-click="_logout" title="Sign out">&#x23FB;</button>';
             var container = document.createElement("span");
             container.className = "toolbar-right";
             container.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";

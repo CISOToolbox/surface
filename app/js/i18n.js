@@ -128,7 +128,7 @@ _registerTranslations("fr", {
     "matrix.extreme": "Extrême", // pilot
     "matrix.high": "Élevé", // pilot
     "matrix.low": "Faible", // pilot
-    "matrix.moderate": "Modéré", // pilot
+    "matrix.moderate": "Moyen", // pilot
     "matrix.significant": "Significatif", // pilot
     "matrix.x": "Impact", // pilot
     "matrix.y": "Vraisemblance", // pilot
@@ -241,14 +241,31 @@ _registerTranslations("fr", {
     // Snapshots
     "snap_prompt_name": "Nom du point de sauvegarde :",
     // Error
-    "err_not_encrypted": "Fichier non chiffré"
+    "err_not_encrypted": "Fichier non chiffré",
+    // Chrome UI v2 (SPEC §11)
+    "chrome.modules": "Modules",
+    "chrome.switch_module": "Changer de module",
+    "chrome.search_all": "Aller à un module, une analyse, une mesure…",
+    "chrome.theme_dark": "Thème sombre",
+    "chrome.theme_light": "Thème clair",
+    "chrome.lang": "Langue",
+    "chrome.saved_at": "Enregistré {time}",
+    "chrome.saved_local": "Enregistré localement {time}",
+    "chrome.export_json": "Exporter (JSON)",
+    "chrome.import_json": "Importer (JSON)",
+    "chrome.settings": "Paramètres",
+    "chrome.columns": "Colonnes",
+    "chrome.empty.title": "Rien à afficher",
+    "module.risk": "Risk", "module.compliance": "Compliance", "module.audit": "Audit",
+    "module.vendor": "Vendor", "module.asset": "Asset", "module.access": "Access",
+    "module.surface": "Surface", "module.appsec": "AppSec", "module.pilot": "Pilot"
 });
 _registerTranslations("en", {
     "matrix.critical": "Critical", // pilot
     "matrix.extreme": "Extreme", // pilot
     "matrix.high": "High", // pilot
     "matrix.low": "Low", // pilot
-    "matrix.moderate": "Moderate", // pilot
+    "matrix.moderate": "Medium", // pilot
     "matrix.significant": "Significant", // pilot
     "matrix.x": "Impact", // pilot
     "matrix.y": "Likelihood", // pilot
@@ -361,7 +378,24 @@ _registerTranslations("en", {
     // Snapshots
     "snap_prompt_name": "Snapshot name:",
     // Error
-    "err_not_encrypted": "File not encrypted"
+    "err_not_encrypted": "File not encrypted",
+    // Chrome UI v2 (SPEC §11)
+    "chrome.modules": "Modules",
+    "chrome.switch_module": "Switch module",
+    "chrome.search_all": "Go to a module, an analysis, a measure…",
+    "chrome.theme_dark": "Dark theme",
+    "chrome.theme_light": "Light theme",
+    "chrome.lang": "Language",
+    "chrome.saved_at": "Saved {time}",
+    "chrome.saved_local": "Saved locally {time}",
+    "chrome.export_json": "Export (JSON)",
+    "chrome.import_json": "Import (JSON)",
+    "chrome.settings": "Settings",
+    "chrome.columns": "Columns",
+    "chrome.empty.title": "Nothing to show",
+    "module.risk": "Risk", "module.compliance": "Compliance", "module.audit": "Audit",
+    "module.vendor": "Vendor", "module.asset": "Asset", "module.access": "Access",
+    "module.surface": "Surface", "module.appsec": "AppSec", "module.pilot": "Pilot"
 });
 // Init locale on load — FR is loaded synchronously via <script> tag
 _i18nLoaded["fr"] = true;

@@ -33,7 +33,6 @@ from src.auth import (
     MODULE_NAME,
     auth_enabled,
     create_jwt,
-    get_current_user,
     get_current_user_permissive,
     get_module_role,
 )
@@ -170,7 +169,6 @@ async def login_entra(request: Request):
     return response
 
 
-@router.get("/callback/entra")
 def _verify_oauth_state(request: Request) -> None:
     """CSRF guard: the `state` the IdP echoes back MUST equal the one we
     set at login (the oauth_state cookie). Without it an attacker can feed
@@ -182,6 +180,7 @@ def _verify_oauth_state(request: Request) -> None:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
 
+@router.get("/callback/entra")
 async def callback_entra(request: Request, db: AsyncSession = Depends(get_db)):
     if not _entra_configured():
         raise HTTPException(status_code=503, detail="Entra ID not configured")

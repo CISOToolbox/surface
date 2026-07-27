@@ -116,8 +116,12 @@
             window._aiFetchRuntime().then(function () { window.openSettings(); });
             return;
         }
-        if (typeof toggleMenu === "function")
-            toggleMenu();
+        // Close the Fichier dropdown if open (never toggle — a toggle would OPEN
+        // it when openSettings is re-invoked after a language switch). Mirrors
+        // the same guard in ct_settings.ts openSettings.
+        var _io = document.getElementById("io-menu");
+        if (_io)
+            _io.classList.remove("open");
         var pfx = (cfg.storagePrefix || "ct") + "_ai_";
         var aiEnabled = localStorage.getItem(pfx + "enabled") === "true";
         var canUse = !!window._aiRuntime.can_use;
