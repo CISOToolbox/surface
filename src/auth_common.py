@@ -4,10 +4,14 @@ This file is COPIED into each module's src/ directory by the deploy/sync
 scripts. Do NOT edit the per-module copies — edit the original at
 shared/python/auth_common.py and propagate.
 
-Supports two modes:
-  - **pilot** (AUTH_MODE=pilot): Suite-integrated. JWT cookie set by Pilot,
-    per-module permissions in the JWT `permissions` dict.
+Supports three modes:
+  - **pilot** (AUTH_MODE=pilot, default): Suite-integrated. JWT cookie set by
+    Pilot, per-module permissions in the JWT `permissions` dict.
   - **standalone** (AUTH_MODE=standalone): Own login flow via AUTH_TOKEN.
+  - **none** (AUTH_MODE=none): Authentication DISABLED — every route is served
+    as admin. Dev/test only, and the ONLY way to run without a credential:
+    `assert_auth_posture()` refuses to boot if the mode's credential is missing
+    in any other mode, so an unconfigured production can never silently open up.
 
 Configuration (env vars read at import time):
   JWT_SECRET, AUTH_MODE, AUTH_TOKEN, MODULE_COOKIE, MODULE_NAME
@@ -42,9 +46,33 @@ COOKIE_NAME = "pilot_token" if AUTH_MODE == "pilot" else MODULE_COOKIE
 # ── Auth state ───────────────────────────────────────────────────
 
 def auth_enabled() -> bool:
+    if AUTH_MODE == "none":
+        return False
     if AUTH_MODE == "standalone":
         return bool(AUTH_TOKEN)
     return bool(JWT_SECRET)
+
+
+def assert_auth_posture() -> None:
+    """Fail closed unless no-auth is explicitly opted into. Call once at
+    application startup.
+
+    Running with authentication disabled is a deliberate dev/test convenience
+    and MUST be requested explicitly via AUTH_MODE=none. In any other mode an
+    empty credential (JWT_SECRET in pilot mode, AUTH_TOKEN in standalone) would
+    make `auth_enabled()` False and serve every route as admin — a silent
+    production footgun. Refuse to boot in that grey area instead of opening up.
+    """
+    if AUTH_MODE == "none":
+        return
+    if not auth_enabled():
+        cred = "AUTH_TOKEN" if AUTH_MODE == "standalone" else "JWT_SECRET"
+        raise RuntimeError(
+            f"{cred} is empty but AUTH_MODE is '{AUTH_MODE}', not 'none'. "
+            f"Set {cred} to enable authentication (production), or set "
+            "AUTH_MODE=none to run without authentication (test only). "
+            "Refusing to start."
+        )
 
 
 # ── JWT ──────────────────────────────────────────────────────────
@@ -69,19 +97,27 @@ def decode_jwt(token: str) -> dict:
 async def _sync_user_from_jwt(db: AsyncSession, payload: dict) -> User:
     """Find or create a local user record from JWT claims.
 
-    The JWT carries the canonical display name (Pilot puts ``name`` in the
-    payload). If the JWT name is present and differs from the stored value,
-    refresh it — this self-heals legacy rows that were created before Pilot
-    started forwarding ``name``.
+    The JWT is the source of truth for the display name AND the global role
+    (Pilot puts both in the payload). If either is present and differs from
+    the stored value, refresh it — otherwise the row is frozen at the value
+    it was first created with, so a role change in Pilot (or a standalone
+    re-login) would never take effect and a demotion would never apply.
     """
     email = payload.get("email", "")
     jwt_name = (payload.get("name") or "").strip()
+    jwt_role = payload.get("role")
     fallback_name = email.split("@")[0] if email else ""
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user:
+        dirty = False
         if jwt_name and user.name != jwt_name:
             user.name = jwt_name
+            dirty = True
+        if jwt_role and user.role != jwt_role:
+            user.role = jwt_role
+            dirty = True
+        if dirty:
             await db.commit()
         return user
     user = User(
@@ -100,12 +136,19 @@ async def _sync_user_from_jwt(db: AsyncSession, payload: dict) -> User:
 # ── Module-role resolution ───────────────────────────────────────
 
 def _get_module_role(payload: dict) -> str:
-    """Extract the role for this module from the JWT permissions dict."""
+    """Extract the role for this module from the JWT permissions dict.
+
+    A per-module role always wins. Otherwise a global role maps through:
+    a suite admin is admin everywhere, and a suite "viewer" is read-only
+    everywhere (instead of being blocked at get_current_user with no role)."""
     perms = payload.get("permissions") or {}
     if MODULE_NAME and MODULE_NAME in perms:
         return perms[MODULE_NAME]
-    if payload.get("role") == "admin":
+    role = payload.get("role")
+    if role == "admin":
         return "admin"
+    if role == "viewer":
+        return "viewer"
     return ""
 
 
@@ -163,6 +206,29 @@ def get_module_role(user: Optional[User]) -> str:
     if user is None:
         return "admin"  # no auth = full access
     return getattr(user, "_module_role", "") or "admin"
+
+
+# Canonical module-role vocabulary for the owner-model modules. Centralised so
+# the role strings live in ONE place (a typo can't silently create a role that
+# maps to nothing) and the ladder below reads as intent. "control" = internal
+# controls team, admin-equivalent at the module level.
+ADMIN_MODULE_ROLES = ("admin", "control")
+EDITOR_MODULE_ROLES = ("editor", "contributor", "manager")
+VIEWER_MODULE_ROLES = ("viewer", "reader", "triager")
+
+
+# Canonical module-role → permission ladder. Single source of truth for the
+# owner-model modules (risk, vendor, compliance) so a given role grants the
+# SAME rights everywhere instead of each module rolling its own ladder (or, as
+# risk did, having none). An unknown/empty role grants nothing.
+def perms_for_module_role(role: str) -> list[str]:
+    if role in ADMIN_MODULE_ROLES:
+        return ["read", "edit", "delete", "share"]
+    if role in EDITOR_MODULE_ROLES:
+        return ["read", "edit"]
+    if role in VIEWER_MODULE_ROLES:
+        return ["read"]
+    return []
 
 
 def require_min_role(user: Optional[User], min_role: str, hierarchy: list[str]) -> None:

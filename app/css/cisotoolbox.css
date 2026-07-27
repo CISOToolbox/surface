@@ -533,3 +533,17 @@ td .ref-select, td .ref-select * { box-shadow: none; }
    ─────────────────────────────────────────────────────────────── */
 body:not(.role-admin) .admin-only { display: none !important; }
 body:not(.role-admin):not(.role-editor):not(.role-manager):not(.role-contributor) .editor-up { display: none !important; }
+
+/* Read-only roles (viewer / reader / triager — incl. a suite-wide "viewer")
+   may browse but must not mutate. Hide the mutating controls by their
+   data-click verb — the backend also denies these actions, this just avoids
+   showing buttons that would 403. Editors and above keep them. */
+body.role-viewer [data-click^="delete"], body.role-reader [data-click^="delete"], body.role-triager [data-click^="delete"],
+body.role-viewer [data-click^="remove"], body.role-reader [data-click^="remove"], body.role-triager [data-click^="remove"],
+body.role-viewer [data-click^="add"],    body.role-reader [data-click^="add"],    body.role-triager [data-click^="add"],
+body.role-viewer [data-click^="create"], body.role-reader [data-click^="create"], body.role-triager [data-click^="create"],
+body.role-viewer [data-click^="new"],    body.role-reader [data-click^="new"],    body.role-triager [data-click^="new"],
+body.role-viewer [data-click^="save"],   body.role-reader [data-click^="save"],   body.role-triager [data-click^="save"],
+body.role-viewer [data-click^="edit"],   body.role-reader [data-click^="edit"],   body.role-triager [data-click^="edit"],
+body.role-viewer [data-click^="import"], body.role-reader [data-click^="import"], body.role-triager [data-click^="import"],
+body.role-viewer .btn-add, body.role-reader .btn-add, body.role-triager .btn-add { display: none !important; }

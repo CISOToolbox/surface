@@ -171,10 +171,22 @@ async def login_entra(request: Request):
 
 
 @router.get("/callback/entra")
+def _verify_oauth_state(request: Request) -> None:
+    """CSRF guard: the `state` the IdP echoes back MUST equal the one we
+    set at login (the oauth_state cookie). Without it an attacker can feed
+    a victim their own authorization code and silently log the victim into
+    the attacker's account (login CSRF)."""
+    expected = request.cookies.get("oauth_state")
+    returned = request.query_params.get("state")
+    if not expected or not returned or returned != expected:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+
+
 async def callback_entra(request: Request, db: AsyncSession = Depends(get_db)):
     if not _entra_configured():
         raise HTTPException(status_code=503, detail="Entra ID not configured")
     redirect_uri = APP_URL + "/auth/callback/entra"
+    _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=ENTRA_CLIENT_ID, client_secret=ENTRA_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
         token = await client.fetch_token(ENTRA_TOKEN_URL, authorization_response=str(request.url))
@@ -219,6 +231,7 @@ async def callback_google(request: Request, db: AsyncSession = Depends(get_db)):
     if not _google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured")
     redirect_uri = APP_URL + "/auth/callback/google"
+    _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
         token = await client.fetch_token(GOOGLE_TOKEN_URL, authorization_response=str(request.url))
@@ -263,6 +276,7 @@ async def callback_oidc(request: Request, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=503, detail="OIDC not configured")
     endpoints = await _get_oidc_endpoints()
     redirect_uri = APP_URL + "/auth/callback/oidc"
+    _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=OIDC_CLIENT_ID, client_secret=OIDC_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
         token = await client.fetch_token(endpoints["token_endpoint"], authorization_response=str(request.url))

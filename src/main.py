@@ -96,6 +96,9 @@ async def health():
 
 @app.on_event("startup")
 async def on_startup():
+    # Fail closed unless AUTH_MODE=none is explicit (see auth_common.assert_auth_posture).
+    from src.auth import assert_auth_posture
+    assert_auth_posture()
     import asyncio
     from sqlalchemy import select
     from src.scheduler import run_scheduler
