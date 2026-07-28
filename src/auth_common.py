@@ -13,11 +13,50 @@ Supports three modes:
     `assert_auth_posture()` refuses to boot if the mode's credential is missing
     in any other mode, so an unconfigured production can never silently open up.
 
+THE `None` CONTRACT — read this before writing an endpoint
+----------------------------------------------------------
+`get_current_user()` returns `Optional[User]`, and `None` has exactly ONE
+meaning: **authentication is disabled** (`auth_enabled()` is False, i.e.
+AUTH_MODE=none). It NEVER means "anonymous caller" — a caller with no
+valid session gets a 401 raised inside the dependency and never reaches
+the handler at all. So, in a handler body:
+
+    auth_enabled() is False  <=>  user is None  <=>  caller is admin
+
+Two mistakes follow from forgetting this, and both are real bugs we shipped:
+
+  * treating `None` as unauthenticated — `if user is None: raise 401` locks
+    every caller out in AUTH_MODE=none (AUTH-02, 26 endpoints);
+  * reading `user.<attr>` with no guard — `AttributeError` -> 500 in
+    AUTH_MODE=none (AUTH-02 follow-up, 42 accesses in `watch`).
+
+The rules, in order of preference:
+
+  1. Test the posture, not the sentinel: `auth_enabled()` /
+     `require_admin(user)` / `require_min_role(user, ...)` /
+     `get_module_role(user)` all handle `None` correctly. Prefer them.
+  2. Need a value off the user? Use the ownership idiom
+     `user.id if user else None` (~270 sites do; see `owner_id` columns).
+     Consequence, accepted: objects created in AUTH_MODE=none have NO owner.
+  3. Need a real identity (a NOT NULL owner_id/user_id FK)? Call
+     `require_identity(user)` — it answers a clear 503 instead of a 500.
+  4. Want a 401 for an anonymous caller? You already have it: the
+     dependency raised it. Do not re-check.
+
+`tests/test_auth_sentinel.py` enforces 1 and the absence of the two
+mistakes above across the 9 modules.
+
 Configuration (env vars read at import time):
   JWT_SECRET, AUTH_MODE, AUTH_TOKEN, MODULE_COOKIE, MODULE_NAME
+
+JWT_SECRET is never used as a signing key directly: every key is derived
+per module with HKDF (see below), so a module only ever holds the key of
+its own trust domain.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -40,12 +79,98 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
 MODULE_COOKIE = os.getenv("MODULE_COOKIE", "module_token")
 MODULE_NAME = os.getenv("MODULE_NAME", "")
 
-COOKIE_NAME = "pilot_token" if AUTH_MODE == "pilot" else MODULE_COOKIE
+
+# ── Per-module key derivation (HKDF) + issuer / audience ─────────
+# AUTH-01. Two layers, and BOTH are needed:
+#
+#  1. iss/aud claims scope a token to one trust domain (a standalone
+#     `watch` token replayed on `risk` fails audience verification).
+#  2. The SIGNING KEY itself is derived per module — HKDF-SHA256 over
+#     JWT_SECRET with info = the token audience. Claims alone were not
+#     enough: all 9 modules held the same raw JWT_SECRET, so compromising
+#     the least sensitive module handed the attacker the key to forge a
+#     token with ANY iss/aud for the eight others. With derivation, a
+#     module only ever holds `HKDF(JWT_SECRET, "ciso-module:<its name>")`
+#     and HKDF is one-way: that key yields nothing about JWT_SECRET nor
+#     about any sibling's key.
+#
+# Trust domains:
+#   - pilot mode:      Pilot is the only issuer (iss="ciso-pilot") but it
+#     mints ONE TOKEN PER MODULE, each signed with that module's derived
+#     key and scoped to it (aud="ciso-module:<module>"), dropped in that
+#     module's own cookie (see module_cookie_name / path=/<module>/ in
+#     pilot/src/routes/auth.py). SSO is preserved — a single login still
+#     opens every module — without any module holding a suite-wide key.
+#   - standalone/none: the module issues for itself only
+#     (iss="ciso-<module>", aud="ciso-module:<module>"), same derived key.
+#
+# The suite-wide audience "ciso-suite" now exists ONLY for Pilot's own
+# session cookie, which no module accepts.
+# Tokens minted before this change do not verify (different key) —
+# existing sessions must log in again (cookies max out at 24h anyway).
+JWT_ISSUER_PILOT = "ciso-pilot"
+JWT_HKDF_SALT = b"ciso-suite/jwt-key/v1"
+
+
+def _hkdf_sha256(secret: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    """HKDF-SHA256 (RFC 5869 extract-then-expand), stdlib only.
+
+    Kept dependency-free on purpose: this file is copied verbatim into
+    every module image, and key derivation must not hinge on an optional
+    transitive package. Cross-checked against
+    cryptography.hazmat.primitives.kdf.hkdf.HKDF in the test suite.
+    """
+    prk = hmac.new(salt, secret, hashlib.sha256).digest()
+    out = b""
+    block = b""
+    counter = 1
+    while len(out) < length:
+        block = hmac.new(prk, block + info + bytes([counter]), hashlib.sha256).digest()
+        out += block
+        counter += 1
+    return out[:length]
+
+
+def derive_jwt_key(secret: str, info: str) -> bytes:
+    """Signing key for one trust domain. `info` is the token audience."""
+    if not secret:
+        return b""
+    return _hkdf_sha256(secret.encode(), JWT_HKDF_SALT, info.encode())
+
+
+def module_audience(module: str) -> str:
+    """Audience claim of a token addressed to `module`. Also the HKDF info
+    string — the rule is: the signing key is derived with info = audience."""
+    return f"ciso-module:{module or 'module'}"
+
+
+def module_cookie_name(module: str) -> str:
+    """Cookie carrying `module`'s session in pilot mode. Convention shared
+    with Pilot (pilot/src/auth.py) — Pilot sets it, the module reads it.
+    Keep the two in sync or the module 401s on every request."""
+    return f"{module}_token"
+
+
+TOKEN_AUDIENCE = module_audience(MODULE_NAME)
+TOKEN_ISSUER = JWT_ISSUER_PILOT if AUTH_MODE == "pilot" else f"ciso-{MODULE_NAME or 'module'}"
+JWT_KEY = derive_jwt_key(JWT_SECRET, TOKEN_AUDIENCE)
+
+# In pilot mode the cookie is the per-module one Pilot sets (scoped to
+# /<module>/ at the edge); MODULE_COOKIE only names the standalone cookie.
+COOKIE_NAME = module_cookie_name(MODULE_NAME) if AUTH_MODE == "pilot" else MODULE_COOKIE
 
 
 # ── Auth state ───────────────────────────────────────────────────
 
 def auth_enabled() -> bool:
+    """Is any identity actually being verified?
+
+    THE authoritative predicate for the auth posture, and the one to branch
+    on. False means AUTH_MODE=none (dev/test) — every route is served as
+    admin and `get_current_user()` yields `None`. See "THE `None` CONTRACT"
+    at the top of this module: `not auth_enabled()` is the *cause*,
+    `user is None` is only its visible effect. Branch on the cause.
+    """
     if AUTH_MODE == "none":
         return False
     if AUTH_MODE == "standalone":
@@ -73,6 +198,16 @@ def assert_auth_posture() -> None:
             "AUTH_MODE=none to run without authentication (test only). "
             "Refusing to start."
         )
+    if AUTH_MODE == "pilot" and not MODULE_NAME:
+        # Without MODULE_NAME the module cannot know which derived key and
+        # which cookie Pilot minted for it: every request would 401 with no
+        # usable diagnostic. Fail at boot with the real cause instead.
+        raise RuntimeError(
+            "MODULE_NAME is empty but AUTH_MODE is 'pilot'. It selects the "
+            "per-module JWT key and session cookie Pilot issues for this "
+            "module — set it to the module's short name (e.g. 'risk'). "
+            "Refusing to start."
+        )
 
 
 # ── JWT ──────────────────────────────────────────────────────────
@@ -83,13 +218,26 @@ def create_jwt(user_id: str, email: str, role: str, permissions: dict | None = N
         "email": email,
         "role": role,
         "permissions": permissions or {},
+        "iss": TOKEN_ISSUER,
+        "aud": TOKEN_AUDIENCE,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_KEY, algorithm=JWT_ALGORITHM)
 
 
 def decode_jwt(token: str) -> dict:
-    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    # JWT_KEY (not JWT_SECRET) is what enforces the compartmentalization:
+    # a token signed for another module — or with the raw shared secret —
+    # fails signature verification here. The audience/issuer check on top
+    # keeps pilot and standalone tokens from crossing over. Any failure
+    # raises an InvalidTokenError subclass → mapped to 401 by callers.
+    return jwt.decode(
+        token,
+        JWT_KEY,
+        algorithms=[JWT_ALGORITHM],
+        audience=TOKEN_AUDIENCE,
+        issuer=TOKEN_ISSUER,
+    )
 
 
 # ── User sync ────────────────────────────────────────────────────
@@ -183,7 +331,13 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """Standard dependency for business routes — rejects users without
-    a module role with 403."""
+    a module role with 403.
+
+    Returns `None` **only** when `auth_enabled()` is False (AUTH_MODE=none):
+    the caller is admin and there is no identity to attribute anything to.
+    An unauthenticated caller never gets here — this raises 401 first. Do
+    not re-interpret the `None`; see "THE `None` CONTRACT" above.
+    """
     user, module_role = await _resolve_user_from_cookie(request, db)
     if user is not None and not module_role:
         raise HTTPException(status_code=403, detail="No access to this module")
@@ -195,14 +349,44 @@ async def get_current_user_permissive(
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """Permissive dependency for /auth/me and /auth/role — always returns
-    the user regardless of module permissions."""
+    the user regardless of module permissions.
+
+    Same `None` contract as `get_current_user`: `None` = auth disabled,
+    not anonymous.
+    """
     user, _ = await _resolve_user_from_cookie(request, db)
+    return user
+
+
+def require_identity(user: Optional[User]) -> User:
+    """Narrow the sentinel to a real user, or refuse the request explicitly.
+
+    For the few endpoints whose data model is keyed on *who* you are — a
+    NOT NULL `owner_id` / `user_id` foreign key (Watch scopes, per-user
+    alert triage). With auth disabled there is no identity to key the row
+    on and no row can be written, so answer 503 with the actual cause
+    rather than letting `user.id` raise AttributeError -> 500.
+
+    Use this ONLY when an identity is structurally required. For plain
+    ownership stamping prefer `user.id if user else None`, which leaves
+    the object unowned in AUTH_MODE=none — the accepted trade-off.
+    """
+    if user is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "This endpoint records a per-user row and cannot be served "
+                "while authentication is disabled (AUTH_MODE=none)."
+            ),
+        )
     return user
 
 
 # ── Role helpers ─────────────────────────────────────────────────
 
 def get_module_role(user: Optional[User]) -> str:
+    """Module role of `user`, or "admin" when auth is disabled (`user is
+    None`). Safe to call with the sentinel — that is the point."""
     if user is None:
         return "admin"  # no auth = full access
     return getattr(user, "_module_role", "") or "admin"
@@ -245,6 +429,7 @@ def require_min_role(user: Optional[User], min_role: str, hierarchy: list[str]) 
 
 
 def require_admin(user: Optional[User]) -> None:
+    """Admin gate. `user is None` = auth disabled = admin: pass through."""
     if user is None:
         return
     role = get_module_role(user)

@@ -27,6 +27,19 @@ function t(key, params) {
     }
     return s;
 }
+/**
+ * tEsc — HTML-escaped variant of t().
+ *
+ * SECURITY: t() falls back to returning the key verbatim when no translation
+ * exists (useful for debugging missing keys). When the key is built from a
+ * dynamic value (e.g. t("status." + item.status)) and the result is
+ * interpolated into an HTML string, that fallback becomes an XSS sink.
+ * Use tEsc() for every dynamic-key lookup rendered via innerHTML.
+ * Do NOT use it for textContent / alert() sinks (entities would show as text).
+ */
+function tEsc(key, params) {
+    return esc(t(key, params));
+}
 function _initLocale() {
     var stored = localStorage.getItem("ct_lang");
     if (stored && _translations[stored]) {

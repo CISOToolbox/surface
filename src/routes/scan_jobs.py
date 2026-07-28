@@ -78,7 +78,15 @@ async def _run_nmap_job(job_id: uuid.UUID) -> None:
             await db.commit()
             return
         scan_target = locked_ip or job.target
-        args = [nmap_path, "-oX", "-"] + PROFILES.get(job.profile, PROFILES["quick"]) + [scan_target]
+        # `--` terminates option parsing: whatever `scan_target` contains, nmap
+        # treats it as a target and never as a flag. `_resolve_safe_target()`
+        # already rejects a leading '-', this is the second lock on the same
+        # door (argument injection, CMD-01).
+        args = (
+            [nmap_path, "-oX", "-"]
+            + PROFILES.get(job.profile, PROFILES["quick"])
+            + ["--", scan_target]
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(

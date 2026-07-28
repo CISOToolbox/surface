@@ -9,8 +9,16 @@ services:
       - DATABASE_URL=postgresql+asyncpg://surface:${DB_PASSWORD:-ciso2026}@surface-db:5432/surface
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
       - APP_URL=${APP_URL:-http://localhost:8087}
+      # Data-at-rest key for stored connector credentials / tokens (SEC-01).
+      # REQUIRED and DEDICATED: the former silent fallback to JWT_SECRET
+      # coupled the session-forgery and data-at-rest trust domains.
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (openssl rand -hex 32) - see .env.example}
       - AUTH_MODE=standalone
       - MODULE_NAME=surface
+      # Distinct cookie name: several standalone modules run on the same
+      # host (localhost:80xx) and cookies are NOT port-scoped, so a shared
+      # "module_token" name would have them overwrite each other.
+      - MODULE_COOKIE=surface_token
     ports:
       - "8087:8080"
     depends_on:
@@ -23,6 +31,19 @@ services:
     image: postgres:16-alpine
     container_name: ciso-surface-db-standalone
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # CNT-03 — minimal capability set for the official postgres image:
+    # entrypoint chowns PGDATA (CHOWN/FOWNER/DAC_OVERRIDE) then steps down
+    # from root to the postgres user via gosu (SETUID/SETGID).
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     environment:
       - POSTGRES_USER=surface
       - POSTGRES_PASSWORD=${DB_PASSWORD:-ciso2026}

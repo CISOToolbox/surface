@@ -16,6 +16,59 @@
     "use strict";
     var cfg = window.AI_APP_CONFIG || {};
     // ═══════════════════════════════════════════════════════════════════
+    // MANAGED MODE — no LLM credential ever lives in the browser (STO-01)
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // In a suite (managed) deployment the backend owns the provider keys and
+    // proxies every call through api/ai/complete, so the browser has no
+    // reason to hold — or to keep — an API key. Three consequences, all of
+    // them gated on `_aiRuntime.managed`:
+    //   1. keys written by an earlier non-managed run are purged from
+    //      localStorage as soon as the runtime probe answers "managed";
+    //   2. the key setters become no-ops, so no code path can write one back;
+    //   3. the settings drawer never falls back to the key-entry variant
+    //      while the probe is still in flight.
+    //
+    // NOTHING here fires when the probe says managed:false — a standalone
+    // backend deployment keeps its server-side key flow, and the opensource /
+    // pure-frontend builds never load this file at all, so their localStorage
+    // key store (the only one they have) is untouched.
+    /** `<prefix>_ai_apikey` and `<prefix>_ai_secretkey` — the two secret
+     *  entries written by ai_common.js. Provider / model / region / endpoint
+     *  are configuration, not credentials, and are left alone. */
+    var _SECRET_KEY_RE = /_ai_(apikey|secretkey)$/;
+    function _isManaged() {
+        return !!(window._aiRuntime && window._aiRuntime.managed);
+    }
+    /** Delete every stored LLM credential for this origin. The suite serves
+     *  all modules from one origin, so localStorage is shared: sweep every
+     *  prefix, not just this module's. Returns the number of entries removed. */
+    function _purgeStoredKeys() {
+        var doomed = [];
+        try {
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k && _SECRET_KEY_RE.test(k))
+                    doomed.push(k);
+            }
+            doomed.forEach(function (k) { localStorage.removeItem(k); });
+        }
+        catch (e) {
+            return 0; // storage disabled / quota-partitioned — nothing to do
+        }
+        return doomed.length;
+    }
+    /** Purge + discreet one-off notice, only when something was actually
+     *  removed (a clean browser stays silent). */
+    function _purgeLegacyKeys() {
+        if (!_purgeStoredKeys())
+            return;
+        if (typeof showStatus === "function") {
+            showStatus(t("settings.ai_keys_purged")
+                || "Locally stored AI API keys removed — they are managed by the server.");
+        }
+    }
+    // ═══════════════════════════════════════════════════════════════════
     // RUNTIME PROBE
     // ═══════════════════════════════════════════════════════════════════
     window._aiRuntime = { managed: false, can_use: false, provider: "anthropic", model: "", loaded: false };
@@ -30,6 +83,9 @@
             }
             var j = await r.json();
             window._aiRuntime = Object.assign(window._aiRuntime, j, { loaded: true });
+            // First point in the page lifecycle where "managed" is known.
+            if (window._aiRuntime.managed)
+                _purgeLegacyKeys();
         }
         catch (e) {
             window._aiRuntime.loaded = true;
@@ -55,6 +111,21 @@
             return "managed-by-pilot";
         }
         return _origGetApiKey();
+    };
+    // Managed mode never persists a credential in the browser. Kept as a
+    // no-op rather than removed so that any caller (module code, a stale
+    // settings drawer) stays harmless instead of throwing.
+    var _origSetApiKey = window._aiSetApiKey;
+    window._aiSetApiKey = function (key) {
+        if (_isManaged())
+            return;
+        _origSetApiKey(key);
+    };
+    var _origSetSecretKey = window._aiSetSecretKey;
+    window._aiSetSecretKey = function (key) {
+        if (_isManaged())
+            return;
+        _origSetSecretKey(key);
     };
     var _origIsEnabled = window._aiIsEnabled;
     window._aiIsEnabled = function () {
@@ -108,14 +179,25 @@
     // OVERRIDE: openSettings — managed mode shows toggle only
     // ═══════════════════════════════════════════════════════════════════
     var _origOpenSettings = window.openSettings;
+    var _settingsAwaitingProbe = false;
     window.openSettings = function () {
-        if (!(window._aiRuntime && window._aiRuntime.managed)) {
-            return _origOpenSettings();
-        }
-        if (!window._aiRuntime.loaded) {
+        // The runtime probe decides WHICH drawer to show. Until it has
+        // answered we must not fall through to the local one: on a managed
+        // suite that would put the API-key fields back on screen (and let a
+        // user type a key the browser has no business holding). Wait for the
+        // probe once — if it cannot answer (offline, 401), degrade to the
+        // local drawer, which is the correct UI for a non-managed backend.
+        if (window._aiRuntime && !window._aiRuntime.loaded && !_settingsAwaitingProbe) {
+            _settingsAwaitingProbe = true;
             window._aiFetchRuntime().then(function () { window.openSettings(); });
             return;
         }
+        if (!(window._aiRuntime && window._aiRuntime.managed)) {
+            return _origOpenSettings();
+        }
+        // Managed: a legacy key may still be sitting in storage if the probe
+        // ran before this module's prefix was written. Cheap, idempotent.
+        _purgeLegacyKeys();
         // Close the Fichier dropdown if open (never toggle — a toggle would OPEN
         // it when openSettings is re-invoked after a language switch). Mirrors
         // the same guard in ct_settings.ts openSettings.
@@ -180,11 +262,13 @@
     if (typeof _registerTranslations === "function") {
         _registerTranslations("fr", {
             "settings.ai_managed_note": "Le fournisseur, le modèle et la clé API sont configurés de manière centralisée par votre administrateur.",
-            "settings.ai_no_access": "L'accès à l'assistant IA n'a pas été accordé à votre compte. Contactez votre administrateur."
+            "settings.ai_no_access": "L'accès à l'assistant IA n'a pas été accordé à votre compte. Contactez votre administrateur.",
+            "settings.ai_keys_purged": "Clés API IA effacées de ce navigateur : elles sont gérées par le serveur."
         });
         _registerTranslations("en", {
             "settings.ai_managed_note": "Provider, model and API key are managed centrally by your administrator.",
-            "settings.ai_no_access": "AI access has not been granted to your account. Contact your administrator."
+            "settings.ai_no_access": "AI access has not been granted to your account. Contact your administrator.",
+            "settings.ai_keys_purged": "AI API keys cleared from this browser — they are managed by the server."
         });
     }
 })();

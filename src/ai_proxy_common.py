@@ -109,6 +109,21 @@ async def _get_api_key(provider: str, db: AsyncSession) -> str | None:
     return None
 
 
+# An AWS region name is interpolated straight into the Bedrock hostname.
+# Unvalidated, a "region" of `x.attacker.com/` turns
+# https://bedrock-runtime.{region}.amazonaws.com/... into a request to the
+# attacker's host — carrying the SigV4 signature and the AWS access key id.
+_BEDROCK_REGION_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+def _safe_bedrock_region(region: str) -> str:
+    """Return `region` if it is a plausible AWS region name, else 400."""
+    region = (region or "").strip()
+    if not _BEDROCK_REGION_RE.fullmatch(region):
+        raise HTTPException(status_code=400, detail="Invalid Bedrock region configured")
+    return region
+
+
 def _sign_v4(method, url, body, access_key, secret_key, region, service):
     """Minimal AWS Signature V4 -- ported from ai_common.js (_signV4)."""
     from urllib.parse import urlparse
@@ -233,7 +248,8 @@ async def call_llm(db: AsyncSession, system: str, user_msg: str,
                     },
                 )
             elif provider == "bedrock":
-                region = await _get_setting("ai_region_bedrock", db) or "us-east-1"
+                region = _safe_bedrock_region(
+                    await _get_setting("ai_region_bedrock", db) or "us-east-1")
                 secret = await _get_setting("ai_secret_bedrock", db)
                 if not secret:
                     raise HTTPException(status_code=503, detail="Bedrock secret key / region not configured")

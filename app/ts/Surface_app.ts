@@ -496,7 +496,7 @@ function _renderJobs(c: HTMLElement) {
     ["pending", "running", "completed", "partial", "failed"].forEach(function(s) {
         var count = _jobs.filter(function(j) { return j.status === s; }).length;
         if (!count) return;
-        h += '<option value="' + s + '"' + (_jobsFilterStatus === s ? " selected" : "") + '>' + _jobStatusLabel(s) + ' (' + count + ')</option>';
+        h += '<option value="' + s + '"' + (_jobsFilterStatus === s ? " selected" : "") + '>' + esc(_jobStatusLabel(s)) + ' (' + count + ')</option>';
     });
     h += '</select>';
     h += '</div>';
@@ -544,7 +544,7 @@ function _renderJobs(c: HTMLElement) {
         if (j.profile && j.profile !== "scheduled") h += '<div style="font-size:0.7em;color:var(--text-muted);margin-top:2px">profil: ' + esc(j.profile) + '</div>';
         h += '</td>';
         h += '<td>' + sourceBadge + '</td>';
-        h += '<td><span class="job-status job-' + esc(j.status) + '">' + _jobStatusLabel(j.status) + '</span>';
+        h += '<td><span class="job-status job-' + esc(j.status) + '">' + esc(_jobStatusLabel(j.status)) + '</span>';
         if (j.error) h += '<div style="font-size:0.72em;color:var(--ct-critical);margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
         if (j.status === "partial" && j.diff && j.diff.partial) {
             var pp = j.diff.partial;
@@ -782,7 +782,7 @@ function _refreshMonitoredTable() {
         var checkedM = _monitoredBulkSelection[a.id] ? " checked" : "";
         h += '<tr style="' + (disabled ? "opacity:0.5;" : "") + '">';
         h += '<td data-stop><input type="checkbox" class="bulk-check"' + checkedM + ' data-click="_toggleMonBulkOne" data-args=\'' + _da(a.id) + '\' data-stop></td>';
-        h += '<td><span class="kind-badge kind-' + esc(a.kind) + '">' + _kindLabel(a.kind) + '</span></td>';
+        h += '<td><span class="kind-badge kind-' + esc(a.kind) + '">' + esc(_kindLabel(a.kind)) + '</span></td>';
         h += '<td style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(a.value) + '</td>';
         h += '<td style="font-size:0.85em">' + esc(a.label || "-") + '</td>';
         var scs = a.enabled_scanners || [];
@@ -2244,7 +2244,7 @@ function _refreshFindingsBody() {
             { key: "target", label: t("findings.col.target"),
               render: function(f) { return '<span style="font-size:0.82em;color:var(--text-muted);word-break:break-all">' + esc(f.target || "-") + '</span>'; } },
             { key: "status", label: t("findings.col.status"), width: "110px",
-              render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>'; } },
+              render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
             { key: "created_at", label: t("findings.col.datetime"), width: "130px",
               render: function(f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
         ],
@@ -3018,11 +3018,16 @@ function _loadScreenshotsForHostCards() {
     });
 }
 
+// XSS-05: screenshots come from scans of third-party hosts (attacker-influenced
+// content). Only ever emit strict base64 into the data: URI.
+var _B64_RE = /^[A-Za-z0-9+/=]+$/;
+
 function _screenshotB64ForHost(values: string | string[]) {
     if (!_screenshotCache) return null;
     var vs = Array.isArray(values) ? values : [values];
     for (var i = 0; i < vs.length; i++) {
-        if (_screenshotCache[vs[i]!]) return _screenshotCache[vs[i]!];
+        var b64 = _screenshotCache[vs[i]!];
+        if (b64 && _B64_RE.test(b64)) return b64;
     }
     return null;
 }
@@ -3238,7 +3243,7 @@ function _refreshHostCards() {
         var shotValues = [a.value].concat(entry.aliases.map(function(al){ return al.value; }));
         var shotB64 = _screenshotB64ForHost(shotValues);
         if (shotB64) {
-            h += '<div class="host-card-thumb"><img src="data:image/png;base64,' + shotB64 + '" alt="" loading="lazy"/></div>';
+            h += '<div class="host-card-thumb"><img src="data:image/png;base64,' + esc(shotB64) + '" alt="" loading="lazy"/></div>';
         }
         if (isShare) {
             // A file server can host several shares — list every one, not just
@@ -3536,7 +3541,7 @@ function _renderHostDetail(c: HTMLElement) {
                 { key: "title", label: t("findings.col.title"),
                   render: function(f) { return '<span style="font-weight:600">' + esc(f.title || "") + '</span>'; } },
                 { key: "status", label: t("findings.col.status"), width: "110px",
-                  render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + _statusLabel(f.status) + '</span>'; } },
+                  render: function(f) { return '<span class="status-badge status-' + esc(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
                 { key: "created_at", label: t("findings.col.datetime"), width: "130px",
                   render: function(f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
             ],

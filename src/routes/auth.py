@@ -111,10 +111,28 @@ async def get_providers():
     }
 
 
+# Synthetic identity served by /auth/me when AUTH_MODE=none: no user row
+# exists and every route is admin by contract, so the SPA bootstrap must get
+# a 200 with an admin-shaped payload instead of a 401 (AUTH-02b).
+_NO_AUTH_ME = {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "email": "admin@local",
+    "name": "Admin (auth disabled)",
+    "picture": None,
+    "provider": "none",
+    "role": "admin",
+    "ai_enabled": "true",
+    "created_at": None,
+    "last_login": None,
+}
+
+
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user_permissive)):
     if user is None:
-        raise HTTPException(status_code=401, detail="Auth not enabled")
+        # `None` is the "auth disabled" sentinel — a real missing/invalid
+        # token already raised 401 inside the dependency.
+        return JSONResponse(_NO_AUTH_ME)
     return user
 
 
@@ -164,8 +182,8 @@ async def login_entra(request: Request):
     client = AsyncOAuth2Client(client_id=ENTRA_CLIENT_ID, client_secret=ENTRA_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
     uri, state = client.create_authorization_url(ENTRA_AUTH_URL)
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600)
+    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
     return response
 
 
@@ -220,8 +238,8 @@ async def login_google(request: Request):
     client = AsyncOAuth2Client(client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
     uri, state = client.create_authorization_url(GOOGLE_AUTH_URL)
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600)
+    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
     return response
 
 
@@ -264,8 +282,8 @@ async def login_oidc(request: Request):
     client = AsyncOAuth2Client(client_id=OIDC_CLIENT_ID, client_secret=OIDC_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
     uri, state = client.create_authorization_url(endpoints["authorization_endpoint"])
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600)
+    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
     return response
 
 
@@ -389,8 +407,12 @@ def _sanitize_redirect(raw: str | None) -> str:
 
 
 def _cookie_secure() -> bool:
-    """Derive Secure flag from APP_URL to avoid leaking JWT over HTTP."""
-    return APP_URL.startswith("https://")
+    """Secure cookie flag, fail-secure (AUTH-05).
+
+    Default is Secure. The ONLY opt-out is an APP_URL that explicitly
+    declares plain HTTP (local dev behind no TLS). An empty or malformed
+    APP_URL must not silently downgrade the session cookie."""
+    return not APP_URL.startswith("http://")
 
 
 async def _verify_id_token_jwks(id_token: str, jwks_url: str, audience: str, issuer: str | None = None) -> dict:

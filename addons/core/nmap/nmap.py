@@ -42,7 +42,9 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
         # scan can actually finish instead of being killed.
         profile_args = ["-T2" if a == "-T4" else a for a in profile_args]
         timeout *= 4
-    args = [nmap_path, "-oX", "-"] + profile_args + [target]
+    # `--` ends option parsing so the target can never be read as a flag
+    # (argument injection). `_safe_target()` also rejects a leading '-'.
+    args = [nmap_path, "-oX", "-"] + profile_args + ["--", target]
     try:
         proc = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
