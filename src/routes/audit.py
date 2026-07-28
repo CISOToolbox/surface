@@ -1,18 +1,14 @@
 """Audit log viewing endpoint — admin-only."""
 from __future__ import annotations
 
-import uuid
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user, require_admin
-from src.audit import log_action
 from src.database import get_db
-from src.models import AppSettings, AuditLog, User
+from src.models import AuditLog, User
 
 router = APIRouter(prefix="/api/audit-log", tags=["audit"])
 
@@ -65,49 +61,6 @@ async def list_audit_log(
         ],
         "total": total,
     }
-
-
-# ── Audit retention setting ──────────────────────────────────
-
-@router.get("/retention")
-async def get_retention(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    require_admin(user)
-    result = await db.execute(
-        select(AppSettings).where(AppSettings.key == "audit_retention_days")
-    )
-    row = result.scalar_one_or_none()
-    return {"audit_retention_days": int(row.value) if row and row.value.isdigit() else 365}
-
-
-class RetentionBody(BaseModel):
-    days: int
-
-
-@router.put("/retention")
-async def set_retention(
-    body: RetentionBody,
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    require_admin(user)
-    if body.days < 30 or body.days > 3650:
-        raise HTTPException(status_code=400, detail="Retention must be between 30 and 3650 days")
-    result = await db.execute(
-        select(AppSettings).where(AppSettings.key == "audit_retention_days")
-    )
-    row = result.scalar_one_or_none()
-    if row:
-        row.value = str(body.days)
-    else:
-        db.add(AppSettings(key="audit_retention_days", value=str(body.days)))
-    await log_action(db, user, request, "settings.audit_retention",
-                     target=f"{body.days} days")
-    await db.commit()
-    return {"audit_retention_days": body.days}
 
 
 # ── Internal endpoint for Pilot aggregation ──────────────────

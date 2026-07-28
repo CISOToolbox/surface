@@ -188,17 +188,6 @@ interface SurfaceSmtpConfig {
     use_tls?: boolean;
 }
 
-interface SurfaceExecutiveReport {
-    generated_at: string;
-    totals: { active_findings: number; new_last_7d: number; by_severity?: Partial<Record<SurfaceSeverity, number>> };
-    scope: { hosts: number; domains: number; assets_total: number };
-    top_findings?: { severity: string; title: string; target?: string }[];
-    top_hosts?: { value: string; counts?: Partial<Record<SurfaceSeverity, number>> }[];
-    scans: { last_7d: number; success_rate: number; failed: number };
-    measures: { done: number; total: number; burn_down: number };
-    period: { days: number };
-}
-
 interface SurfaceAuthUser {
     email: string;
     name?: string;
@@ -236,7 +225,6 @@ interface SurfaceAPIShape {
     listMeasures(): Promise<SurfaceMeasure[]>;
     updateMeasure(id: string, data: Partial<SurfaceMeasure>): Promise<SurfaceMeasure>;
     deleteMeasure(id: string): Promise<null>;
-    executiveReport(): Promise<SurfaceExecutiveReport>;
     smtpConfig(): Promise<SurfaceSmtpConfig>;
     smtpSetConfig(data: SurfaceSmtpConfig): Promise<unknown>;
     sendEmailDigest(): Promise<{ recipients?: string[] }>;

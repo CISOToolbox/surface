@@ -27,7 +27,8 @@ def scan_iprange_discovery(cidr: str) -> tuple[list[dict[str, Any]], list[str]]:
 
     timing = "-T2" if _is_stealth() else "-T4"
     sweep_timeout = 2400 if _is_stealth() else 600
-    args = [nmap_path, "-oX", "-", "-sn", timing, cidr]
+    # `--` ends option parsing: the CIDR can never be read as a flag.
+    args = [nmap_path, "-oX", "-", "-sn", timing, "--", cidr]
     try:
         proc = subprocess.run(args, capture_output=True, timeout=sweep_timeout)
     except Exception as e:

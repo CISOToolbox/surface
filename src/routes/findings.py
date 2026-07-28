@@ -14,7 +14,7 @@ from src.auth import get_current_user
 from src.database import get_db
 from src.models import Finding, Measure, User
 from src.rate_limit import check_scan_quota
-from src.schemas import FindingCreate, FindingResponse, FindingTriage
+from src.schemas import FindingCreate, FindingTriage
 from src.audit import log_action
 
 router = APIRouter(prefix="/api/findings", tags=["findings"])

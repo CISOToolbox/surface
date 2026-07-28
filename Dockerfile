@@ -7,14 +7,19 @@
 # └──────────────────────────────────────────────────────────────────┘
 
 # ── Stage 1: pip dependencies ────────────────────────────────────
-FROM python:3.12-slim AS builder
+# Base image (DEP-07 / CNT-01): python:3.13-slim pinned by tag **and** by the
+# multi-arch index digest below, so every build resolves to the exact same
+# bits on amd64 and arm64. 3.13 closes the CPython CVEs that had no fix in
+# the 3.12 line. Bump tag and digest together:
+#   skopeo inspect docker://docker.io/library/python:<tag> --format '{{.Digest}}'
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS builder
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Stage 2: hardened runtime ────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
 # Metadata labels (OCI standard)
 LABEL org.opencontainers.image.title="ciso-surface" \

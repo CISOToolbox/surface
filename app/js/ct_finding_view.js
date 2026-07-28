@@ -96,7 +96,7 @@
     function _renderHeader(f, opts) {
         var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
         if (opts.backHandler) {
-            h += '<button class="btn-add btn-icon" data-click="' + esc(opts.backHandler) + '">'
+            h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="' + esc(opts.backHandler) + '">'
                 + _icn("arrow_left", 14) + ' ' + esc(_t("fd.back", "Retour")) + '</button>';
         }
         h += '<h2 style="margin:0;flex:1">' + esc(f.title || "") + '</h2>';
@@ -165,7 +165,7 @@
             }
             h += '<div class="surface-row">'
                 + '<div class="surface-lbl">' + esc(_t("fd.evidence", "Preuves")) + '</div>'
-                + '<div><pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
+                + '<div><pre style="background:var(--ct-surface-2);color:var(--ct-ink);padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
                 + esc(JSON.stringify(evDisplay, null, 2))
                 + '</pre></div></div>';
         }
@@ -236,7 +236,7 @@
                     + '</a>', true);
                 evDisplay = Object.assign({}, ev, { png_b64: "[" + Math.round(ev.png_b64.length * 0.75 / 1024) + " KB PNG — affichée au-dessus]" });
             }
-            row(_t("fd.evidence", "Preuves"), '<pre style="background:#f9fafb;padding:8px;border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
+            row(_t("fd.evidence", "Preuves"), '<pre style="background:var(--ct-surface-2);color:var(--ct-ink);padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
                 + esc(JSON.stringify(evDisplay, null, 2))
                 + '</pre>', true);
         }
@@ -267,21 +267,21 @@
         // to the fields the modal will ask for).
         h += '<textarea id="ct-fv-triage-notes" rows="3"'
             + ' placeholder="' + esc(_t("fd.triage_notes_ph", "Ajouter une note (optionnel)")) + '"'
-            + ' style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:0.85em;margin-bottom:8px">'
+            + ' style="width:100%;padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.85em;margin-bottom:8px;background:var(--ct-surface);color:var(--ct-ink)">'
             + esc(f.triage_notes || "")
             + '</textarea>';
         var triage = opts.triageHandler || "_ctFvNoop";
         h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
         if (f.status !== "to_fix") {
-            h += '<button class="btn-add btn-fix btn-icon" data-click="' + esc(triage) + '" data-args=\'["to_fix"]\'>'
+            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["to_fix"]\'>'
                 + _icn("check", 14) + ' ' + esc(_t("fd.triage_to_fix", "À corriger")) + '</button>';
         }
         if (f.status !== "false_positive") {
-            h += '<button class="btn-add btn-fp btn-icon" data-click="' + esc(triage) + '" data-args=\'["false_positive"]\'>'
+            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["false_positive"]\'>'
                 + _icn("x", 14) + ' ' + esc(_t("fd.triage_fp", "Faux positif")) + '</button>';
         }
         if (f.status !== "fixed" && opts.showFixed !== false) {
-            h += '<button class="btn-add btn-icon" style="background:var(--green,#16a34a);color:white" data-click="' + esc(triage) + '" data-args=\'["fixed"]\'>'
+            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["fixed"]\'>'
                 + _icn("check", 14) + ' ' + esc(_t("fd.triage_fixed", "Corrigé")) + '</button>';
         }
         if (f.status !== "new") {
@@ -294,11 +294,11 @@
         }
         if (opts.deleteHandler) {
             h += '<span style="flex:1"></span>';
-            h += '<button class="btn-add" style="background:#dc2626;color:white" data-click="' + esc(opts.deleteHandler) + '">'
+            h += '<button class="ct-btn" data-variant="danger" data-click="' + esc(opts.deleteHandler) + '">'
                 + esc(_t("fd.delete", "Supprimer")) + '</button>';
         }
         h += '</div>';
-        h += '<div id="ai-triage-result" style="display:none;margin-top:12px;padding:12px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;font-size:0.88em"></div>';
+        h += '<div id="ai-triage-result" style="display:none;margin-top:12px;padding:12px;background:var(--ct-surface-2);color:var(--ct-ink);border:1px solid var(--ct-accent);border-radius:6px;font-size:0.88em"></div>';
         h += '</div>';
         return h;
     }
@@ -395,7 +395,7 @@
                 + '</div>'
                 + '<div class="ct-measure-form">'
                 + '<label>' + esc(_t("tm.fp_justif", "Justification")) + ' *'
-                + '<textarea id="ct-fv-fp-notes" rows="6" placeholder="'
+                + '<textarea class="ct-input" id="ct-fv-fp-notes" rows="6" placeholder="'
                 + esc(_t("tm.fp_justif_ph", "Expliquer pourquoi ce finding est un faux positif"))
                 + '"></textarea>'
                 + '</label>'

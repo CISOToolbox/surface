@@ -168,6 +168,16 @@ IDs to a minimum severity that reflects CISO-grade risk assessment:
 - **Non-blocking SMTP** — `smtplib` wrapped in `asyncio.to_thread`.
 - **CSP-strict** — `script-src 'self'`, no inline, no eval.
 - **Fail-closed auth** — `SURFACE_ALLOW_NO_AUTH=1` is dev-only.
+- **Per-module session key** — `JWT_SECRET` never signs anything directly;
+  the signing key is `HKDF-SHA256(JWT_SECRET, info="ciso-module:surface")`
+  and tokens carry `aud=ciso-module:surface`, so a session minted by another
+  module cannot be replayed here.
+- **Fail-secure session cookie** — `Secure` by default; only plain HTTP when
+  `APP_URL` explicitly starts with `http://`.
+- **Dedicated data-at-rest key** — `ENCRYPTION_KEY` is required and separate
+  from `JWT_SECRET` (no silent fallback coupling the two trust domains).
+- **nmap argument injection blocked** — scanner options are validated against
+  an allow-list before reaching the command line.
 - **Rate limiting** — per-user sliding window on scan endpoints.
 - **Keys stored server-side** — Shodan, SMTP password never returned
   in GET responses.
@@ -204,10 +214,12 @@ This bypasses the fail-closed auth check. **Never use in production.**
 | Var | Required | Default | Description |
 |-----|----------|---------|-------------|
 | `DB_PASSWORD` | yes | — | PostgreSQL password |
-| `JWT_SECRET` | yes | — | JWT signing key — use a long random string |
+| `JWT_SECRET` | yes | — | JWT **root** secret — a long random string. The signing key is derived from it per module with HKDF; the raw value never signs anything |
+| `ENCRYPTION_KEY` | yes | — | Dedicated data-at-rest key for the per-target SMB credentials. No `JWT_SECRET` fallback — compose refuses to start without it |
 | `AUTH_TOKEN` | yes | — | Shared secret for the standalone login endpoint |
-| `APP_URL` | yes | — | Public URL. Cookie `Secure` flag is set when this starts with `https://` |
-| `AUTH_MODE` | no | `standalone` | Keep `standalone` for a local deploy |
+| `APP_URL` | yes | — | Public URL. The session cookie is `Secure` **by default** — plain HTTP only when this explicitly starts with `http://` |
+| `AUTH_MODE` | no | `standalone` | Keep `standalone` for a local deploy. `none` disables auth entirely (dev only) |
+| `MODULE_NAME` | yes | `surface` | Selects the derived session key and the audience claim. Set in `docker-compose.yml` — do not remove |
 | `SURFACE_NUCLEI_RATE_LIMIT` | no | `150` | Nuclei requests/sec cap |
 | `SURFACE_NUCLEI_CONCURRENCY` | no | `50` | Nuclei template concurrency |
 | `SURFACE_DNS_BRUTE_WORDLIST` | no | — | Path to a custom wordlist (must live inside `/data/wordlists/` or `/app/wordlists/`) |

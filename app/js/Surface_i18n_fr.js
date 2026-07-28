@@ -45,7 +45,7 @@ if (typeof _registerTranslations === "function") {
             '<li><strong>DNS brute-force</strong> — 1460+ mots-clés courants (générés via compound permutations) sont résolus en parallèle avec détection wildcard pour filtrer les faux positifs.</li>' +
             '<li><strong>IP range discovery</strong> — nmap ping sweep sur les plages CIDR pour trouver les hôtes réellement actifs.</li>' +
             '<li><strong>Reverse DNS</strong> — extraction des enregistrements PTR sur les IPs découvertes.</li>' +
-            '<li><strong>Typosquatting</strong> — génération de 60 variantes (omission, transposition, voisins QWERTY, TLD alternatifs) pour détecter les domaines lookalike enregistrés par des tiers.</li>' +
+            '<li><strong>Typosquatting</strong> — génération de variantes lookalike (omission, transposition, voisins QWERTY, TLD alternatifs — plafond réglable par domaine, 80 par défaut) avec corrélation optionnelle des CT logs, pour détecter les domaines enregistrés par des tiers.</li>' +
             '</ul>' +
             '<h3>3. Évaluation de la posture</h3>' +
             '<ul>' +
@@ -70,8 +70,33 @@ if (typeof _registerTranslations === "function") {
             '<li><strong>Énumération de buckets cloud (<code>cloud_buckets</code>)</strong> — génère 80 candidats de nom (préfixes <em>static-/cdn-/backup-</em>, suffixes <em>-prod/-staging/-dev/-backup</em>) et probe S3, Azure Blob, GCS, DigitalOcean Spaces. Un 200 sur <code>&lt;ListBucketResult&gt;</code> est flaggé high (contenu listable), un 403 medium (bucket existe).</li>' +
             '</ul>' +
             '<div class="help-tip"><strong>Anti-SSRF :</strong> chacun de ces scanners passe par <code>_resolve_safe_target</code> (blocklist loopback / RFC1918 sensibles / metadata cloud / docker siblings) et re-valide chaque URL secondaire (scripts JS, redirects) avant fetch. Une page HTML hostile ne peut pas détourner <code>js_analysis</code> vers une ressource interne.</div>' +
-            '<h3>6. Triage et plan d\'action</h3>' +
-            '<p>Chaque finding doit être classé en <strong>faux positif</strong> (avec justification obligatoire, conservée pour audit) ou <strong>à corriger</strong>. Un finding <em>à corriger</em> génère automatiquement une <strong>mesure corrective</strong> qui alimente le plan d\'action suivi dans l\'onglet <strong>Mesures</strong>. Un bouton <strong>Triage IA</strong> fait appel au provider LLM configuré localement (Anthropic ou OpenAI) avec un prompt structuré et renvoie : probabilité de faux positif, confiance, recommandation de sévérité, résumé, étapes de remédiation et références. Le triage humain reste souverain — l\'IA propose, vous décidez.</p>' +
+            '<h2>Modèle de sévérité</h2>' +
+            '<p>Chaque finding porte une sévérité sur 5 niveaux, avec l\'échelle de couleurs harmonisée de la suite (teinte / remplissage / aplat identiques dans tous les modules) :</p>' +
+            '<table><thead><tr><th>Niveau</th><th>Signification</th><th>Attente de traitement</th></tr></thead><tbody>' +
+            '<tr><td><strong>Critical</strong></td><td>Exploitable directement (takeover, secret exposé, CVE KEV)</td><td>Traitement immédiat</td></tr>' +
+            '<tr><td><strong>High</strong></td><td>Risque élevé d\'exploitation ou d\'exposition de données</td><td>Sous quelques jours</td></tr>' +
+            '<tr><td><strong>Medium</strong></td><td>Affaiblissement notable de la posture (config faible, service sensible)</td><td>Planifié</td></tr>' +
+            '<tr><td><strong>Low</strong></td><td>Écart mineur aux bonnes pratiques</td><td>Opportuniste</td></tr>' +
+            '<tr><td><strong>Info</strong></td><td>Trace d\'audit (scan propre, découverte, TLS valide)</td><td>Aucune action — jamais compté comme « à traiter »</td></tr>' +
+            '</tbody></table>' +
+            '<p>Les findings <em>info</em> sont exclus des compteurs d\'alerte et du score de risque : ils documentent, ils n\'alertent pas. Le <strong>score de risque par host (0-100)</strong> pondère les findings actifs par sévérité (critical ×10, high ×5, medium ×2, low ×0.5) puis multiplie par la <strong>criticité métier</strong> déclarée sur l\'asset (facteur 1 à 4) : un asset critique remonte avant un asset secondaire à findings égaux.</p>' +
+            '<h2>Cycle de vie d\'un finding</h2>' +
+            '<p>Quatre statuts : <strong>Nouveau</strong> (non triagé), <strong>À corriger</strong> (vrai problème, mesure créée), <strong>Faux positif</strong> (justifié, silencé), <strong>Corrigé</strong>. La déduplication repose sur la clé <code>scanner|type|cible</code> — le même problème logique n\'est jamais dupliqué entre deux scans :</p>' +
+            '<ul>' +
+            '<li><strong>Nouveau</strong> re-détecté → contenu et sévérité rafraîchis, pas de doublon.</li>' +
+            '<li><strong>Faux positif</strong> re-détecté → silencé : jamais ré-émis, la justification reste opposable en audit.</li>' +
+            '<li><strong>À corriger</strong> avec mesure non terminée → silencé (le travail est déjà planifié). Mesure terminée mais problème re-détecté → <strong>réouvert</strong> en Nouveau : la remédiation n\'a pas tenu.</li>' +
+            '<li><strong>Corrigé</strong> re-détecté → réouvert en Nouveau.</li>' +
+            '</ul>' +
+            '<h2>Doctrine de triage</h2>' +
+            '<p>Chaque finding actionnable doit recevoir une décision explicite — c\'est la discipline qui distingue un ASM utile d\'une liste d\'alertes ignorées :</p>' +
+            '<ul>' +
+            '<li><strong>Prioriser par sévérité puis par criticité métier</strong> — traiter d\'abord les critical/high des assets critiques.</li>' +
+            '<li><strong>À corriger</strong> engage : la décision crée une <strong>mesure corrective</strong> (titre, responsable, échéance) qui alimente le plan d\'action. Pas de triage « à corriger » sans mesure.</li>' +
+            '<li><strong>Faux positif</strong> exige une <strong>justification obligatoire</strong>, horodatée et conservée pour audit — un FP non justifié est une dette de traçabilité.</li>' +
+            '<li><strong>Corrigé</strong> est une assertion vérifiable : le scan suivant la contredit en réouvrant le finding si le problème persiste.</li>' +
+            '<li><strong>Triage assisté par IA</strong> : l\'analyse IA fournit un avis structuré (probabilité de faux positif, confiance, sévérité recommandée, remédiation, références) enrichi des données NVD. C\'est une aide à la décision — l\'IA propose, l\'humain décide et reste responsable du statut final.</li>' +
+            '</ul>' +
             '<h2>Philosophie « continuous discovery »</h2>' +
             '<p>L\'ASM n\'est pas un scan ponctuel mais une <strong>surveillance continue</strong>. Surface exécute les scanners via un scheduler qui relance les checks selon une fréquence configurable par asset (par défaut 24 h). Les hosts découverts automatiquement sont enrôlés comme <code>MonitoredAsset</code> et scannés à leur tour — c\'est un effet boule de neige contrôlé par le scope.</p>' +
             '<div class="help-tip"><strong>Scope :</strong> tous les scanners qui découvrent des hostnames filtrent les résultats selon le domaine parent surveillé. Une brute-force DNS sur <code>example.com</code> ne retiendra que <code>*.example.com</code>, pas les domaines externes qui pourraient apparaître dans un CT log.</div>' +
@@ -83,84 +108,99 @@ if (typeof _registerTranslations === "function") {
             '<li><strong>Takeover detection</strong> requiert une empreinte connue — un service SaaS vulnérable non listé dans la base est loupé</li>' +
             '</ul>',
         "help.usage_html": '<h1 class="heading-blue">Utilisation de Surface</h1>' +
-            '<p class="text-muted">Guide des 6 panels principaux — de l\'inventaire au suivi des mesures correctives.</p>' +
+            '<p class="text-muted">Guide des pages du module — Tableau de bord, Surveillance, Hosts, Scans, Findings, Plan d\'action, plus le Journal d\'audit (administrateurs). Les boutons FR/EN et clair/sombre sont dans la barre du haut.</p>' +
             '<h2>Tableau de bord</h2>' +
-            '<p>Vue d\'ensemble agrégée : nombre total de findings, findings non triagés (à traiter), findings en cours de correction, faux positifs, mesures créées et mesures terminées. Sous le compteur global, une répartition par sévérité (critical → info) permet de voir rapidement où se concentrent les problèmes.</p>' +
-            '<div class="help-tip"><strong>À utiliser pour :</strong> la réunion de suivi hebdo avec la direction, le reporting mensuel, ou vérifier en 5 secondes si la situation se dégrade ou s\'améliore.</div>' +
-            '<h2>Surveillance (Monitoring)</h2>' +
-            '<p>Le <strong>périmètre surveillé</strong> — la liste des assets que Surface doit scanner automatiquement. Trois types :</p>' +
+            '<p>Vue d\'ensemble en cartes :</p>' +
             '<ul>' +
-            '<li><strong>Domaine</strong> — un nom de domaine racine (<code>example.com</code>). Les scanners de découverte (CT logs, DNS brute, email security, TLS, takeover, typosquat) s\'appliquent.</li>' +
+            '<li><strong>Bandeau d\'alerte</strong> — compteurs Critical / High non triagés et « Nouveaux (24 h) ». Chaque tuile est cliquable et ouvre Findings pré-filtré.</li>' +
+            '<li><strong>Hosts les plus exposés</strong> et <strong>Top hosts à risque</strong> — cliquer un host filtre Findings sur sa cible.</li>' +
+            '<li><strong>Évolution sur 30 jours</strong> — une courbe par sévérité (cumul des findings existants) plus la courbe pointillée des triages cumulés.</li>' +
+            '<li><strong>Types de findings récurrents</strong> et <strong>Scanners les plus bruyants</strong>.</li>' +
+            '<li><strong>Inventaire surveillance</strong> — répartition par type d\'asset et hosts auto vs manuels.</li>' +
+            '<li><strong>Plan d\'action</strong> — barre d\'avancement À faire / En cours / Terminé, delta 7 jours, mesures en retard.</li>' +
+            '<li><strong>Santé du scanner</strong> — jobs 24 h, taux de succès, échecs, scans en cours, prochain scan planifié.</li>' +
+            '</ul>' +
+            '<p>Boutons d\'en-tête : <strong>Scanner tout</strong>, <strong>Ajouter une cible</strong>, <strong>Importer JSON</strong>.</p>' +
+            '<div class="help-tip"><strong>À utiliser pour :</strong> la réunion de suivi hebdo, le reporting, ou vérifier en 5 secondes si la situation se dégrade ou s\'améliore.</div>' +
+            '<h2>Surveillance</h2>' +
+            '<p>Le <strong>périmètre surveillé</strong> — la liste des cibles que Surface scanne automatiquement. Trois types de base :</p>' +
+            '<ul>' +
+            '<li><strong>Domaine</strong> — un nom de domaine racine (<code>example.com</code>). Les scanners de découverte (CT logs, DNS brute, email security, TLS, takeover, typosquatting) s\'appliquent.</li>' +
             '<li><strong>Host</strong> — un host unique (<code>api.example.com</code> ou <code>1.2.3.4</code>). Les scanners d\'évaluation (nmap, TLS, nuclei, takeover) s\'appliquent.</li>' +
             '<li><strong>Plage CIDR</strong> — une plage d\'IPs (<code>192.168.1.0/24</code>). Un ping sweep identifie les IPs actives puis enrôle chaque host découvert.</li>' +
             '</ul>' +
-            '<p>Pour chaque asset, vous pouvez configurer :</p>' +
+            '<p>Des add-ons peuvent ajouter d\'autres types (ex. partage de fichiers SMB) — leur documentation apparaît dans cette aide quand ils sont installés. La modale <strong>Ajouter / Modifier une cible</strong> permet de configurer :</p>' +
             '<ul>' +
-            '<li>La <strong>fréquence de scan automatique</strong> (1 h, 6 h, 24 h, 7 j, 30 j, ou manuel)</li>' +
-            '<li>Les <strong>scanners actifs</strong> — tous les cocher ou seulement un sous-ensemble pour personnaliser</li>' +
-            '<li>Un <strong>libellé</strong> et des <strong>notes</strong> internes</li>' +
-            '<li>Un <strong>toggle actif / inactif</strong> pour désactiver temporairement sans supprimer</li>' +
+            '<li>La <strong>fréquence de scan automatique</strong> (1 h, 6 h, 24 h, 7 j, 30 j, ou 0 = manuel uniquement)</li>' +
+            '<li>Les <strong>scanners actifs</strong> — la liste proposée dépend du type de cible ; cochez tout ou un sous-ensemble</li>' +
+            '<li>La <strong>criticité métier</strong> (Low / Medium / High / Critical) — elle pondère le score de risque</li>' +
+            '<li>Des <strong>tags</strong>, un <strong>libellé</strong> et des <strong>notes</strong> internes</li>' +
+            '<li><strong>Auto-enrôler les sous-domaines découverts</strong> — les découvertes deviennent elles-mêmes des cibles surveillées</li>' +
+            '<li>Le <strong>mode discret (anti-WAF)</strong> — scans moins agressifs</li>' +
+            '<li>Un <strong>toggle actif / inactif</strong> pour suspendre sans supprimer</li>' +
             '</ul>' +
+            '<p>La page offre une <strong>recherche libre</strong>, des <strong>pastilles de filtre par type de scan</strong>, et des cases à cocher pour les actions groupées : <strong>Forcer un scan</strong>, <strong>Appliquer des scans</strong> (même jeu de scanners sur N cibles ; pour un domaine unique, la boîte expose aussi les réglages typosquatting), <strong>Supprimer</strong>. Chaque ligne a ses boutons scan / éditer / supprimer, et affiche le dernier et le prochain scan planifié.</p>' +
             '<h2>Hosts</h2>' +
-            '<p>La vue « cartes » des hosts surveillés (manuels ou auto-découverts). Chaque carte affiche :</p>' +
+            '<p>La vue « cartes » des hosts surveillés (manuels ou auto-découverts). Les hostnames résolvant vers la même IP sont <strong>regroupés sur une seule carte</strong> (alias cliquables). Chaque carte affiche :</p>' +
             '<ul>' +
-            '<li>Le hostname / IP en monospace</li>' +
-            '<li>Un badge <strong>auto</strong> (découvert) ou <strong>manuel</strong> (ajouté à la main)</li>' +
-            '<li>La date du dernier scan</li>' +
-            '<li>Les <strong>compteurs par sévérité</strong> des findings actifs (new + to_fix)</li>' +
-            '<li>L\'indicateur « N à traiter » en rouge</li>' +
+            '<li>Le hostname / IP, l\'IP résolue et les éventuels alias</li>' +
+            '<li>Le <strong>score de risque (0-100)</strong> coloré par palier</li>' +
+            '<li>Des badges <strong>auto</strong> / <strong>manuel</strong> / <strong>désactivé</strong> / <strong>partage</strong>, la criticité métier et les tags</li>' +
+            '<li>Une <strong>miniature de capture d\'écran</strong> du service web quand elle existe</li>' +
+            '<li>La date du dernier scan, les <strong>compteurs par sévérité</strong> des findings actifs et l\'indicateur « N à traiter »</li>' +
+            '<li>Un pied de carte avec le nombre de scanners actifs et un bouton <strong>Configurer</strong> (choix rapide des scanners)</li>' +
             '</ul>' +
-            '<p>Le champ de recherche filtre par hostname, libellé, notes ou source. Cliquer sur une carte ouvre la vue <strong>détail du host</strong> avec toutes les infos, les boutons d\'action (Scanner maintenant, Modifier, Supprimer) et le tableau des findings associés — où vous pouvez triager en unitaire ou en groupe (bulk) depuis cet écran.</p>' +
-            '<h2>Scans (Jobs)</h2>' +
-            '<p>Historique des jobs d\'exécution — chaque tick du scheduler et chaque scan manuel crée un job. Le tableau montre la cible, le type de scanner, la source (AUTO vs MANUEL), le statut (en attente / en cours / terminé / échoué), le nombre de findings créés et la durée. Les filtres par type et statut permettent d\'isoler les scans récents ou les échecs.</p>' +
-            '<div class="help-tip"><strong>Utile pour :</strong> diagnostiquer pourquoi un scan n\'a rien trouvé (échec silencieux ? timeout ?), vérifier que le scheduler tourne bien, ou lancer un scan ponctuel sur une cible non surveillée.</div>' +
+            '<p>Le champ de recherche filtre par hostname, libellé ou notes. Cliquer sur une carte ouvre la vue <strong>détail du host</strong> : fiche complète, boutons <strong>Scanner maintenant</strong> / <strong>Modifier</strong> / <strong>Supprimer</strong>, <strong>historique des scans</strong> (8 derniers jobs avec le différentiel +N nouveaux / ↻N réouverts), tuiles de synthèse par sévérité, case « Masquer les N faux positifs », et le tableau des findings associés — triables en unitaire ou en groupe exactement comme dans la page Findings. Pour un serveur de fichiers, la fiche liste tous ses partages avec leurs actions propres.</p>' +
+            '<h2>Scans</h2>' +
+            '<p>Historique des jobs — chaque tick du scheduler et chaque scan manuel crée un job. Le tableau montre la cible, le type de scanner, la source (AUTO vs MANUEL), le statut (<strong>En attente / En cours / Terminé / Partiel / Échoué</strong>), le nombre de findings avec le différentiel (+N nouveaux, ↻N réouverts), la date de lancement et la durée. Filtres par type de scanner et par statut. Chaque job terminé peut être <strong>relancé</strong> (bouton ↻) ou supprimé. La page se <strong>rafraîchit automatiquement</strong> tant qu\'un job tourne.</p>' +
+            '<div class="help-tip"><strong>Utile pour :</strong> diagnostiquer pourquoi un scan n\'a rien trouvé (échec silencieux ? timeout ?), vérifier que le scheduler tourne bien, ou relancer un scan qui a échoué.</div>' +
             '<h2>Findings</h2>' +
             '<p>Le cœur du triage. Tous les findings remontés par les scanners atterrissent ici avec les filtres :</p>' +
             '<ul>' +
-            '<li><strong>Recherche texte</strong> (titre, cible, description, scanner)</li>' +
-            '<li><strong>Statut</strong> : À traiter / À corriger / Faux positifs / Corrigés / Tous</li>' +
-            '<li><strong>Sévérité</strong> : critical, high, medium, low, info (multi-select)</li>' +
-            '<li><strong>Type de scan</strong> : par scanner qui a émis le finding (multi-select)</li>' +
+            '<li><strong>Recherche texte</strong> (titre, cible, description, scanner, type)</li>' +
+            '<li><strong>Statut</strong> : Ouverts (= Nouveau + À corriger, filtre par défaut) / Nouveau / À corriger / Faux positif / Corrigé / Tous</li>' +
+            '<li><strong>Sévérité</strong> : Critical, High, Medium, Low, Info (multi-sélection)</li>' +
+            '<li><strong>Type de scan</strong> : par scanner qui a émis le finding (multi-sélection)</li>' +
             '</ul>' +
             '<h3>Triage unitaire</h3>' +
-            '<p>Chaque ligne a deux boutons rapides : <strong>À corriger</strong> et <strong>Faux positif</strong>. Cliquer ouvre une modale demandant :</p>' +
+            '<p>Chaque ligne offre deux boutons rapides : <strong>À corriger</strong> et <strong>Faux positif</strong>. Cliquer sur la ligne ouvre la <strong>vue détail</strong> (description, evidence, capture d\'écran éventuelle, mesure liée) avec les boutons <strong>À corriger</strong>, <strong>Faux positif</strong>, <strong>Corrigé</strong>, <strong>Réinitialiser</strong> (retour à Nouveau), <strong>Analyse IA</strong> et <strong>Supprimer</strong>. La modale de triage demande :</p>' +
             '<ul>' +
-            '<li><strong>Pour « à corriger »</strong> : un nom de mesure, une description de remédiation, un responsable (optionnel), une échéance (optionnel). La mesure est créée et apparaît dans l\'onglet Mesures.</li>' +
-            '<li><strong>Pour « faux positif »</strong> : une justification <strong>obligatoire</strong>, conservée pour audit. Le finding ne sera plus ré-émis lors des scans suivants (même ID = silenced au lieu de refresh).</li>' +
+            '<li><strong>À corriger</strong> : un nom de mesure, une description de remédiation, un responsable (annuaire, optionnel), une échéance (optionnel). La mesure est créée et apparaît dans le Plan d\'action.</li>' +
+            '<li><strong>Faux positif</strong> : une justification <strong>obligatoire</strong>, conservée pour audit. Le finding est silencé et ne sera plus ré-émis par les scans suivants.</li>' +
+            '<li><strong>Corrigé</strong> : simple confirmation — le finding réapparaîtra s\'il est re-détecté au prochain scan.</li>' +
             '</ul>' +
             '<h3>Triage groupé (bulk)</h3>' +
             '<p>Cocher une ou plusieurs lignes via la case à gauche fait apparaître une <strong>barre d\'action en bas de page</strong>. Vous pouvez :</p>' +
             '<ul>' +
-            '<li>Déclarer <strong>N findings en faux positif</strong> avec la même justification</li>' +
-            '<li>Créer une <strong>mesure corrective groupée</strong> — une mesure par finding, toutes avec le même titre / description / responsable / échéance (utile pour « upgrader nginx sur 30 hosts »)</li>' +
-            '<li><strong>Supprimer définitivement</strong> N findings (cascade delete des mesures liées)</li>' +
+            '<li><strong>Créer une mesure corrective</strong> — UNE seule mesure, liée aux N findings sélectionnés (utile pour « upgrader nginx sur 30 hosts »)</li>' +
+            '<li>Marquer <strong>N findings Corrigé</strong> après confirmation</li>' +
+            '<li>Déclarer <strong>N findings Faux positif</strong> avec la même justification</li>' +
+            '<li><strong>Supprimer définitivement</strong> N findings (irréversible)</li>' +
             '</ul>' +
-            '<h3>Import JSON</h3>' +
-            '<p>Le bouton « Importer JSON » permet de pousser des findings produits par des scanners externes (nmap manuel, Shodan, Burp, Trivy, SBOM, pentest...). Format attendu : tableau d\'objets <code>{scanner, type, severity, title, description, target, evidence}</code>. La dedup logic standard s\'applique.</p>' +
-            '<h2>Mesures</h2>' +
-            '<p>Les mesures correctives créées depuis les findings à corriger. Chaque mesure a un ID court (<code>SRF-XXXXXXXX</code>), un titre, un statut (À faire / En cours / Terminé), un responsable, une échéance. Éditable en place. Les mesures constituent le plan d\'action local — leur statut et leurs champs sont persistés dans Surface.</p>' +
-            '<h2>Rapport exécutif</h2>' +
-            '<p>Bouton <strong>Rapport exécutif</strong> dans la barre d\'outils — ouvre un nouvel onglet avec une page imprimable prête pour un export PDF via le navigateur (Cmd/Ctrl+P → « Enregistrer au format PDF »). Zéro dépendance serveur, aucune librairie PDF Python — tout est rendu côté client à partir de l\'endpoint <code>/api/reports/executive</code> qui agrège : totaux par sévérité, nouveaux 7 j / 30 j, top 10 findings actifs, top 10 hosts exposés, santé scheduler (succès / échecs 7 j), burn-down mesures. L\'agrégation est faite côté SQL (GROUP BY + LIMIT) donc elle reste performante même sur une base de plusieurs dizaines de milliers de findings.</p>' +
-            '<div class="help-tip"><strong>À utiliser pour :</strong> envoyer un état mensuel à la direction, alimenter un comité sécurité, archiver un snapshot de la posture avant et après une opération de remédiation.</div>' +
+            '<h3>Lancer un scan / Import JSON</h3>' +
+            '<p>Le bouton <strong>Lancer un scan</strong> déclenche un scan rapide ports + TLS sur un host saisi à la volée, même hors périmètre surveillé. Le bouton <strong>Importer JSON</strong> ouvre une modale complète : spécification du format inline, gabarit téléchargeable / copiable, import par fichier ou copier-coller, et validation avant envoi. Format attendu : tableau d\'objets <code>{scanner, type, severity, title, description, target, evidence}</code> (seul <code>title</code> est obligatoire). La déduplication standard s\'applique.</p>' +
+            '<h2>Plan d\'action</h2>' +
+            '<p>Les mesures correctives créées depuis les findings « à corriger ». Chaque mesure a un ID court (<code>SRF-XXXXXXXX</code>), un titre, le nombre de findings couverts, un statut (À faire / En cours / Terminé), un responsable, une échéance (mise en évidence si dépassée). Cliquer sur une ligne ouvre la modale d\'édition, avec un <strong>journal de suivi</strong> pour horodater l\'avancement. Les cases à cocher permettent de marquer <strong>Terminé</strong> ou de <strong>Supprimer</strong> en masse.</p>' +
             '<h2>Digest hebdomadaire par email</h2>' +
             '<p>Une fois SMTP configuré (voir Paramètres), Surface envoie <strong>automatiquement</strong> un digest HTML chaque semaine : résumé des compteurs, top 10 findings à traiter, top 10 hosts exposés, statistiques scans et mesures. Le scheduler vérifie toutes les heures si 7 jours se sont écoulés depuis le dernier envoi (<code>digest.last_sent_at</code> en base). Un bouton <strong>Envoyer maintenant</strong> dans la section SMTP permet d\'envoyer un digest ad-hoc (manuel) sans attendre le prochain tick hebdomadaire.</p>' +
             '<div class="help-tip"><strong>Sécurité :</strong> le host SMTP est validé par la même blocklist anti-SSRF que les scanners (pas de <code>localhost</code>, pas de <code>surface-db</code>). Les adresses sender / recipients sont filtrées contre l\'injection d\'en-têtes (CRLF). Le mot de passe SMTP est stocké en base côté serveur et n\'est jamais renvoyé dans les réponses GET.</div>' +
-            '<h2>Triage IA</h2>' +
-            '<p>Sur chaque finding, un bouton <strong>Triage IA</strong> (icône éclair) envoie le contexte au provider LLM configuré dans <em>Paramètres → Assistant IA</em>. Le prompt système est structuré pour obtenir un JSON :</p>' +
+            '<h2>Analyse IA</h2>' +
+            '<p>Dans la vue détail d\'un finding, le bouton <strong>Analyse IA</strong> (icône éclair) envoie le finding au backend, qui construit le prompt méthodologique, l\'enrichit avec les données NVD et interroge le provider LLM configuré. Le résultat s\'affiche sous le finding :</p>' +
             '<ul>' +
-            '<li><code>is_probable_false_positive</code> — booléen</li>' +
-            '<li><code>confidence</code> — niveau de confiance de l\'IA</li>' +
-            '<li><code>severity_recommendation</code> — sévérité suggérée si elle diverge</li>' +
-            '<li><code>summary</code> — résumé exécutif en 2-3 lignes</li>' +
-            '<li><code>remediation[]</code> — étapes de correction</li>' +
-            '<li><code>references[]</code> — URLs de référence (CVE, CWE, docs vendor)</li>' +
+            '<li><strong>Verdict</strong> — faux positif probable ou finding crédible, avec le niveau de confiance</li>' +
+            '<li><strong>Sévérité recommandée</strong> si elle diverge de celle du scanner</li>' +
+            '<li><strong>Résumé</strong> exécutif en 2-3 lignes</li>' +
+            '<li><strong>Remédiation</strong> — étapes de correction</li>' +
+            '<li><strong>Références</strong> — URLs (CVE, CWE, docs vendor)</li>' +
             '</ul>' +
-            '<p>L\'appel part directement du navigateur vers Anthropic/OpenAI — la clé API ne transite jamais par le backend Surface. La décision finale reste manuelle : l\'IA ne clique pas sur « Faux positif » ou « À corriger » à votre place.</p>' +
+            '<p>Le bouton n\'apparaît que si l\'assistant IA est activé dans <em>Paramètres → Assistant IA</em>. La décision finale reste manuelle : l\'IA ne clique pas sur « Faux positif » ou « À corriger » à votre place.</p>' +
+            '<h2>Journal d\'audit (administrateurs)</h2>' +
+            '<p>Réservé aux administrateurs, ce panneau trace qui a fait quoi (date, utilisateur, action, cible, détails, IP) avec une recherche libre — utile pour la conformité et les post-mortems.</p>' +
             '<h2>Paramètres (roue crantée en haut) — 6 sections accordéon</h2>' +
             '<p>La page <strong>Paramètres</strong> utilise un accordéon natif HTML : ouvrir une section referme automatiquement la précédente. Toutes les sections sont repliées par défaut.</p>' +
             '<ol>' +
             '<li><strong>Langue</strong> — bascule FR/EN instantanée de toute l\'interface</li>' +
-            '<li><strong>Assistant IA</strong> — provider (Anthropic / OpenAI / custom), modèle et clé API (localStorage navigateur, jamais envoyée au backend)</li>' +
+            '<li><strong>Assistant IA</strong> — activation de l\'analyse IA ; selon le déploiement, l\'accès est géré par la suite (proxy backend) ou configuré avec votre propre provider / clé</li>' +
             '<li><strong>Fuseau horaire</strong> — picker de 30 zones IANA. La valeur par défaut suit le fuseau détecté par le navigateur. Toutes les dates (findings, scans, mesures) sont affichées dans le fuseau choisi.</li>' +
             '<li><strong>Nuclei</strong> — version, nombre de templates, date de mise à jour, <strong>tuning éditable</strong> (rate-limit, concurrency, bulk-size, timeout, retries). Bouton « Mettre à jour les templates ».</li>' +
             '<li><strong>Shodan API</strong> — clé API stockée côté backend (masquée à l\'affichage). Active les scanners <code>shodan_domain</code> et <code>shodan_host</code>.</li>' +
@@ -172,19 +212,16 @@ if (typeof _registerTranslations === "function") {
             '<li>Ajouter le domaine racine dans <strong>Surveillance</strong> avec tous les scanners cochés</li>' +
             '<li>Attendre le premier tick du scheduler ou lancer un scan manuel → les sous-domaines sont découverts et enrôlés comme hosts</li>' +
             '<li>Les hosts auto-découverts sont scannés aux ticks suivants (nmap, TLS, nuclei, takeover)</li>' +
-            '<li>Consulter <strong>Findings</strong> filtré sur « À traiter » → triage des findings critical / high en priorité</li>' +
-            '<li>Les faux positifs sont documentés et silenced, les vrais problèmes deviennent des mesures</li>' +
-            '<li>Les mesures s\'ajoutent au plan d\'action, suivi avec le responsable assigné dans l\'onglet <strong>Mesures</strong></li>' +
+            '<li>Consulter <strong>Findings</strong> filtré sur « Ouverts » → triage des findings critical / high en priorité</li>' +
+            '<li>Les faux positifs sont documentés et silencés, les vrais problèmes deviennent des mesures</li>' +
+            '<li>Les mesures sont suivies avec leur responsable et leur échéance dans l\'onglet <strong>Plan d\'action</strong></li>' +
             '<li>Les scans continuent en tâche de fond → nouveaux findings remontent automatiquement</li>' +
             '</ol>',
         // ── Dashboard ──────────────────────────────────────
         "dash.title": "Tableau de bord",
         "dash.findings_total": "Findings totaux",
-        "dash.not_triaged": "Non triagés",
-        "dash.to_fix": "À corriger",
         "dash.false_positive": "Faux positifs",
         "dash.measures_done": "Mesures terminées",
-        "dash.empty": "Aucun finding pour l'instant. Importez des résultats de surface ou ajoutez-en manuellement depuis l'onglet Findings.",
         "dash.headline_critical": "{n} finding(s) critiques à traiter — attention immédiate requise",
         "dash.headline_high": "{n} finding(s) haute sévérité à traiter",
         "dash.headline_ok": "Situation sous contrôle — aucun finding critique ou haut non triagé",
@@ -337,7 +374,6 @@ if (typeof _registerTranslations === "function") {
         "bulk.false_positive": "Faux positif",
         "bulk.to_fix": "Créer une mesure corrective",
         "bulk.fixed": "Corrigé",
-        "bulk.choose_action": "Choisir une action",
         "bulk.fixed_confirm": "{n} finding(s) seront marqué(s) comme corrigé(s). Ils réapparaîtront si détectés au prochain scan.",
         "bulk.delete": "Supprimer",
         "bulk.clear": "Désélectionner",
@@ -349,13 +385,6 @@ if (typeof _registerTranslations === "function") {
         "bulk.measure_title": "Créer une mesure corrective couvrant {n} finding(s)",
         "bulk.measure_help": "UNE seule mesure corrective sera créée et liée aux {n} findings sélectionnés.",
         "bulk.measure_confirm": "Créer la mesure",
-        "bulk.measure_name": "Nom de la mesure *",
-        "bulk.measure_name_ph": "Ex: Mettre à jour nginx sur tous les hosts exposés",
-        "bulk.measure_desc": "Description / plan de remédiation",
-        "bulk.measure_desc_ph": "Plan de remédiation commun aux findings sélectionnés...",
-        "bulk.measure_resp": "Responsable (optionnel)",
-        "bulk.measure_resp_ph": "Email ou nom",
-        "bulk.measure_due": "Échéance (optionnel)",
         "bulk.delete_confirm": "Supprimer définitivement {n} finding(s) ? Les mesures liées seront également supprimées (cascade).",
         // ── Common actions ─────────────────────────────────
         "action.cancel": "Annuler",
@@ -478,9 +507,6 @@ if (typeof _registerTranslations === "function") {
         "hosts.resolved_ip_tooltip": "IP résolue au dernier scan — les hostnames avec la même IP sont regroupés",
         "host.col.resolved_ip": "IP résolue",
         "host.col.aliases": "Autres hostnames",
-        "report.exec_button": "Rapport exécutif",
-        "report.exec_tooltip": "Rapport PDF imprimable avec KPI, top findings et hosts exposés",
-        "report.popup_blocked": "Pop-up bloquée — autorisez les pop-ups pour voir le rapport",
         "fd.ai_triage": "Analyse IA",
         "fd.ai_not_configured": "Assistant IA non configuré",
         "fd.ai_open_settings": "Ouvrez Paramètres → Assistant IA pour activer la clé API.",
@@ -493,7 +519,7 @@ if (typeof _registerTranslations === "function") {
         "fd.ai_remediation": "Remédiation",
         "fd.ai_refs": "Références",
         "smtp.section": "Envoi email (digest hebdo)",
-        "smtp.help": "Configure le serveur SMTP pour l'envoi automatique du digest hebdomadaire et du rapport exécutif par email.",
+        "smtp.help": "Configure le serveur SMTP pour l'envoi automatique du digest hebdomadaire par email.",
         "smtp.host": "Serveur",
         "smtp.port": "Port",
         "smtp.user": "Login",
@@ -537,15 +563,14 @@ if (typeof _registerTranslations === "function") {
         "fd.triaged": "Triage",
         "fd.triaged_by": "par",
         "fd.description": "Description",
-        "fd.description_none": "(aucune)",
         "fd.evidence": "Evidence",
         "fd.screenshot": "Capture d'écran",
-        "fd.screenshot_open": "Ouvrir en grand",
         "fd.notes": "Notes",
         "fd.triage": "Triage",
         "fd.triage_notes_ph": "Notes (optionnel)...",
         "fd.triage_to_fix": "À corriger (cree une mesure)",
         "fd.triage_fp": "Faux positif",
+        "fd.triage_fixed": "Corrigé",
         "fd.triage_reset": "Reset (non trié)",
         "fd.delete": "Supprimer",
         "fd.delete_confirm": "Supprimer ce finding ?",
@@ -554,8 +579,6 @@ if (typeof _registerTranslations === "function") {
         "fd.measure_status": "Statut",
         "fd.measure_owner": "Responsable",
         "fd.measure_due": "Échéance",
-        "fd.fp_justif_required": "La justification est obligatoire pour un faux positif",
-        "fd.measure_title_prompt": "Nom de la mesure corrective :",
         "fd.triage_ok": "Triage enregistré",
         // ── Triage modal (single) ─────────────────────────
         "tm.title_to_fix": "Créer une mesure corrective",
@@ -563,19 +586,10 @@ if (typeof _registerTranslations === "function") {
         "tm.title_reset": "Réinitialiser le triage",
         "tm.confirm_to_fix": "Créer la mesure",
         "tm.confirm_fp": "Confirmer le faux positif",
-        "tm.confirm_reset": "Réinitialiser",
         "tm.finding": "Finding :",
-        "tm.measure_name": "Nom de la mesure *",
-        "tm.measure_name_help": "Ce nom apparaitra dans le plan d'action (onglet Mesures).",
-        "tm.measure_desc": "Description / plan de remédiation",
-        "tm.measure_owner": "Responsable (optionnel)",
-        "tm.measure_owner_ph": "Email ou nom",
-        "tm.measure_due": "Échéance (optionnel)",
         "tm.fp_justif": "Justification *",
         "tm.fp_justif_ph": "Expliquer pourquoi ce finding est un faux positif (contexte, exception documentee, configuration intentionnelle...)",
-        "tm.fp_justif_help": "Cette justification est obligatoire et reste attachée au finding pour audit. Le finding ne sera plus ré-émis lors des prochains scans.",
         "tm.reset_help": "Réinitialiser le statut de ce finding à \"Nouveau\" ? La mesure associée (si elle existe) sera supprimée.",
-        "tm.name_required": "Le nom de la mesure est obligatoire",
         "tm.justif_required": "La justification est obligatoire",
         // ── Measures panel ────────────────────────────────
         "measures.title": "Plan d'action",

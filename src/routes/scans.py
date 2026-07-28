@@ -22,7 +22,6 @@ from src.database import get_db
 from src.findings_dedup import insert_many
 from src.models import User
 from src.rate_limit import check_scan_quota
-from src.audit import log_action
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -95,7 +94,6 @@ def _check_tls_no_verify(host: str, port: int = 443, connect_ip: str | None = No
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 der = ssock.getpeercert(binary_form=True)
                 # Parse minimal info from binary cert
-                import datetime as _dt
                 # Use ssl helper — load PEM-decoded OpenSSL cert
                 from cryptography import x509
                 from cryptography.hazmat.backends import default_backend
@@ -404,7 +402,7 @@ async def nuclei_config_update(
     """Persist nuclei tuning to AppSettings and refresh the in-memory cache."""
     from sqlalchemy import select
     from src.models import AppSettings
-    from src.scanners import _NUCLEI_TUNING_KEYS, set_nuclei_tuning_cache
+    from src.scanners import set_nuclei_tuning_cache
 
     payload = body.model_dump(exclude_none=True)
     if not payload:

@@ -37,7 +37,6 @@ from src.database import get_db
 from src.mailer_common import smtp_deliver
 from src.models import AppSettings, Finding, Measure, MonitoredAsset, ScanJob, User
 from src.scanners import _resolve_safe_target
-from src.audit import log_action
 
 logger = logging.getLogger("surface.reports")
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -232,15 +231,6 @@ async def _aggregate_report(db: AsyncSession) -> dict[str, Any]:
             "burn_down": round(measures_done / measures_total * 100) if measures_total else 0,
         },
     }
-
-
-@router.get("/executive")
-async def executive_report(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Aggregated data the frontend uses to render the executive PDF."""
-    return await _aggregate_report(db)
 
 
 # ═══════════════════════════════════════════════════════════════

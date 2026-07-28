@@ -17,7 +17,7 @@ import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import get_current_user
 from src.database import async_session, get_db
 from src.findings_dedup import diff_summary, insert_many
-from src.models import Finding, ScanJob, User
+from src.models import ScanJob, User
 from src.rate_limit import check_scan_quota
 from src.scanners import _parse_nmap_xml, _resolve_safe_target
 from src.audit import log_action
@@ -78,7 +78,15 @@ async def _run_nmap_job(job_id: uuid.UUID) -> None:
             await db.commit()
             return
         scan_target = locked_ip or job.target
-        args = [nmap_path, "-oX", "-"] + PROFILES.get(job.profile, PROFILES["quick"]) + [scan_target]
+        # `--` terminates option parsing: whatever `scan_target` contains, nmap
+        # treats it as a target and never as a flag. `_resolve_safe_target()`
+        # already rejects a leading '-', this is the second lock on the same
+        # door (argument injection, CMD-01).
+        args = (
+            [nmap_path, "-oX", "-"]
+            + PROFILES.get(job.profile, PROFILES["quick"])
+            + ["--", scan_target]
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(

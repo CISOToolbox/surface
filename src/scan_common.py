@@ -46,17 +46,20 @@ _DOCKER_SIBLING_NAMES: frozenset[str] = frozenset({
     "compliance-app", "compliance-db",
     "asset-app", "asset-db",
     "access-app", "access-db",
+    "appsec-app", "appsec-db",
+    # Legacy names kept defensively (pre-rename scan -> appsec)
     "scan-app", "scan-db",
     "surface-app", "surface-db",
     "proxy",
     # Bare service names without suffix (docker uses both)
-    "pilot", "risk", "vendor", "compliance", "asset", "access", "scan", "surface",
+    "pilot", "risk", "vendor", "compliance", "asset", "access", "appsec", "scan", "surface",
 })
 
 # Known cloud metadata IPs (AWS, GCP, Azure, Alibaba, DigitalOcean).
 _METADATA_IPS: frozenset[str] = frozenset({
     "169.254.169.254",   # AWS/GCP/Azure classic metadata
     "100.100.100.200",   # Alibaba
+    "192.0.0.192",       # Oracle Cloud
     "fd00:ec2::254",     # AWS IPv6
 })
 
@@ -88,6 +91,12 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
         raise ValueError("Cible trop longue")
     if not re.match(r"^[A-Za-z0-9._\-/:\[\]]+$", t):
         raise ValueError(f"Cible invalide (caracteres non autorises) : {t}")
+    # A leading '-' would be parsed by nmap as an option, not a target
+    # (`-Pn`, `-sU`, `-r`… all satisfy the charset above). No hostname,
+    # IP or CIDR ever starts with a dash. Defence in depth: the argv
+    # builders also pass `--` before the target.
+    if t.startswith("-"):
+        raise ValueError(f"Cible invalide (ne peut pas commencer par '-') : {t}")
 
     raw = t
     if "://" in raw:
@@ -125,8 +134,12 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
 
     try:
         infos = socket.getaddrinfo(bare, None)
-    except (socket.gaierror, UnicodeError):
-        return None, t
+    except (socket.gaierror, UnicodeError) as e:
+        # Fail-CLOSED, like ssrf_guard.resolve_safe_target. Accepting an
+        # unresolvable name here handed it verbatim to nmap/httpx, which
+        # resolve independently — the validation would then have proved
+        # nothing about what actually gets contacted.
+        raise ValueError(f"Cible non resolvable : {bare} ({e})")
 
     resolved = [info[4][0] for info in infos if info[4]]
     locked: str | None = None
@@ -138,6 +151,8 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
         _check_ip_allowed(ip, original=t)
         if locked is None:
             locked = ip_str
+    if locked is None:
+        raise ValueError(f"Cible non resolvable : {bare} (aucune adresse exploitable)")
     return locked, t
 
 
