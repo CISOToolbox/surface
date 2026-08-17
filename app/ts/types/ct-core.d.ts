@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/ct-core.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct-core.d.ts — types transverses CISO Toolbox, copiés dans chaque app
  * (app/ts/types/). Complète les déclarations PAR FICHIER générées dans
@@ -63,6 +68,10 @@ interface SaveFilePickerOptions { suggestedName?: string; types?: FilePickerAcce
 /* ── Propriétés Window transverses ─────────────────────────────── */
 
 interface Window {
+    SCHEMA_REV?: number;
+    SCHEMA_MIGRATIONS?: Record<number, (d: Record<string, any>) => void>;
+    ctSchemaMigrate?: (d: Record<string, any>) => void;
+    ctSchemaStamp?: (d: Record<string, any>) => void;
     CT_CONFIG?: CtConfig;
     AI_APP_CONFIG?: AiAppConfig;
     /** Délégué de création en mode backend-catalogue (risk). */
@@ -71,3 +80,7 @@ interface Window {
     showOpenFilePicker?: (opts?: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
     showSaveFilePicker?: (opts?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
 }
+
+// FEAT-36 — schema versioning runner (ct_schema.js)
+declare function ctSchemaMigrate(d: Record<string, any>): void;
+declare function ctSchemaStamp(d: Record<string, any>): void;

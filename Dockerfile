@@ -26,7 +26,7 @@ LABEL org.opencontainers.image.title="ciso-surface" \
       org.opencontainers.image.description="CISO Toolbox — Surface (ASM) module" \
       org.opencontainers.image.vendor="CISOToolbox" \
       org.opencontainers.image.source="https://github.com/CISOToolbox/demo-docker" \
-      org.opencontainers.image.licenses="AGPL-3.0"
+      org.opencontainers.image.licenses="MIT"
 
 # Runtime system packages only — no compilers, no curl/wget/git. nmap is the
 # one always-on scanner binary (the nmap core add-on). Chromium libs, nuclei,
@@ -63,6 +63,15 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Hardening: Python optimisations + disable .pyc cache on read-only rootfs.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+
+# Version identity (FEAT-29): baked at build, exposed via GET /api/version.
+ARG PRODUCT_VERSION=dev
+ARG BUILD_DATE=
+ARG GIT_SHA=
+ENV PRODUCT_VERSION=${PRODUCT_VERSION} \
+    BUILD_DATE=${BUILD_DATE} \
+    GIT_SHA=${GIT_SHA}
 
 EXPOSE 8080
 

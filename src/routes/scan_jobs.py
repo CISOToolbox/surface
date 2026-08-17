@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import async_session, get_db
 from src.findings_dedup import diff_summary, insert_many
 from src.models import ScanJob, User
@@ -176,6 +176,7 @@ async def create_job(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     try:
         _, target = _resolve_safe_target(body.target)
@@ -213,6 +214,7 @@ async def delete_job(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     j = await db.get(ScanJob, job_id)
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")

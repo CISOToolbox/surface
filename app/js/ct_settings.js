@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ct_settings.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Settings drawer
  *
@@ -111,7 +112,7 @@
             }
             // Custom: endpoint is required. Other providers: optional.
             if (p === "custom") {
-                h += '<div class="settings-label fs-sm" style="margin-top:12px;margin-bottom:4px">' + t("settings.endpoint") + ' <span style="color:var(--red)">*</span></div>';
+                h += '<div class="settings-label fs-sm" style="margin-top:12px;margin-bottom:4px">' + t("settings.endpoint") + ' <span style="color:var(--ct-critical)">*</span></div>';
                 h += '<input type="url" class="settings-input" id="settings-endpoint" value="' + esc(window._aiGetEndpoint()) + '" placeholder="https://my-llm.example.com/v1/chat/completions" style="width:100%">';
                 h += '<p class="fs-xs text-muted" style="margin-top:4px">' + (t("settings.custom_endpoint_note") || "URL complète du endpoint compatible OpenAI (POST, JSON, messages[]).") + '</p>';
             }
@@ -145,7 +146,7 @@
                     '<input type="file" class="settings-input" id="settings-context-file" accept=".md,.txt,.markdown" style="flex:1;font-family:inherit">' +
                     (window._aiGetContextName() ? '<button class="ai-btn-ignore" id="settings-context-clear" style="white-space:nowrap">' + t("settings.context_clear") + '</button>' : '') +
                     '</div>' +
-                    (window._aiGetContextName() ? '<p class="fs-xs" style="margin-top:4px;color:var(--green)">&#10003; ' + esc(window._aiGetContextName()) + ' (' + Math.round(window._aiGetContext().length / 1024) + ' Ko)</p>' : '<p class="fs-xs text-muted" style="margin-top:4px">' + t("settings.context_note") + '</p>') +
+                    (window._aiGetContextName() ? '<p class="fs-xs" style="margin-top:4px;color:var(--ct-low)">&#10003; ' + esc(window._aiGetContextName()) + ' (' + Math.round(window._aiGetContext().length / 1024) + ' Ko)</p>' : '<p class="fs-xs text-muted" style="margin-top:4px">' + t("settings.context_note") + '</p>') +
                     '</div>';
         }
         else {
@@ -322,10 +323,6 @@
         "settings.ai_section": "Assistant IA",
         // Shared posture labels (used by _postureLabel) — registered here so every
         // module that loads ct_settings has them in both languages.
-        "ct.posture.weak": "Faible",
-        "ct.posture.moderate": "Modéré",
-        "ct.posture.good": "Bon",
-        "ct.posture.excellent": "Excellent",
         "settings.ai_enable": "Activer l'assistant IA",
         "settings.provider": "Fournisseur IA",
         "settings.model": "Modèle",
@@ -357,10 +354,6 @@
         "settings.title": "Settings",
         "settings.language": "Language",
         "settings.ai_section": "AI Assistant",
-        "ct.posture.weak": "Weak",
-        "ct.posture.moderate": "Moderate",
-        "ct.posture.good": "Good",
-        "ct.posture.excellent": "Excellent",
         "settings.ai_enable": "Enable AI assistant",
         "settings.provider": "AI Provider",
         "settings.model": "Model",
@@ -391,12 +384,12 @@
     var style = document.createElement("style");
     style.textContent = [
         ".settings-section { margin-bottom:20px; }",
-        ".settings-label { font-weight:600; font-size:0.85em; margin-bottom:8px; color:var(--text); }",
-        ".settings-lang-btn { padding:6px 16px; border:1px solid var(--border); border-radius:4px; background:var(--ct-surface); color:var(--ct-ink); cursor:pointer; font-size:0.85em; }",
+        ".settings-label { font-weight:600; font-size:0.85em; margin-bottom:8px; color:var(--ct-ink); }",
+        ".settings-lang-btn { padding:6px 16px; border:1px solid var(--ct-line); border-radius:4px; background:var(--ct-surface); color:var(--ct-ink); cursor:pointer; font-size:0.85em; }",
         ".settings-lang-btn.active { background:var(--ct-accent); color:#fff; border-color:var(--ct-accent); }",
-        ".settings-lang-btn:hover:not(.active) { background:var(--bg); }",
-        ".settings-input { padding:6px 10px; border:1px solid var(--border); border-radius:4px; font-size:0.85em; font-family:monospace; }",
-        ".settings-btn-eye { background:none; border:1px solid var(--border); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:1em; }",
+        ".settings-lang-btn:hover:not(.active) { background:var(--ct-canvas); }",
+        ".settings-input { padding:6px 10px; border:1px solid var(--ct-line); border-radius:4px; font-size:0.85em; font-family:monospace; }",
+        ".settings-btn-eye { background:none; border:1px solid var(--ct-line); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:1em; }",
         ".settings-toggle { position:relative; display:inline-block; width:40px; height:22px; }",
         ".settings-toggle input { opacity:0; width:0; height:0; }",
         ".settings-toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:var(--ct-line-strong); transition:.3s; border-radius:22px; }",

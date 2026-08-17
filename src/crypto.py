@@ -1,5 +1,5 @@
 """Encrypt/decrypt small secrets stored in per-asset config (e.g. SMB
-file-share password for the smb_scan add-on).
+file-share password for the smb_scan_rs add-on).
 
 AES-256-GCM with a per-message random salt+nonce and PBKDF2-HMAC-SHA256
 (310k) — same scheme as the asset/access modules. The key comes only from

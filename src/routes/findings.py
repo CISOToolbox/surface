@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.orm import selectinload
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.models import Finding, Measure, User
 from src.rate_limit import check_scan_quota
@@ -95,6 +95,7 @@ async def create_finding(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     if body.severity not in ("info", "low", "medium", "high", "critical"):
         raise HTTPException(status_code=400, detail="Invalid severity")
     f = Finding(
@@ -130,6 +131,7 @@ async def delete_finding(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     f = await db.get(Finding, finding_id)
     if not f:
         raise HTTPException(status_code=404, detail="Finding not found")
@@ -151,6 +153,7 @@ async def triage_finding(
     When status is to_fix, automatically create a Measure linked to this finding.
     When status changes from to_fix to false_positive/new, the linked measure is removed.
     """
+    require_min_role(user, "triager", SURFACE_ROLES)
     result = await db.execute(
         select(Finding).options(selectinload(Finding.measure)).where(Finding.id == finding_id)
     )
@@ -186,7 +189,7 @@ async def triage_finding(
             # display ordering in the Measures panel.
             count_result = await db.execute(select(func.count()).select_from(Measure))
             count = count_result.scalar() or 0
-            new_id = f"SRF-{uuid.uuid4().hex[:8].upper()}"
+            new_id = f"MES-{uuid.uuid4().hex[:8].upper()}"
             db.add(Measure(
                 id=new_id, finding_id=finding_id, sort_order=count,
                 title=body.measure_title.strip(),
@@ -210,12 +213,20 @@ async def triage_finding(
         if m:
             deleted_id = m.id
             await db.delete(m)
+            await log_action(db, user, request, "finding.triage",
+                             target=f"{f.target or ''} / {f.title or f.id}",
+                             details={"to": new_status, "measure_deleted": deleted_id})
             await db.commit()
             from src.pilot_notify import notify_pilot_measure_deleted
             asyncio.ensure_future(notify_pilot_measure_deleted(deleted_id))
             await db.refresh(f)
             return _to_dict(f)
 
+    # Unit triage was the module's only unjournaled core action (bulk was
+    # covered) — FEAT-30 review.
+    await log_action(db, user, request, "finding.triage",
+                     target=f"{f.target or ''} / {f.title or f.id}",
+                     details={"to": new_status})
     await db.commit()
     await db.refresh(f)
     if new_status == "to_fix":
@@ -251,6 +262,7 @@ async def bulk_triage(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "triager", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     """Apply the same triage to N findings at once.
 
@@ -314,7 +326,7 @@ async def bulk_triage(
             or (primary.description or "")
         ).strip()
         db.add(Measure(
-            id=f"SRF-{uuid.uuid4().hex[:8].upper()}",
+            id=f"MES-{uuid.uuid4().hex[:8].upper()}",
             finding_id=primary.id,
             finding_ids=unique_ids,
             sort_order=base_count + 1,
@@ -354,6 +366,7 @@ async def bulk_delete(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete N findings at once (and their linked measures via cascade)."""
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     await log_action(db, user, request, "finding.bulk_delete", target=f"{len(body.ids)} findings")
     # Collect measure IDs before deleting so we can notify Pilot

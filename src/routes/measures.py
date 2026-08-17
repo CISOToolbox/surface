@@ -6,7 +6,7 @@ from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.models import Finding, Measure, User
 from src.schemas import MeasureUpdate
@@ -47,6 +47,7 @@ async def update_measure(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     m = await db.get(Measure, measure_id)
     if not m:
         raise HTTPException(status_code=404, detail="Measure not found")
@@ -79,6 +80,7 @@ async def delete_measure(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     m = await db.get(Measure, measure_id)
     if not m:
         raise HTTPException(status_code=404, detail="Measure not found")

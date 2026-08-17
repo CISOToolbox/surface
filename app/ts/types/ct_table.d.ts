@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/gen/ct_table.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_table — Declarative HTML table with sort, row click, and optional
  * bulk-selection checkbox column tied to ct_bulkbar.

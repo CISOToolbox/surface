@@ -71,7 +71,7 @@ def _safe_target(t: str) -> str:
     return canonical
 
 
-def _resolve_safe_target(t: str) -> tuple[str | None, str]:
+def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | None, str]:
     """Validate a scan target against shell injection and SSRF.
 
     Returns `(locked_ip, canonical_target)` where:
@@ -83,6 +83,13 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
 
     Blocked: loopback, link-local, cloud metadata, docker-compose siblings,
     multicast, reserved ranges. LAN (RFC1918) and public IPs are allowed.
+
+    `allow_unresolved=True` returns `(None, canonical)` instead of raising when
+    the name has no usable address. This is for ENROLLING a discovery seed (a
+    monitored domain) whose apex legitimately has no A record — the per-connection
+    lock still fires when a scanner actually contacts a host, so nothing that
+    resolves to a forbidden target is ever reached. A name that DOES resolve to a
+    blocked IP is still rejected.
     """
     t = (t or "").strip()
     if not t:
@@ -121,8 +128,7 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
             net = ipaddress.ip_network(host_only.strip("[]"), strict=False)
         except ValueError as e:
             raise ValueError(f"Plage CIDR invalide : {e}")
-        for ip in (net.network_address, net.broadcast_address):
-            _check_ip_allowed(ip, original=t)
+        _check_network_allowed(net, original=t)
         return None, t
 
     try:
@@ -135,10 +141,13 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
     try:
         infos = socket.getaddrinfo(bare, None)
     except (socket.gaierror, UnicodeError) as e:
-        # Fail-CLOSED, like ssrf_guard.resolve_safe_target. Accepting an
-        # unresolvable name here handed it verbatim to nmap/httpx, which
-        # resolve independently — the validation would then have proved
-        # nothing about what actually gets contacted.
+        # Fail-CLOSED by default, like ssrf_guard.resolve_safe_target. Accepting
+        # an unresolvable name here handed it verbatim to nmap/httpx, which
+        # resolve independently — the validation would then have proved nothing
+        # about what actually gets contacted. Exception: enrolling a domain seed
+        # (allow_unresolved), where no connection is made to the apex.
+        if allow_unresolved:
+            return None, t
         raise ValueError(f"Cible non resolvable : {bare} ({e})")
 
     resolved = [info[4][0] for info in infos if info[4]]
@@ -152,6 +161,8 @@ def _resolve_safe_target(t: str) -> tuple[str | None, str]:
         if locked is None:
             locked = ip_str
     if locked is None:
+        if allow_unresolved:
+            return None, t
         raise ValueError(f"Cible non resolvable : {bare} (aucune adresse exploitable)")
     return locked, t
 
@@ -212,6 +223,41 @@ def _check_ip_allowed(ip: ipaddress._BaseAddress, original: str) -> None:
         raise ValueError(f"Cible dans un bloc reserve : {ip_str}")
     # is_private == RFC1918 (10/8, 172.16/12, 192.168/16) — AUTORISE par choix utilisateur
     # is_global == IP publique — AUTORISE
+
+
+# Blocs interdits, sous forme de reseaux, pour tester le RECOUVREMENT d'une
+# plage CIDR. Verifier seulement l'adresse de reseau et celle de diffusion
+# laissait passer toute plage qui *contient* une cible interdite sans la border :
+# 100.100.100.0/24 a pour bornes .0 et .255, donc l'IP de metadonnees Alibaba
+# (100.100.100.200) etait balayee sans qu'aucun des deux controles ne bronche.
+_BLOCKED_NETWORKS: tuple = tuple(
+    ipaddress.ip_network(n) for n in (
+        "127.0.0.0/8", "::1/128",                 # loopback
+        "169.254.0.0/16", "fe80::/10",            # link-local (metadata cloud)
+        "0.0.0.0/32", "::/128",                   # non specifie
+        "224.0.0.0/4", "ff00::/8",                # multicast
+        "100.100.100.200/32",                     # Alibaba
+        "192.0.0.192/32",                         # Oracle Cloud
+        "fd00:ec2::254/128",                      # AWS IPv6
+    )
+)
+
+
+def _check_network_allowed(net: ipaddress._BaseNetwork, original: str) -> None:
+    """Refuse une plage CIDR qui recouvre un bloc interdit.
+
+    Enumerer chaque hote serait impraticable (un /8 en compte 16 millions), on
+    teste donc le recouvrement de reseau a reseau. Les bornes restent verifiees
+    individuellement pour conserver les messages d'erreur precis de
+    _check_ip_allowed sur les cas les plus courants.
+    """
+    for ip in (net.network_address, net.broadcast_address):
+        _check_ip_allowed(ip, original=original)
+    for blocked in _BLOCKED_NETWORKS:
+        if net.version == blocked.version and net.overlaps(blocked):
+            raise ValueError(
+                f"Plage {net} interdite : elle recouvre le bloc reserve {blocked}"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -353,7 +399,7 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
     except ET.ParseError as e:
         return [{
             "scanner": "nmap", "type": "parse_error", "severity": "info",
-            "title": f"Erreur parsing nmap pour {fallback_target}",
+            "title": f"nmap parsing error for {fallback_target}",
             "description": str(e), "target": fallback_target, "evidence": {},
         }]
 
@@ -366,8 +412,8 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
         if status_el is not None and status_el.get("state") == "down":
             findings.append({
                 "scanner": "nmap", "type": "host_down", "severity": "info",
-                "title": f"Host {addr} indisponible",
-                "description": "L'host n'a pas repondu pendant le scan.",
+                "title": f"Host {addr} unavailable",
+                "description": "The host did not respond during the scan.",
                 "target": addr, "evidence": {"address": addr, "hostname": hostname},
             })
             continue
@@ -388,16 +434,16 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
                 banner = " ".join(x for x in [product, version] if x)
                 open_ports.append((portnum, proto, service_name, banner))
                 sev = _severity_for_port(portnum, service_name)
-                title = f"Port {portnum}/{proto} ({service_name}) ouvert sur {addr}"
+                title = f"Port {portnum}/{proto} ({service_name}) open on {addr}"
                 if banner:
                     title += f" — {banner}"
-                desc = f"Le service {service_name} ecoute sur {addr}:{portnum}/{proto}."
+                desc = f"The {service_name} service is listening on {addr}:{portnum}/{proto}."
                 if banner:
-                    desc += f"\nBanner detectee : {banner}"
+                    desc += f"\nBanner detected: {banner}"
                 if sev == "critical":
-                    desc += "\nService obsolete ou hautement expose. A fermer immediatement."
+                    desc += "\nObsolete or highly exposed service. Close it immediately."
                 elif sev == "high":
-                    desc += "\nService sensible. Verifier l'exposition intentionnelle, l'auth et le patch."
+                    desc += "\nSensitive service. Verify intentional exposure, authentication, and patching."
                 findings.append({
                     "scanner": "nmap", "type": "open_port", "severity": sev,
                     "title": title, "description": desc, "target": f"{addr}:{portnum}",
@@ -409,8 +455,8 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
                 })
         findings.append({
             "scanner": "nmap", "type": "host_summary", "severity": "info",
-            "title": f"Resume nmap : {addr}" + (f" ({hostname})" if hostname else ""),
-            "description": f"{len(open_ports)} port(s) ouvert(s) sur {addr}." + (f" Hostname: {hostname}." if hostname else ""),
+            "title": f"nmap summary: {addr}" + (f" ({hostname})" if hostname else ""),
+            "description": f"{len(open_ports)} open port(s) on {addr}." + (f" Hostname: {hostname}." if hostname else ""),
             "target": addr,
             "evidence": {
                 "address": addr, "hostname": hostname,

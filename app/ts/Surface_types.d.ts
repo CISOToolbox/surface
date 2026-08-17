@@ -55,6 +55,14 @@ interface SurfaceMonitoredAsset {
     created_at?: string;
 }
 
+interface SurfaceExclusion {
+    id: string;
+    value: string;          // host, IP, CIDR or domain that must never be scanned
+    note?: string;
+    created_at?: string;
+}
+interface SurfaceExclusionPayload { value: string; note?: string; }
+
 interface SurfaceScanJobDiff { added?: number; reopened?: number; refreshed?: number; scanned?: number; partial?: { scanned?: number; limit?: string; inaccessible_dirs?: number }; }
 
 interface SurfaceScanJob {
@@ -199,6 +207,7 @@ interface SurfaceAuthUser {
 interface SurfaceAPIShape {
     get(url: string): Promise<any>;
     post(url: string, body?: unknown): Promise<any>;
+    put(url: string, body?: unknown): Promise<any>;
     listFindings(filters?: Record<string, string>): Promise<SurfaceFinding[]>;
     deleteFinding(id: string): Promise<null>;
     triageFinding(id: string, payload: SurfaceTriagePayload): Promise<SurfaceFinding>;
@@ -213,6 +222,9 @@ interface SurfaceAPIShape {
     deleteMonitored(id: string): Promise<null>;
     scanMonitored(id: string): Promise<SurfaceScanResult>;
     scanAllMonitored(): Promise<SurfaceScanAllResult>;
+    listExclusions(): Promise<SurfaceExclusion[]>;
+    addExclusion(data: SurfaceExclusionPayload): Promise<SurfaceExclusion>;
+    deleteExclusion(id: string): Promise<null>;
     nucleiConfig(): Promise<SurfaceNucleiConfig>;
     nucleiUpdateConfig(data: Record<string, number>): Promise<unknown>;
     nucleiUpdateTemplates(): Promise<{ templates_count: number; stdout?: string }>;
@@ -252,6 +264,8 @@ declare var _editScannersDialog: (idOrIds: string | string[]) => void;
 /* ── Propriétés Window posées par le module ────────────────────── */
 
 interface Window {
+    ct_notifprefs?: { open: (opts: Record<string, unknown>) => void };
+    _openNotifPrefs?: () => void;
     SurfaceAPI: SurfaceAPIShape;
     _appInitCallback?: () => void;
     _initDataAndRender?: () => void;
@@ -336,7 +350,6 @@ interface Window {
     _triageDetail?: (status: string) => void;
     _quickTriage: (id: string, status: string) => void;
     _deleteFindingDetail?: () => void;
-    _quickScanDialog?: () => void;
     _closeBulkImportModal: () => void;
     _bulkImportDialog?: () => void;
 
@@ -360,11 +373,16 @@ interface Window {
     _scanHost?: (id: string) => void;
     _scanSharesOnHost?: (hostKey: string) => void;
     _deleteHostFromDetail?: (id: string) => void;
+    _openMonitoredDetail?: (id: string) => void;
+    _toggleHostFromDetail?: (id: string) => void;
+    _addExclusionManual?: () => void;
+    _removeExclusion?: (id: string) => void;
 
     // Settings (nuclei / smtp)
     _nucleiResetTuning?: () => void;
     _nucleiSaveTuning?: () => void;
     _nucleiUpdateTemplates?: () => void;
     _saveSmtpConfig?: () => void;
+    _saveSmtpRecipients?: () => void;
     _sendSmtpDigestNow?: () => void;
 }

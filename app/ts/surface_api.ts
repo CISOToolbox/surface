@@ -47,6 +47,7 @@ window.SurfaceAPI = {
     // Generic GET/POST for one-off calls (finding detail, screenshots, etc.)
     get: function(url) { return _fetch(url.replace(/^\/api/, "")); },
     post: function(url, body) { return _fetch(url.replace(/^\/api/, ""), { method: "POST", body: body as Record<string, unknown> }); },
+    put: function(url, body) { return _fetch(url.replace(/^\/api/, ""), { method: "PUT", body: body as Record<string, unknown> }); },
     listFindings: function(filters) {
         var qs = "";
         if (filters) {
@@ -79,6 +80,9 @@ window.SurfaceAPI = {
     deleteMonitored: function(id) { return _fetch("/monitored-assets/" + id, { method: "DELETE" }); },
     scanMonitored: function(id) { return _fetch("/monitored-assets/" + id + "/scan", { method: "POST" }); },
     scanAllMonitored: function() { return _fetch("/monitored-assets/scan-all", { method: "POST" }); },
+    listExclusions: function() { return _fetch("/monitored-assets/exclusions"); },
+    addExclusion: function(data) { return _fetch("/monitored-assets/exclusions", { method: "POST", body: data as unknown as Record<string, unknown> }); },
+    deleteExclusion: function(id) { return _fetch("/monitored-assets/exclusions/" + id, { method: "DELETE" }); },
     nucleiConfig: function() { return _fetch("/scans/nuclei/config"); },
     nucleiUpdateConfig: function(data) { return _fetch("/scans/nuclei/config", { method: "PUT", body: data }); },
     nucleiUpdateTemplates: function() { return _fetch("/scans/nuclei/update-templates", { method: "POST" }); },
@@ -117,8 +121,8 @@ function _initAuth(): void {
             var right = document.getElementById("toolbar-right");
             if (!right) return;
             var h = "";
-            h += '<span style="color:var(--ct-ink-1);font-size:0.8em;margin:0 6px">' + esc(user.name || user.email) + '</span>';
-            h += '<button style="font-size:0.75em;color:var(--ct-ink-2);background:none;border:none;cursor:pointer;padding:4px 8px" data-click="_logout" title="Sign out">&#x23FB;</button>';
+            h += '<span style="color:var(--ct-ink-1);font-size:var(--ct-text-label);margin:0 var(--ct-s1)">' + esc(user.name || user.email) + '</span>';
+            h += '<button class="ct-text-label ct-muted ct-bg-none ct-no-border ct-clickable ct-py-1 ct-px-2" data-click="_logout" title="Sign out">&#x23FB;</button>';
             var container = document.createElement("span");
             container.className = "toolbar-right";
             container.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";

@@ -75,7 +75,7 @@ window.AI_APP_CONFIG = {
     window.CT_CONFIG = {
         edition: "suite",
         module: "surface",
-        deployed: ["risk", "compliance", "vendor", "asset", "pilot", "appsec", "surface", "access"],
+        deployed: ["risk", "compliance", "audit", "vendor", "asset", "pilot", "appsec", "surface", "access", "watch"],
     };
     // ═══════════════════════════════════════════════════════════════
     // SVG icon set (Feather-style stroke icons, 24×24 viewBox)
@@ -112,6 +112,30 @@ window.AI_APP_CONFIG = {
         zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
         activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
     };
+    // Badges Surface — un état métier se mappe sur un TON, pas sur une classe par
+    // valeur (spec §2). La palette de tons est fermée : critical · high · medium ·
+    // low · info · neutral · accent. Ajouter un statut ne demande plus de CSS.
+    var _SURFACE_TONES = {
+        // sévérités
+        critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
+        // statuts de constat
+        new: "info", to_fix: "medium", fixed: "low", accepted: "neutral",
+        ignored: "neutral", false_positive: "neutral",
+        // origine et état d'un hôte
+        auto: "accent", manual: "info", off: "neutral", share: "medium", scanner: "low",
+    };
+    // État d'un job de scan. « running » porte en plus data-live : la pulsation est
+    // un état générique du socle, pas une animation propre à Surface.
+    var _JOB_TONES = {
+        pending: "neutral", running: "info", completed: "low",
+        partial: "medium", failed: "critical",
+    };
+    function _jobTone(s) {
+        return _JOB_TONES[(s || "").toString()] || "neutral";
+    }
+    function _surfaceTone(v) {
+        return _SURFACE_TONES[(v || "").toString()] || "neutral";
+    }
     function _icon(name, size, extraClass) {
         var path = _ICON_PATHS[name];
         if (!path) {
@@ -126,7 +150,7 @@ window.AI_APP_CONFIG = {
         return '<svg' + cls + ' width="' + sz + '" height="' + sz + '" viewBox="0 0 24 24"'
             + ' fill="none" stroke="currentColor" stroke-width="2"'
             + ' stroke-linecap="round" stroke-linejoin="round"'
-            + ' style="vertical-align:middle;flex-shrink:0">'
+            + ' class="ct-va-middle ct-no-shrink">'
             + path
             + '</svg>';
     }
@@ -232,6 +256,7 @@ window.AI_APP_CONFIG = {
     var _panel = "dashboard";
     var _findings = [];
     var _monitored = [];
+    var _exclusions = []; // scan blocklist (host/IP/CIDR/domain)
     var _jobs = [];
     var _jobsPollTimer = null;
     var _jobsFilterScanner = "";
@@ -244,6 +269,7 @@ window.AI_APP_CONFIG = {
     var _monitoredFilterScanners = []; // multi-select scanner filter on Surveillance page
     var _selectedFinding = null;
     var _selectedHost = null; // MonitoredAsset object, set when user clicks a host card
+    var _selectedHostReturnPanel = null; // panel to return to on "back" (set when opened from Surveillance)
     var _hostSelectedFinding = null; // Finding shown inline in host detail view
     var _hostHideFP = true; // Host detail: hide false-positive findings by default
     var _hostSearch = ""; // free-text filter for the Hosts panel
@@ -286,10 +312,11 @@ window.AI_APP_CONFIG = {
         var p2 = SurfaceAPI.listMeasures().then(function (d) { _measures = d || []; }).catch(function () { _measures = []; });
         var p3 = SurfaceAPI.listMonitored().then(function (d) { _monitored = d || []; }).catch(function () { _monitored = []; });
         var p4 = SurfaceAPI.listJobs().then(function (d) { _jobs = d || []; }).catch(function () { _jobs = []; });
+        var p6 = SurfaceAPI.listExclusions().then(function (d) { _exclusions = d || []; }).catch(function () { _exclusions = []; });
         var p5 = _scannersCatalog
             ? Promise.resolve()
             : SurfaceAPI.scannersCatalog().then(function (d) { _scannersCatalog = d || {}; }).catch(function () { _scannersCatalog = {}; });
-        Promise.all([p1, p2, p3, p4, p5]).then(function () { renderPanel(); });
+        Promise.all([p1, p2, p3, p4, p5, p6]).then(function () { renderPanel(); });
     }
     function renderPanel() {
         var c = document.getElementById("content");
@@ -328,6 +355,9 @@ window.AI_APP_CONFIG = {
             var _sh = _getSettingsButtonHTML();
             if (_sh)
                 tr.insertAdjacentHTML("afterbegin", '<span class="toolbar-settings">' + _sh + '</span>');
+        }
+        if (tr && window.ct_notifprefs && !tr.querySelector(".toolbar-notif")) {
+            tr.insertAdjacentHTML("afterbegin", '<span class="toolbar-notif"><button class="ct-text-label ct-muted ct-bg-none ct-no-border ct-clickable ct-py-1 ct-px-2" data-click="_openNotifPrefs" title="' + t("notif.title") + '">' + _icon("bell", 15) + '</button></span>');
         }
         _loadAddonHelpDocs();
     }
@@ -391,9 +421,9 @@ window.AI_APP_CONFIG = {
     // ═══════════════════════════════════════════════════════════════
     var _auditFilter = { q: "" };
     async function _renderAuditLog(c) {
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + t("audit.title") + '</h2><span style="flex:1"></span>';
-        h += '<input type="search" class="appsec-filter" placeholder="' + t("audit.search") + '" value="' + esc(_auditFilter.q || "") + '" data-input="_setAuditSearch" data-pass-value style="min-width:200px">';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + t("audit.title") + '</h2><span class="ct-flex-1"></span>';
+        h += '<input type="search" class="appsec-filter" placeholder="' + t("audit.search") + '" value="' + esc(_auditFilter.q || "") + '" data-input="_setAuditSearch" data-pass-value>';
         h += '</div>';
         h += '<div id="audit-body"><p class="text-muted">Chargement...</p></div>';
         c.innerHTML = h;
@@ -415,7 +445,7 @@ window.AI_APP_CONFIG = {
                 h = '<p class="text-muted">' + t("audit.empty") + '</p>';
             }
             else {
-                h = '<table class="ct-table" style="font-size:0.85em"><thead><tr>';
+                h = '<table class="ct-table ct-text-meta"><thead><tr>';
                 h += '<th>' + t("audit.col_date") + '</th>';
                 h += '<th>' + t("audit.col_user") + '</th>';
                 h += '<th>' + t("audit.col_action") + '</th>';
@@ -430,21 +460,21 @@ window.AI_APP_CONFIG = {
                     if (actionLabel === "audit.action." + e.action)
                         actionLabel = e.action;
                     h += '<tr>';
-                    h += '<td style="white-space:nowrap;color:var(--text-muted)">' + esc(dateStr) + '</td>';
+                    h += '<td class="ct-nowrap ct-muted">' + esc(dateStr) + '</td>';
                     h += '<td>' + esc(e.user_email || "—") + '</td>';
-                    h += '<td><code style="font-size:0.85em">' + esc(actionLabel) + '</code></td>';
-                    h += '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">' + esc(e.target || "—") + '</td>';
-                    h += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)" title="' + esc(e.details || "") + '">' + esc(e.details || "—") + '</td>';
-                    h += '<td style="color:var(--text-muted)">' + esc(e.ip_address || "") + '</td>';
+                    h += '<td><code class="ct-text-meta">' + esc(actionLabel) + '</code></td>';
+                    h += '<td class="ct-maxw-250 ct-overflow-hidden ct-ellipsis">' + esc(e.target || "—") + '</td>';
+                    h += '<td class="ct-maxw-200 ct-overflow-hidden ct-ellipsis ct-journal-sep" title="' + esc(e.details || "") + '">' + esc(e.details || "—") + '</td>';
+                    h += '<td class="ct-muted">' + esc(e.ip_address || "") + '</td>';
                     h += '</tr>';
                 }
                 h += '</tbody></table>';
-                h += '<p style="font-size:0.78em;color:var(--text-muted)">' + data.total + ' ' + t("audit.entries") + '</p>';
+                h += '<p class="ct-text-label ct-muted">' + data.total + ' ' + t("audit.entries") + '</p>';
             }
             el.innerHTML = h;
         }
         catch (e) {
-            el.innerHTML = '<p style="color:var(--red)">' + esc(e.message || String(e)) + '</p>';
+            el.innerHTML = '<p class="ct-text-critical">' + esc(e.message || String(e)) + '</p>';
         }
     }
     window._setAuditSearch = function (v) { _auditFilter.q = v; _refreshAuditBody(); };
@@ -475,8 +505,13 @@ window.AI_APP_CONFIG = {
                 var entry = _scannersCatalog[kind];
                 var list = entry && entry.scanners ? entry.scanners : [];
                 for (var i = 0; i < list.length; i++) {
-                    if (list[i].name === s && list[i].label)
-                        return list[i].label;
+                    if (list[i].name === s && list[i].label) {
+                        // Libellé localisé si "scanner.<name>.label" est déclaré,
+                        // sinon le label backend (langue pivot, anglais).
+                        var _lk = "scanner." + list[i].name + ".label";
+                        var _lv = t(_lk);
+                        return _lv === _lk ? list[i].label : _lv;
+                    }
                 }
             }
         }
@@ -486,17 +521,32 @@ window.AI_APP_CONFIG = {
     // .scanner-<type> style in Surface.css; anything else (e.g. "manual",
     // "scheduled") falls back to the neutral .scanner-unknown pill so TYPE
     // columns render a pill on every row instead of mixing pills and raw text.
-    function _scannerBadgeCls(s) {
-        var key = (s || "unknown").replace(/[^a-z0-9]/g, "-");
-        var known = ["nmap", "scheduled-host", "scheduled-domain", "scheduled-discovery"];
-        return "scanner-" + (known.indexOf(key) >= 0 ? key : "unknown");
+    // Le scanner est une identité, pas une gravité : chacun avait sa classe et sa
+    // couleur, ce qui faisait lire nmap comme un incident (teinte critical). Il
+    // devient un ton, choisi pour distinguer sans alarmer.
+    var _SCANNER_TONES = {
+        nmap: "accent", "scheduled-host": "accent",
+        "scheduled-domain": "info", "scheduled-discovery": "medium",
+    };
+    function _scannerTone(s) {
+        var key = (s || "").replace(/[^a-z0-9]/g, "-");
+        return _SCANNER_TONES[key] || "neutral";
     }
     function _renderJobs(c) {
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + esc(t("jobs.title")) + '</h2>';
-        h += '<span style="flex:1"></span>';
+        // Always tear down any existing poll timer first. This function re-renders
+        // itself from the poll callback below; without this clear, each 3 s tick
+        // (while a job is running) would leak a NEW interval without cancelling the
+        // old one — the timers double every tick and flood /api/scans/jobs, pegging
+        // the backend. Clearing here guarantees at most one live poll timer.
+        if (_jobsPollTimer) {
+            clearInterval(_jobsPollTimer);
+            _jobsPollTimer = null;
+        }
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + esc(t("jobs.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
         h += '</div>';
-        h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("jobs.help")) + '</div>';
+        h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("jobs.help")) + '</div>';
         if (!_jobs.length) {
             h += '<div class="empty-state">' + esc(t("jobs.empty")) + '</div>';
             c.innerHTML = h;
@@ -539,7 +589,7 @@ window.AI_APP_CONFIG = {
             return;
         }
         var hasRunning = filtered.some(function (j) { return j.status === "pending" || j.status === "running"; });
-        h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + filtered.length + ' / ' + _jobs.length + ' ' + esc(t("jobs.title").toLowerCase()) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _jobs.length + ' ' + esc(t("jobs.title").toLowerCase()) + '</div>';
         h += '<table class="ct-table"><thead><tr>'
             + '<th>' + esc(t("jobs.col.target")) + '</th>'
             + '<th>' + esc(t("jobs.col.scanner")) + '</th>'
@@ -559,19 +609,19 @@ window.AI_APP_CONFIG = {
             }
             var isScheduled = j.triggered_by === "scheduler" || j.profile === "scheduled";
             var sourceBadge = isScheduled
-                ? '<span class="source-badge source-auto">' + _icon("clock", 12) + ' ' + esc(t("jobs.source.auto").toUpperCase()) + '</span>'
-                : '<span class="source-badge source-manual">' + _icon("pin", 12) + ' ' + esc(t("jobs.source.manual").toUpperCase()) + '</span>';
-            var scannerCls = _scannerBadgeCls(j.scanner);
+                ? '<span class="ct-badge" data-size="sm" data-tone="accent">' + _icon("clock", 12) + ' ' + esc(t("jobs.source.auto").toUpperCase()) + '</span>'
+                : '<span class="ct-badge" data-size="sm" data-tone="info">' + _icon("pin", 12) + ' ' + esc(t("jobs.source.manual").toUpperCase()) + '</span>';
+            var scannerCls = _scannerTone(j.scanner);
             h += '<tr>';
-            h += '<td style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(j.target) + '</td>';
-            h += '<td><span class="scanner-badge ' + scannerCls + '" title="' + esc(j.scanner || "") + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
+            h += '<td class="ct-mono ct-text-meta ct-strong">' + esc(j.target) + '</td>';
+            h += '<td><span class="ct-badge" data-size="sm" data-tone="' + scannerCls + '" title="' + esc(j.scanner || "") + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
             if (j.profile && j.profile !== "scheduled")
-                h += '<div style="font-size:0.7em;color:var(--text-muted);margin-top:2px">profil: ' + esc(j.profile) + '</div>';
+                h += '<div class="ct-text-label ct-muted ct-mt-1">profil: ' + esc(j.profile) + '</div>';
             h += '</td>';
             h += '<td>' + sourceBadge + '</td>';
-            h += '<td><span class="job-status job-' + esc(j.status) + '">' + esc(_jobStatusLabel(j.status)) + '</span>';
+            h += '<td><span class="ct-badge" data-size="sm" data-tone="' + _jobTone(j.status) + '"' + (j.status === "running" ? " data-live" : "") + '>' + esc(_jobStatusLabel(j.status)) + '</span>';
             if (j.error)
-                h += '<div style="font-size:0.72em;color:var(--ct-critical);margin-top:2px;max-width:240px;word-break:break-word">' + esc(j.error.substring(0, 120)) + '</div>';
+                h += '<div style="font-size:var(--ct-text-label);color:var(--ct-critical);margin-top:var(--ct-s1);max-width:240px;word-break:break-word">' + esc(_jobErrorText(j.error).substring(0, 120)) + '</div>';
             if (j.status === "partial" && j.diff && j.diff.partial) {
                 var pp = j.diff.partial;
                 var msgs = [];
@@ -582,10 +632,10 @@ window.AI_APP_CONFIG = {
                 if (pp.inaccessible_dirs)
                     msgs.push(t("jobs.partial.inaccessible").replace("{n}", String(pp.inaccessible_dirs)));
                 if (msgs.length)
-                    h += '<div style="font-size:0.72em;color:var(--ct-medium);margin-top:2px">' + esc(msgs.join(" · ")) + '</div>';
+                    h += '<div class="ct-text-label ct-text-medium ct-mt-1">' + esc(msgs.join(" · ")) + '</div>';
             }
             h += '</td>';
-            h += '<td style="text-align:center;font-weight:600">' + j.findings_count;
+            h += '<td class="ct-ta-c ct-strong">' + j.findings_count;
             if (j.diff && (j.diff.added || j.diff.reopened)) {
                 var diffParts = [];
                 if (j.diff.added)
@@ -595,19 +645,19 @@ window.AI_APP_CONFIG = {
                 h += '<div class="job-diff">' + diffParts.join(" ") + '</div>';
             }
             h += '</td>';
-            h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(_fmtDate(j.created_at || "")) + '<br><span style="font-size:0.9em">' + esc(j.triggered_by || "") + '</span></td>';
-            h += '<td style="font-size:0.82em;color:var(--text-muted)">' + esc(dur);
+            h += '<td class="ct-text-label ct-muted">' + esc(_fmtDate(j.created_at || "")) + '<br><span class="ct-text-data">' + esc(j.triggered_by || "") + '</span></td>';
+            h += '<td class="ct-text-label ct-muted">' + esc(dur);
             if (j.diff && j.diff.scanned != null)
-                h += '<div style="font-size:0.92em">' + esc(t("jobs.scanned_files").replace("{n}", String(j.diff.scanned))) + '</div>';
+                h += '<div class="ct-text-data">' + esc(t("jobs.scanned_files").replace("{n}", String(j.diff.scanned))) + '</div>';
             h += '</td>';
-            h += '<td style="white-space:nowrap">';
+            h += '<td class="ct-nowrap">';
             // Rerun is offered on every completed/failed job. The handler picks
             // the right path: manual nmap → POST /scans/jobs, scheduled jobs →
             // POST /monitored-assets/{id}/scan based on target match.
             if (j.status !== "pending" && j.status !== "running") {
-                h += '<button class="btn-mini" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' data-pass-el title="' + esc(t("jobs.rerun")) + '">' + _icon("refresh", 14) + '</button> ';
+                h += '<button class="ct-btn" data-size="xs" data-click="_rerunJob" data-args=\'' + _da(j.id) + '\' data-pass-el title="' + esc(t("jobs.rerun")) + '" data-icon>' + _icon("refresh", 14) + '</button> ';
             }
-            h += '<button class="btn-del" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
+            h += '<button class="ct-btn" data-variant="danger" data-size="xs" data-click="_deleteJob" data-args=\'' + _da(j.id) + '\' title="' + esc(t("action.delete")) + '" data-icon>' + _icon("trash", 14) + '</button>';
             h += '</td>';
             h += '</tr>';
         });
@@ -632,6 +682,19 @@ window.AI_APP_CONFIG = {
     }
     function _jobStatusLabel(s) {
         return t("jobs.status." + s) || s;
+    }
+    // Job errors from scanners are free-text (English pivot language) and shown
+    // verbatim. A few backend-emitted errors are instead stored as translation
+    // KEYS (prefix "job.error.") so they follow the UI language — translate those,
+    // pass everything else through unchanged. Unknown keys fall back to raw text.
+    function _jobErrorText(err) {
+        if (!err)
+            return "";
+        if (err.indexOf("job.error.") === 0) {
+            var tr = t(err);
+            return tr === err ? err : tr;
+        }
+        return err;
     }
     window._setJobsScannerFilter = function (v) { _jobsFilterScanner = v || ""; renderPanel(); };
     window._setJobsStatusFilter = function (v) { _jobsFilterStatus = v || ""; renderPanel(); };
@@ -694,14 +757,14 @@ window.AI_APP_CONFIG = {
     // MONITORED ASSETS
     // ═══════════════════════════════════════════════════════════════
     function _renderMonitored(c) {
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + esc(t("monitored.title")) + '</h2>';
-        h += '<span style="flex:1"></span>';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + esc(t("monitored.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
         if (_monitored.length)
-            h += '<button class="btn-add btn-icon" data-click="_scanAllMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
-        h += '<button class="btn-add btn-icon" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-click="_scanAllMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
+        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
         h += '</div>';
-        h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("monitored.help")) + '</div>';
+        h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("monitored.help")) + '</div>';
         if (!_monitored.length) {
             h += '<div class="empty-state">' + esc(t("monitored.empty")) + '</div>';
             c.innerHTML = h;
@@ -709,10 +772,10 @@ window.AI_APP_CONFIG = {
         }
         // Search bar (rendered once — the table below lives in a wrapper the
         // search handler refreshes in place so the input keeps focus).
-        h += '<div class="surface-filters" style="margin-bottom:12px">';
-        h += '<input type="text" class="surface-filter" placeholder="' + esc(t("monitored.search.placeholder")) + '" style="min-width:320px;flex:1"';
+        h += '<div class="surface-filters ct-mb-3">';
+        h += '<input type="text" class="surface-filter ct-minw-320 ct-flex-1" placeholder="' + esc(t("monitored.search.placeholder")) + '"';
         h += ' id="monitored-search" value="' + esc(_monitoredSearch) + '" data-input="_setMonitoredSearch" data-pass-value autocomplete="off">';
-        h += '<button class="btn-add" id="monitored-search-clear" data-click="_clearMonitoredSearch"' + (_monitoredSearch ? '' : ' style="display:none"') + '>x</button>';
+        h += '<button class="ct-btn mt-8 ct-hidden" data-write data-variant="primary" id="monitored-search-clear" data-click="_clearMonitoredSearch"' + (_monitoredSearch ? '' : '') + '>x</button>';
         h += '</div>';
         // Scanner-type filter pills — the union of every scanner declared on
         // any monitored asset, sorted alphabetically. Multi-select.
@@ -721,7 +784,7 @@ window.AI_APP_CONFIG = {
             scannerSet[s] = true; }); });
         var scannerList = Object.keys(scannerSet).sort();
         if (scannerList.length) {
-            h += '<div class="filter-pills-row" style="margin-bottom:12px">';
+            h += '<div class="filter-pills-row ct-mb-3">';
             h += '<span class="filter-pills-lbl">' + esc(t("monitored.filter.scanner")) + '</span>';
             scannerList.forEach(function (s) {
                 var on = _monitoredFilterScanners.indexOf(s) >= 0;
@@ -773,7 +836,7 @@ window.AI_APP_CONFIG = {
                 return true;
             return false;
         });
-        var h = '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + filtered.length + ' / ' + _monitored.length + ' ' + esc(t("monitored.count")) + '</div>';
+        var h = '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _monitored.length + ' ' + esc(t("monitored.count")) + '</div>';
         if (!filtered.length) {
             h += '<div class="empty-state">' + esc(t("monitored.no_match")) + '</div>';
             wrap.innerHTML = h;
@@ -805,12 +868,12 @@ window.AI_APP_CONFIG = {
             var nextStr = "—";
             if (freq > 0) {
                 if (!a.last_scan_at) {
-                    nextStr = '<span style="color:var(--ct-low)">' + esc(t("monitored.next.imminent")) + '</span>';
+                    nextStr = '<span class="ct-text-low">' + esc(t("monitored.next.imminent")) + '</span>';
                 }
                 else {
                     var nextMs = new Date(a.last_scan_at).getTime() + freq * 3600 * 1000;
                     if (nextMs <= now)
-                        nextStr = '<span style="color:var(--ct-low)">' + esc(t("monitored.next.imminent")) + '</span>';
+                        nextStr = '<span class="ct-text-low">' + esc(t("monitored.next.imminent")) + '</span>';
                     else {
                         var inH = Math.round((nextMs - now) / 3600000);
                         nextStr = inH < 1 ? "< 1 h" : inH + " h";
@@ -818,30 +881,31 @@ window.AI_APP_CONFIG = {
                 }
             }
             else {
-                nextStr = '<span style="color:var(--text-muted)">' + esc(t("monitored.next.disabled")) + '</span>';
+                nextStr = '<span class="ct-muted">' + esc(t("monitored.next.disabled")) + '</span>';
             }
             var checkedM = _monitoredBulkSelection[a.id] ? " checked" : "";
             h += '<tr style="' + (disabled ? "opacity:0.5;" : "") + '">';
             h += '<td data-stop><input type="checkbox" class="bulk-check"' + checkedM + ' data-click="_toggleMonBulkOne" data-args=\'' + _da(a.id) + '\' data-stop></td>';
-            h += '<td><span class="kind-badge kind-' + esc(a.kind) + '">' + esc(_kindLabel(a.kind)) + '</span></td>';
-            h += '<td style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(a.value) + '</td>';
-            h += '<td style="font-size:0.85em">' + esc(a.label || "-") + '</td>';
+            h += '<td><span class="ct-ref" data-size="sm">' + esc(_kindLabel(a.kind)) + '</span></td>';
+            h += '<td class="ct-mono ct-text-meta ct-strong">' + esc(a.value) + '</td>';
+            h += '<td class="ct-text-meta">' + esc(a.label || "-") + '</td>';
             var scs = a.enabled_scanners || [];
             if (scs.length) {
                 var badges = scs.map(function (s) { return '<span class="scanner-mini" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join("");
-                h += '<td style="max-width:240px">' + badges + '</td>';
+                h += '<td class="ct-maxw-240">' + badges + '</td>';
             }
             else {
                 h += '<td><span class="scanner-mini scanner-mini-none">aucun</span></td>';
             }
-            h += '<td style="font-size:0.82em;color:var(--text-muted)">' + (freq > 0 ? String(t("monitored.frequency_hours")).replace("{n}", String(freq)) : "—") + '</td>';
-            h += '<td><label style="cursor:pointer"><input type="checkbox"' + (a.enabled ? " checked" : "") + ' data-change="_toggleMonitored" data-args=\'' + _da(a.id) + '\' data-pass-el></label></td>';
-            h += '<td style="font-size:0.78em;color:var(--text-muted)">' + esc(a.last_scan_at ? _fmtDate(a.last_scan_at || "") : t("monitored.last.never")) + '</td>';
-            h += '<td style="font-size:0.78em">' + nextStr + '</td>';
-            h += '<td style="white-space:nowrap">';
-            h += '<button class="btn-mini" data-click="_scanMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("host.scan_now")) + '">' + _icon("search", 14) + '</button> ';
-            h += '<button class="btn-mini" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.edit")) + '">' + _icon("edit", 14) + '</button> ';
-            h += '<button class="btn-del" data-click="_deleteMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.delete")) + '">' + _icon("trash", 14) + '</button>';
+            h += '<td class="ct-text-label ct-muted">' + (freq > 0 ? String(t("monitored.frequency_hours")).replace("{n}", String(freq)) : "—") + '</td>';
+            h += '<td><label class="ct-clickable"><input type="checkbox"' + (a.enabled ? " checked" : "") + ' data-change="_toggleMonitored" data-args=\'' + _da(a.id) + '\' data-pass-el></label></td>';
+            h += '<td class="ct-text-label ct-muted">' + esc(a.last_scan_at ? _fmtDate(a.last_scan_at || "") : t("monitored.last.never")) + '</td>';
+            h += '<td class="ct-text-label">' + nextStr + '</td>';
+            h += '<td class="ct-nowrap">';
+            h += '<button class="ct-btn" data-size="xs" data-click="_openMonitoredDetail" data-args=\'' + _da(a.id) + '\' title="' + esc(t("monitored.open_detail")) + '" data-icon>' + _icon("arrow_right", 14) + '</button> ';
+            h += '<button class="ct-btn" data-size="xs" data-click="_scanMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("host.scan_now")) + '" data-icon>' + _icon("search", 14) + '</button> ';
+            h += '<button class="ct-btn" data-size="xs" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.edit")) + '" data-icon>' + _icon("edit", 14) + '</button> ';
+            h += '<button class="ct-btn" data-variant="danger" data-size="xs" data-click="_deleteMonitored" data-args=\'' + _da(a.id) + '\' title="' + esc(t("action.delete")) + '" data-icon>' + _icon("trash", 14) + '</button>';
             h += '</td>';
             h += '</tr>';
         });
@@ -850,15 +914,64 @@ window.AI_APP_CONFIG = {
         if (selCount > 0) {
             h += '<div class="bulk-action-bar">';
             h += '<span class="bulk-count">' + esc(t("bulk.selected", { n: selCount })) + '</span>';
-            h += '<button class="btn-add btn-icon" data-click="_bulkScanMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.bulk_scan")) + '</button>';
-            h += '<button class="btn-add btn-icon" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
-            h += '<button class="btn-add btn-icon surface-danger" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
-            h += '<span style="flex:1"></span>';
-            h += '<button class="btn-add" data-click="_clearMonitoredBulk">' + esc(t("bulk.clear")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_bulkScanMonitored">' + _icon("search", 14) + ' ' + esc(t("monitored.bulk_scan")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_bulkConfigureScanners">' + _icon("edit", 14) + ' ' + esc(t("hosts.bulk_configure_scans")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="danger" data-click="_bulkDeleteMonitored">' + _icon("trash", 14) + ' ' + esc(t("monitored.bulk_delete")) + '</button>';
+            h += '<span class="ct-flex-1"></span>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_clearMonitoredBulk">' + esc(t("bulk.clear")) + '</button>';
             h += '</div>';
         }
+        h += _exclusionsPanelHTML();
         wrap.innerHTML = h;
     }
+    // Scan blocklist manager, shown under the Surveillance table. Values here are
+    // never scanned nor auto-enrolled (enforced server-side).
+    function _exclusionsPanelHTML() {
+        var h = '<div class="surface-card ct-mt-5">';
+        h += '<h3 class="ct-m-0">' + _icon("shield", 15) + ' ' + esc(t("exclude.panel_title")) + '</h3>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + esc(t("exclude.panel_hint")) + '</div>';
+        h += '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<input id="excl-value" class="ct-input ct-maxw-300" placeholder="' + esc(t("exclude.placeholder_value")) + '">';
+        h += '<input id="excl-note" class="ct-input ct-flex-1" placeholder="' + esc(t("exclude.placeholder_note")) + '">';
+        h += '<button class="ct-btn" data-write data-variant="primary" data-click="_addExclusionManual">' + _icon("plus", 14) + ' ' + esc(t("exclude.add_btn")) + '</button>';
+        h += '</div>';
+        if (!_exclusions.length) {
+            h += '<div class="ct-text-label ct-muted">' + esc(t("exclude.empty")) + '</div>';
+        }
+        else {
+            h += '<table class="ct-table"><tbody>';
+            _exclusions.forEach(function (e) {
+                h += '<tr>';
+                h += '<td class="ct-mono ct-strong">' + esc(e.value) + '</td>';
+                h += '<td class="ct-text-meta ct-muted">' + esc(e.note || "") + '</td>';
+                h += '<td class="ct-text-label ct-muted ct-nowrap">' + esc(e.created_at ? _fmtDate(e.created_at) : "") + '</td>';
+                h += '<td class="ct-nowrap"><button class="ct-btn" data-variant="danger" data-size="xs" data-click="_removeExclusion" data-args=\'' + _da(e.id) + '\' title="' + esc(t("exclude.remove")) + '" data-icon>' + _icon("trash", 14) + '</button></td>';
+                h += '</tr>';
+            });
+            h += '</tbody></table>';
+        }
+        h += '</div>';
+        return h;
+    }
+    window._addExclusionManual = function () {
+        var vEl = document.getElementById("excl-value");
+        var nEl = document.getElementById("excl-note");
+        var value = (vEl && vEl.value || "").trim();
+        if (!value) {
+            showStatus(t("exclude.value_required"), true);
+            return;
+        }
+        SurfaceAPI.addExclusion({ value: value, note: (nEl && nEl.value || "").trim() }).then(function () {
+            showStatus(t("exclude.added", { value: value }));
+            _loadAndRender();
+        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
+    };
+    window._removeExclusion = function (id) {
+        SurfaceAPI.deleteExclusion(id).then(function () {
+            showStatus(t("exclude.removed"));
+            _loadAndRender();
+        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
+    };
     window._toggleMonBulkAll = function () {
         var el = document.getElementById("mon-bulk-all");
         var checked = el && el.checked;
@@ -977,6 +1090,7 @@ window.AI_APP_CONFIG = {
             ov = document.createElement("div");
             ov.id = "monitored-overlay";
             ov.className = "ct-modal-overlay";
+            ov.hidden = true;
             document.body.appendChild(ov);
             var _md = null;
             ov.addEventListener("mousedown", function (e) { _md = e.target; });
@@ -990,40 +1104,40 @@ window.AI_APP_CONFIG = {
         if (!_kinds.length)
             _kinds = ["domain", "host", "ip_range"];
         var kindRadios = _kinds.map(function (k, i) {
-            return '<label class="ct-radio"><input type="radio" name="monitored-kind" value="' + esc(k) + '"' + (i === 0 ? " checked" : "") + '> <span>' + esc(t("kind." + k) || k) + '</span></label>';
+            return '<label class="surface-radio"><input type="radio" name="monitored-kind" value="' + esc(k) + '"' + (i === 0 ? " checked" : "") + '> <span>' + esc(t("kind." + k) || k) + '</span></label>';
         }).join("");
         // Rebuild innerHTML on every open so the locale is always current.
         ov.innerHTML =
             '<div class="ct-modal">' +
-                '<div class="ct-modal-header"><span id="monitored-modal-title">' + esc(t("mon_modal.title_add")) + '</span><button class="ct-modal-close" data-click="_closeMonitoredModal">' + _icon("x", 18) + '</button></div>' +
+                '<div class="ct-modal-header"><span id="monitored-modal-title">' + esc(t("mon_modal.title_add")) + '</span><button class="surface-modal-close" data-click="_closeMonitoredModal">' + _icon("x", 18) + '</button></div>' +
                 '<div class="ct-modal-body">' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.type")) + '</label>' +
-                '<div class="ct-radio-group">' + kindRadios + '</div>' +
-                '<div class="ct-field-help" id="monitored-kind-help"></div>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.type")) + '</label>' +
+                '<div class="surface-radio-group">' + kindRadios + '</div>' +
+                '<div class="surface-field-help" id="monitored-kind-help"></div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.value")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.value")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-value" placeholder="example.com">' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.label")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.label")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-label" placeholder="' + esc(t("mon_modal.label_ph")) + '">' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.notes")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.notes")) + '</label>' +
                 '<textarea class="ct-input" id="monitored-notes" rows="3" placeholder="' + esc(t("mon_modal.notes_ph")) + '"></textarea>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.criticality")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.criticality")) + '</label>' +
                 '<select class="ct-input" id="monitored-criticality">' +
                 '<option value="low">' + esc(t("mon_modal.crit_low")) + '</option>' +
                 '<option value="medium" selected>' + esc(t("mon_modal.crit_medium")) + '</option>' +
                 '<option value="high">' + esc(t("mon_modal.crit_high")) + '</option>' +
                 '<option value="critical">' + esc(t("mon_modal.crit_critical")) + '</option>' +
                 '</select>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.criticality_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.criticality_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.tags")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.tags")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-tags" placeholder="' + esc(t("mon_modal.tags_ph")) + '">' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.tags_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.tags_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.frequency")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.frequency")) + '</label>' +
                 '<select class="ct-input" id="monitored-frequency">' +
                 '<option value="1">1 h</option>' +
                 '<option value="6">6 h</option>' +
@@ -1032,52 +1146,52 @@ window.AI_APP_CONFIG = {
                 '<option value="720">720 h (30d)</option>' +
                 '<option value="0">0 (' + esc(t("monitored.next.disabled")) + ')</option>' +
                 '</select>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.frequency_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.frequency_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.scanners")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.scanners")) + '</label>' +
                 '<div id="monitored-scanners" class="scanner-checklist"></div>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.scanners_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.scanners_help")) + '</div>' +
                 '</div>' +
                 // File-share (SMB) options — shown only for kind=file_share.
-                '<div id="monitored-fileshare" style="display:none">' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_user")) + '</label>' +
+                '<div id="monitored-fileshare" class="ct-hidden">' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_user")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-fs-user" placeholder="svc-scan" autocomplete="off">' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_domain")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_domain")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-fs-domain" placeholder="' + esc(t("mon_modal.fs_domain_ph")) + '" autocomplete="off">' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_pwd")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_pwd")) + '</label>' +
                 '<input type="password" class="ct-input" id="monitored-fs-pwd" placeholder="' + esc(t("mon_modal.fs_pwd_ph")) + '" autocomplete="new-password">' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.fs_creds_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.fs_creds_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_regex")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_regex")) + '</label>' +
                 '<textarea class="ct-input" id="monitored-fs-regex" rows="3" placeholder="' + esc(t("mon_modal.fs_regex_ph")) + '"></textarea>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.fs_regex_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.fs_regex_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_ext")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_ext")) + '</label>' +
                 '<input type="text" class="ct-input" id="monitored-fs-ext" placeholder="' + esc(t("mon_modal.fs_ext_ph")) + '">' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.fs_ext_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.fs_ext_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_maxsize")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_maxsize")) + '</label>' +
                 '<input type="number" class="ct-input" id="monitored-fs-maxsize" min="1" placeholder="50">' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_maxfiles")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_maxfiles")) + '</label>' +
                 '<input type="number" class="ct-input" id="monitored-fs-maxfiles" min="1" placeholder="∞">' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.fs_maxfiles_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.fs_maxfiles_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-field-lbl">' + esc(t("mon_modal.fs_timebudget")) + '</label>' +
+                '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_timebudget")) + '</label>' +
                 '<input type="number" class="ct-input" id="monitored-fs-timebudget" min="1" placeholder="30">' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.fs_timebudget_help")) + '</div>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.fs_timebudget_help")) + '</div>' +
                 '</div>' +
                 '</div>' +
-                '<div class="ct-field"><label class="ct-checkbox"><input type="checkbox" id="monitored-enabled" checked> <span>' + esc(t("mon_modal.enabled")) + '</span></label></div>' +
-                '<div class="ct-field" id="monitored-row-autoenroll"><label class="ct-checkbox"><input type="checkbox" id="monitored-auto-enroll"> <span>' + esc(t("mon_modal.auto_enroll")) + '</span></label>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.auto_enroll_help")) + '</div>' +
+                '<div class="ct-field"><label class="surface-checkbox"><input type="checkbox" id="monitored-enabled" checked> <span>' + esc(t("mon_modal.enabled")) + '</span></label></div>' +
+                '<div class="ct-field" id="monitored-row-autoenroll"><label class="surface-checkbox"><input type="checkbox" id="monitored-auto-enroll"> <span>' + esc(t("mon_modal.auto_enroll")) + '</span></label>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.auto_enroll_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-field" id="monitored-row-stealth"><label class="ct-checkbox"><input type="checkbox" id="monitored-stealth"> <span>' + esc(t("mon_modal.stealth")) + '</span></label>' +
-                '<div class="ct-field-help">' + esc(t("mon_modal.stealth_help")) + '</div>' +
+                '<div class="ct-field" id="monitored-row-stealth"><label class="surface-checkbox"><input type="checkbox" id="monitored-stealth"> <span>' + esc(t("mon_modal.stealth")) + '</span></label>' +
+                '<div class="surface-field-help">' + esc(t("mon_modal.stealth_help")) + '</div>' +
                 '</div>' +
-                '<div class="ct-error" id="monitored-error" style="display:none"></div>' +
+                '<div class="surface-error ct-hidden" id="monitored-error"></div>' +
                 '</div>' +
                 '<div class="ct-modal-footer">' +
                 '<button class="ct-modal-btn" data-click="_closeMonitoredModal">' + esc(t("action.cancel")) + '</button>' +
@@ -1120,7 +1234,7 @@ window.AI_APP_CONFIG = {
         var enabledSet = {};
         (enabled || []).forEach(function (n) { enabledSet[n] = true; });
         if (!entry.scanners || !entry.scanners.length) {
-            container.innerHTML = '<div class="ct-field-help">Aucun scanner disponible pour ce type.</div>';
+            container.innerHTML = '<div class="surface-field-help">Aucun scanner disponible pour ce type.</div>';
             return;
         }
         var h = "";
@@ -1128,7 +1242,7 @@ window.AI_APP_CONFIG = {
             var checked = enabledSet[s.name] ? " checked" : "";
             h += '<label class="scanner-check">' +
                 '<input type="checkbox" value="' + esc(s.name) + '"' + checked + '> ' +
-                '<span>' + esc(s.label) + '</span>' +
+                '<span>' + esc(_scannerLabel(s.name)) + '</span>' +
                 '</label>';
         });
         container.innerHTML = h;
@@ -1172,7 +1286,7 @@ window.AI_APP_CONFIG = {
         _updateMonitoredKindHelp();
         _renderScannerChecklist(null);
         _toggleFileShareConfig();
-        ov.classList.add("open");
+        ov.hidden = false;
         setTimeout(function () {
             var v = document.getElementById("monitored-value");
             if (v)
@@ -1201,19 +1315,20 @@ window.AI_APP_CONFIG = {
             ov = document.createElement("div");
             ov.id = "scanners-overlay";
             ov.className = "ct-modal-overlay";
+            ov.hidden = true;
             document.body.appendChild(ov);
             ov.addEventListener("click", function (e) { if (e.target === ov)
-                ov.classList.remove("open"); });
+                ov.hidden = true; });
         }
         var listH = "";
         if (entry.scanners && entry.scanners.length) {
             entry.scanners.forEach(function (s) {
                 var checked = current[s.name] ? " checked" : "";
-                listH += '<label class="scanner-check"><input type="checkbox" value="' + esc(s.name) + '"' + checked + '> <span>' + esc(s.label) + '</span></label>';
+                listH += '<label class="scanner-check"><input type="checkbox" value="' + esc(s.name) + '"' + checked + '> <span>' + esc(_scannerLabel(s.name)) + '</span></label>';
             });
         }
         else {
-            listH = '<div class="ct-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
+            listH = '<div class="surface-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
         }
         // FEAT-23: per-domain typosquatting tuning (single domain asset only).
         // Reads/writes the typosquat_* keys of asset.config that the scanner honours.
@@ -1225,19 +1340,19 @@ window.AI_APP_CONFIG = {
             var useCt = tc.typosquat_use_ct != null ? !!tc.typosquat_use_ct : true;
             var maxCt = tc.typosquat_max_ct != null ? tc.typosquat_max_ct : 40;
             typoH =
-                '<div class="ct-field-help" style="margin-top:14px;font-weight:600">' + esc(t("mon_typo.title")) + '</div>' +
-                    '<div id="typo-config" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">' +
-                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
-                    '<span style="flex:1">' + esc(t("mon_typo.max_variants")) + '</span>' +
-                    '<input type="number" id="typo-max-variants" min="1" max="500" value="' + esc(String(mv)) + '" style="width:90px">' +
+                '<div class="surface-field-help ct-mt-3 ct-strong">' + esc(t("mon_typo.title")) + '</div>' +
+                    '<div id="typo-config" class="ct-flex ct-body ct-gap-2 ct-mt-1">' +
+                    '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
+                    '<span class="ct-flex-1">' + esc(t("mon_typo.max_variants")) + '</span>' +
+                    '<input type="number" id="typo-max-variants" min="1" max="500" value="' + esc(String(mv)) + '" class="ct-w-90">' +
                     '</label>' +
-                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
+                    '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
                     '<input type="checkbox" id="typo-use-ct"' + (useCt ? " checked" : "") + '>' +
                     '<span>' + esc(t("mon_typo.use_ct")) + '</span>' +
                     '</label>' +
-                    '<label style="display:flex;align-items:center;gap:8px;font-size:0.85em">' +
-                    '<span style="flex:1">' + esc(t("mon_typo.max_ct")) + '</span>' +
-                    '<input type="number" id="typo-max-ct" min="0" max="200" value="' + esc(String(maxCt)) + '" style="width:90px">' +
+                    '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
+                    '<span class="ct-flex-1">' + esc(t("mon_typo.max_ct")) + '</span>' +
+                    '<input type="number" id="typo-max-ct" min="0" max="200" value="' + esc(String(maxCt)) + '" class="ct-w-90">' +
                     '</label>' +
                     '</div>';
         }
@@ -1246,7 +1361,7 @@ window.AI_APP_CONFIG = {
             : esc(first.value);
         ov.innerHTML =
             '<div class="ct-modal" style="width:520px">' +
-                '<div class="ct-modal-header"><span>' + esc(t("hosts.configure_scans")) + ' — ' + subtitle + '</span><button class="ct-modal-close" data-click="_closeScannersDialog">' + _icon("x", 18) + '</button></div>' +
+                '<div class="ct-modal-header"><span>' + esc(t("hosts.configure_scans")) + ' — ' + subtitle + '</span><button class="surface-modal-close" data-click="_closeScannersDialog">' + _icon("x", 18) + '</button></div>' +
                 '<div class="ct-modal-body">' +
                 '<div id="scanners-list" data-ids=\'' + _da.apply(null, ids) + '\'>' + listH + '</div>' +
                 typoH +
@@ -1258,12 +1373,12 @@ window.AI_APP_CONFIG = {
                 '</div>';
         // Stash the ids on the modal so the save handler knows what to patch
         ov.dataset.ids = JSON.stringify(ids);
-        ov.classList.add("open");
+        ov.hidden = false;
     };
     window._closeScannersDialog = function () {
         var ov = document.getElementById("scanners-overlay");
         if (ov)
-            ov.classList.remove("open");
+            ov.hidden = true;
     };
     window._saveScannersDialog = function () {
         var ov = document.getElementById("scanners-overlay");
@@ -1294,7 +1409,7 @@ window.AI_APP_CONFIG = {
                 patch.config = typoConfig;
             return SurfaceAPI.updateMonitored(id, patch);
         })).then(function () {
-            ov.classList.remove("open");
+            ov.hidden = true;
             showStatus(t("hosts.scanners_updated").replace("{n}", String(ids.length)));
             _bulkSelection = {};
             _loadAndRender();
@@ -1334,12 +1449,12 @@ window.AI_APP_CONFIG = {
         _updateMonitoredKindHelp();
         _renderScannerChecklist(a.enabled_scanners || null);
         _toggleFileShareConfig();
-        ov.classList.add("open");
+        ov.hidden = false;
     };
     window._closeMonitoredModal = function () {
         var ov = document.getElementById("monitored-overlay");
         if (ov)
-            ov.classList.remove("open");
+            ov.hidden = true;
     };
     window._saveMonitored = function () {
         var sel = document.querySelector('input[name="monitored-kind"]:checked');
@@ -1722,11 +1837,11 @@ window.AI_APP_CONFIG = {
             return f.created_at && new Date(f.created_at).getTime() > Date.now() - _DAY_MS;
         });
         var h = '<div class="dash-header">';
-        h += '<h2 style="margin:0">' + esc(t("dash.title")) + '</h2>';
+        h += '<h2 class="ct-m-0">' + esc(t("dash.title")) + '</h2>';
         h += '<div class="dash-actions">';
-        h += '<button class="btn-add btn-icon" data-click="_scanAllMonitored" title="' + esc(t("monitored.scan_all")) + '">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
-        h += '<button class="btn-add btn-icon" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
-        h += '<button class="btn-add btn-icon" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
+        h += '<button class="ct-btn mt-8" data-write data-click="_scanAllMonitored" title="' + esc(t("monitored.scan_all")) + '">' + _icon("search", 14) + ' ' + esc(t("monitored.scan_all")) + '</button>';
+        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_newMonitoredDialog">' + _icon("plus", 14) + ' ' + esc(t("monitored.add")) + '</button>';
+        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
         h += '</div></div>';
         // ── A. Critical banner ────────────────────────────────────
         h += _dashBanner(stats, recent24);
@@ -1778,7 +1893,14 @@ window.AI_APP_CONFIG = {
         return { lvl: "info", lbl: t("risk.tier_clean") };
     }
     function _statCard(value, label, cls) {
-        return '<div class="surface-stat"><div class="surface-stat-val ' + cls + '">' + value + '</div><div class="surface-stat-lbl">' + esc(label) + '</div></div>';
+        var _tone = { "stat-critical": "critical", "stat-high": "high", "stat-medium": "medium", "stat-low": "low", "stat-info": "info", "critical": "critical", "warning": "medium" };
+        var _t = _tone[cls] || "";
+        // A severity tone should light up only when the count is > 0 — a zero count
+        // stays neutral so a clean dashboard isn't a wall of coloured zeros.
+        if (_t && typeof value === "number" && value === 0)
+            _t = "";
+        var _dt = _t ? ' data-tone="' + _t + '"' : '';
+        return '<div class="ct-kpi" data-emphasis="value"' + _dt + '><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(label) + '</div><div class="ct-kpi-value">' + value + '</div></div></div>';
     }
     // ── A. Critical banner split into two dash-cards ──────────────
     function _dashBanner(stats, recent24) {
@@ -1796,15 +1918,10 @@ window.AI_APP_CONFIG = {
         h += '<div class="dash-card dash-card-alert dash-card-alert-' + leftState + '">';
         h += '<div class="dash-card-head">' + icon + ' <span>' + headline + '</span></div>';
         h += '<div class="dash-banner-counts">';
-        h += '<div class="dash-count-tile sev-critical" data-click="_dashGotoSeverity" data-args=\'["critical"]\'>';
-        h += '<div class="dash-count-val">' + crit + '</div><div class="dash-count-lbl">' + esc(t("sev.critical")) + '</div>';
-        h += '</div>';
-        h += '<div class="dash-count-tile sev-high" data-click="_dashGotoSeverity" data-args=\'["high"]\'>';
-        h += '<div class="dash-count-val">' + high + '</div><div class="dash-count-lbl">' + esc(t("sev.high")) + '</div>';
-        h += '</div>';
-        h += '<div class="dash-count-tile dash-count-recent" data-click="_dashGotoRecent">';
-        h += '<div class="dash-count-val">' + recent24.length + '</div><div class="dash-count-lbl">' + esc(t("dash.new_24h")) + '</div>';
-        h += '</div>';
+        // Severity-count tiles carry their tone only when the count is > 0.
+        h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (crit > 0 ? ' data-tone="critical"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["critical"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.critical")) + '</div><div class="ct-kpi-value">' + crit + '</div></div></div>';
+        h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (high > 0 ? ' data-tone="high"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["high"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.high")) + '</div><div class="ct-kpi-value">' + high + '</div></div></div>';
+        h += '<div class="ct-kpi ct-clickable" data-emphasis="value" data-tone="info" data-click="_dashGotoRecent"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("dash.new_24h")) + '</div><div class="ct-kpi-value">' + recent24.length + '</div></div></div>';
         h += '</div>';
         h += '</div>';
         // RIGHT CARD — top 3 exposed hosts
@@ -1815,7 +1932,7 @@ window.AI_APP_CONFIG = {
             topHosts.forEach(function (row) {
                 var sev = _SEV_ORDER[row.maxSev] || "info";
                 h += '<div class="dash-list-row" data-click="_dashGotoHost" data-args=\'' + _da(row.host) + '\'>';
-                h += '<span class="sev-badge sev-' + sev + '">' + esc(t("sev." + sev)) + '</span>';
+                h += '<span class="ct-badge" data-tone="' + _surfaceTone(sev) + '">' + esc(t("sev." + sev)) + '</span>';
                 h += '<span class="dash-list-main mono" title="' + esc(row.host) + '">' + esc(row.host) + '</span>';
                 h += '<span class="dash-list-count">' + row.total + '</span>';
                 h += '</div>';
@@ -1925,15 +2042,15 @@ window.AI_APP_CONFIG = {
             svg += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - MB + 16) + '" text-anchor="middle" font-size="10" fill="var(--ct-ink-2)">' + esc(d.label) + '</text>';
         });
         svg += '</svg>';
-        var legend = '<div class="dash-timeline-legend" style="display:flex;gap:10px;justify-content:center;margin-top:4px;font-size:0.72em;flex-wrap:wrap">';
+        var legend = '<div class="dash-timeline-legend ct-gap-2 ct-justify-center ct-mt-1 ct-row-wrap">';
         _SEV_ORDER.forEach(function (sev) {
             var h = sev === "critical" ? 3 : 2;
-            legend += '<span style="display:flex;align-items:center;gap:4px">' +
+            legend += '<span class="ct-flex ct-items-center ct-gap-1">' +
                 '<span style="width:16px;height:' + h + 'px;border-radius:1px;background:' + colors[sev] + '"></span>' +
                 esc(t("sev." + sev)) +
                 '</span>';
         });
-        legend += '<span style="display:flex;align-items:center;gap:3px">' +
+        legend += '<span class="ct-flex ct-items-center ct-gap-1">' +
             '<span style="width:14px;height:0;border-top:1px dashed var(--ct-ink-2)"></span>' +
             esc(t("dash.timeline_triaged")) +
             '</span>';
@@ -1956,7 +2073,7 @@ window.AI_APP_CONFIG = {
             rows.forEach(function (row) {
                 var sev = _SEV_ORDER[row.maxSev] || "info";
                 h += '<div class="dash-list-row" data-click="_dashGotoHost" data-args=\'' + _da(row.host) + '\'>';
-                h += '<span class="sev-badge sev-' + sev + '">' + esc(sev) + '</span>';
+                h += '<span class="ct-badge" data-tone="' + _surfaceTone(sev) + '">' + esc(sev) + '</span>';
                 h += '<span class="dash-list-main" title="' + esc(row.host) + '">' + esc(row.host) + '</span>';
                 h += '<span class="dash-list-count">' + row.total + '</span>';
                 h += '</div>';
@@ -2035,12 +2152,12 @@ window.AI_APP_CONFIG = {
         h += '<div class="dash-surface-bars">';
         h += '<div class="dash-surface-row">';
         h += '<span class="dash-surface-lbl">' + esc(t("hosts.source.auto")) + '</span>';
-        h += '<div class="dash-bar-bg"><div class="dash-bar-fill" style="width:' + (srcTotal ? src.auto / srcTotal * 100 : 0) + '%;background:#a855f7"></div></div>';
+        h += '<div class="dash-bar-bg"><div class="dash-bar-fill" style="width:' + (srcTotal ? src.auto / srcTotal * 100 : 0) + '%;background:var(--ct-accent)"></div></div>';
         h += '<span class="dash-surface-count">' + src.auto + '</span>';
         h += '</div>';
         h += '<div class="dash-surface-row">';
         h += '<span class="dash-surface-lbl">' + esc(t("hosts.source.manual")) + '</span>';
-        h += '<div class="dash-bar-bg"><div class="dash-bar-fill" style="width:' + (srcTotal ? src.manual / srcTotal * 100 : 0) + '%;background:#60a5fa"></div></div>';
+        h += '<div class="dash-bar-bg"><div class="dash-bar-fill" style="width:' + (srcTotal ? src.manual / srcTotal * 100 : 0) + '%;background:var(--ct-info)"></div></div>';
         h += '<span class="dash-surface-count">' + src.manual + '</span>';
         h += '</div>';
         h += '</div>';
@@ -2170,16 +2287,15 @@ window.AI_APP_CONFIG = {
         // The pills + table + bulk bar live inside #findings-body-wrap and are
         // refreshed by _refreshFindingsBody() on every filter/search change,
         // leaving the search input alive in the DOM so focus/caret is preserved.
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + esc(t("findings.title")) + '</h2>';
-        h += '<span style="flex:1"></span>';
-        h += '<button class="btn-add btn-icon" data-click="_quickScanDialog">' + _icon("search", 14) + ' ' + esc(t("findings.quick_scan")) + '</button>';
-        h += '<button class="btn-add btn-icon" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + esc(t("findings.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
+        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_bulkImportDialog">' + _icon("list", 14) + ' ' + esc(t("findings.bulk_import")) + '</button>';
         h += '</div>';
-        h += '<div class="surface-filters" style="margin-bottom:12px">';
-        h += '<input type="text" class="surface-filter" placeholder="' + esc(t("findings.search.placeholder")) + '" style="min-width:320px;flex:1"';
+        h += '<div class="surface-filters ct-mb-3">';
+        h += '<input type="text" class="surface-filter ct-minw-320 ct-flex-1" placeholder="' + esc(t("findings.search.placeholder")) + '"';
         h += ' id="findings-search" value="' + esc(_findingsSearch) + '" data-input="_setFindingsSearch" data-pass-value autocomplete="off">';
-        h += '<button class="btn-add" id="findings-search-clear" data-click="_clearFindingsSearch"' + (_findingsSearch ? '' : ' style="display:none"') + '>x</button>';
+        h += '<button class="ct-btn mt-8 ct-hidden" data-write data-variant="primary" id="findings-search-clear" data-click="_clearFindingsSearch"' + (_findingsSearch ? '' : '') + '>x</button>';
         h += '</div>';
         h += '<div id="findings-body-wrap"></div>';
         c.innerHTML = h;
@@ -2254,13 +2370,13 @@ window.AI_APP_CONFIG = {
             if (_filterScanners.length && _filterScanners.indexOf(f.scanner) < 0)
                 return false;
             if (searchQ) {
-                var hay = ((f.title || "") + " " + (f.target || "") + " " + (f.description || "") + " " + (f.scanner || "") + " " + (f.type || "")).toLowerCase();
+                var hay = (_findingTitle(f) + " " + (f.target || "") + " " + _findingDesc(f) + " " + (f.scanner || "") + " " + (f.type || "")).toLowerCase();
                 if (hay.indexOf(searchQ) < 0)
                     return false;
             }
             return true;
         });
-        h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + filtered.length + ' / ' + _findings.length + ' ' + esc(t("findings.count")) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _findings.length + ' ' + esc(t("findings.count")) + '</div>';
         if (!filtered.length) {
             h += '<div class="empty-state">' + esc(t("findings.empty")) + '</div>';
             wrap.innerHTML = h;
@@ -2286,17 +2402,17 @@ window.AI_APP_CONFIG = {
             bulk: { scope: "surface-findings" },
             columns: [
                 { key: "severity", label: t("findings.col.severity"), width: "80px",
-                    render: function (f) { return '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span>'; } },
+                    render: function (f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.severity) + '">' + esc(f.severity) + '</span>'; } },
                 { key: "type", label: t("findings.col.type"),
-                    render: function (f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type || "") + '</span>'; } },
+                    render: function (f) { return '<span class="ct-text-label ct-muted">' + esc(f.type || "") + '</span>'; } },
                 { key: "title", label: t("findings.col.title"),
-                    render: function (f) { return '<span style="font-weight:600">' + esc(f.title || "") + '</span>'; } },
+                    render: function (f) { return '<span class="ct-strong">' + esc(_findingTitle(f)) + '</span>'; } },
                 { key: "target", label: t("findings.col.target"),
-                    render: function (f) { return '<span style="font-size:0.82em;color:var(--text-muted);word-break:break-all">' + esc(f.target || "-") + '</span>'; } },
+                    render: function (f) { return '<span class="ct-text-label ct-journal-sep ct-break-all">' + esc(f.target || "-") + '</span>'; } },
                 { key: "status", label: t("findings.col.status"), width: "110px",
-                    render: function (f) { return '<span class="status-badge status-' + esc(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
+                    render: function (f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
                 { key: "created_at", label: t("findings.col.datetime"), width: "130px",
-                    render: function (f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
+                    render: function (f) { return '<span class="ct-text-label ct-muted ct-nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
             ],
             actions: [
                 { icon: "check", label: t("status.to_fix"), onClick: "_quickTriageRow",
@@ -2339,7 +2455,7 @@ window.AI_APP_CONFIG = {
         if (!ids.length)
             return;
         if (ids.length > 10000) {
-            showStatus("Sélection trop grande : " + ids.length + " findings (max 10000 par mesure). Réduisez la sélection.", true);
+            showStatus("Sélection trop grande : " + ids.length + " findings (max 10000 par remédiation). Réduisez la sélection.", true);
             return;
         }
         var selected = _findings.filter(function (f) { return ids.indexOf(f.id) >= 0; });
@@ -2348,22 +2464,22 @@ window.AI_APP_CONFIG = {
             var v = (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
             return v;
         };
-        var defaultTitle = selected.length === 1 ? selected[0].title
+        var defaultTitle = selected.length === 1 ? _findingTitle(selected[0])
             : (t("bulk.measure_default_title") || "Mesure corrective") + " (" + ids.length + " findings)";
-        var defaultDesc = selected.map(function (f) { return "- " + (f.title || ""); }).join("\n");
-        var helpText = interp("bulk.measure_help", "UNE mesure sera créée et liée aux {n} findings sélectionnés.");
-        var summary = '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:6px">' + esc(helpText) + '</div>'
-            + '<div style="font-size:0.82em;color:var(--text-muted);font-weight:600;margin-top:4px">'
+        var defaultDesc = selected.map(function (f) { return "- " + _findingTitle(f); }).join("\n");
+        var helpText = interp("bulk.measure_help", "UNE remédiation sera créée et liée aux {n} findings sélectionnés.");
+        var summary = '<div class="ct-text-label ct-muted ct-mb-1">' + esc(helpText) + '</div>'
+            + '<div class="ct-text-label ct-muted ct-strong ct-mt-1">'
             + esc("Findings couverts") + ' (' + ids.length + ')</div>'
-            + '<div style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px">'
+            + '<div class="ct-maxh-150 ct-scroll-y ct-bordered ct-r-md ct-p-2">'
             + selected.map(function (f) {
-                return '<div style="padding:2px 0"><span class="sev-badge sev-' + esc(f.severity) + '">'
-                    + esc(f.severity) + '</span> ' + esc((f.title || "").substring(0, 80)) + '</div>';
+                return '<div class="ct-py-1 ct-px-0"><span class="ct-badge" data-tone="' + _surfaceTone(f.severity) + '">'
+                    + esc(f.severity) + '</span> ' + esc(_findingTitle(f).substring(0, 80)) + '</div>';
             }).join("")
             + '</div>';
         ct_measure_modal.open({ title: defaultTitle, description: defaultDesc }, {
-            title: interp("bulk.measure_title", "Créer une mesure corrective couvrant {n} finding(s)"),
-            saveLabel: interp("bulk.measure_confirm", "Créer la mesure"),
+            title: interp("bulk.measure_title", "Créer une remédiation couvrant {n} finding(s)"),
+            saveLabel: interp("bulk.measure_confirm", "Créer la remédiation"),
             hideFields: ["type", "statut"],
             ownerPicker: { pickerId: "surface-bulk-owner", directoryUrl: "api/directory" },
             extraContent: summary
@@ -2379,7 +2495,7 @@ window.AI_APP_CONFIG = {
             }).then(function (r) {
                 var msg = r.updated + " finding(s) → " + (t("status.to_fix") || "À corriger");
                 if (r.measures_created)
-                    msg += " (" + r.measures_created + " mesure(s) créée(s))";
+                    msg += " (" + r.measures_created + " remédiation(s) créée(s))";
                 showStatus(msg);
                 ct_bulkbar.clear(scope);
                 _loadAndRender();
@@ -2410,7 +2526,7 @@ window.AI_APP_CONFIG = {
         var interp = function (key, fallback) {
             return (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
         };
-        var body = '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px">'
+        var body = '<div class="ct-text-label ct-muted ct-mb-3">'
             + esc(interp("bulk.fp_help", "La justification sera attachée à chaque finding pour audit."))
             + '</div>'
             + '<div class="ct-measure-form">'
@@ -2471,7 +2587,7 @@ window.AI_APP_CONFIG = {
         };
         var style = (statut && palette[statut]) || palette.a_faire;
         var label = t("measures.status." + statut) || statut || "";
-        return '<span class="sev-badge" style="' + style + '">' + esc(label) + '</span>';
+        return '<span class="ct-badge" data-tone="neutral" style="' + style + '">' + esc(label) + '</span>';
     }
     // All findings filter toggles refresh ONLY the body wrapper, leaving the
     // search input alive so keyboard focus/caret stays with the user.
@@ -2532,7 +2648,8 @@ window.AI_APP_CONFIG = {
         var linked = null;
         if (f.measure_id)
             linked = _measures.find(function (x) { return x.id === f.measure_id; }) || null;
-        c.innerHTML = ct_finding_view.render(f, {
+        var fd = Object.assign({}, f, { title: _findingTitle(f), description: _findingDesc(f) });
+        c.innerHTML = ct_finding_view.render(fd, {
             backHandler: "_backToFindings",
             triageHandler: "_triageDetail",
             aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
@@ -2554,7 +2671,7 @@ window.AI_APP_CONFIG = {
         if (typeof window._aiIsEnabled !== "function" || !window._aiIsEnabled()) {
             box.style.display = "block";
             box.innerHTML = '<strong>' + esc(t("fd.ai_not_configured")) + '</strong><br>' +
-                '<span style="font-size:0.85em;color:var(--text-muted)">' + esc(t("fd.ai_open_settings")) + '</span>';
+                '<span class="ct-text-meta ct-muted">' + esc(t("fd.ai_open_settings")) + '</span>';
             return;
         }
         box.style.display = "block";
@@ -2577,21 +2694,21 @@ window.AI_APP_CONFIG = {
             var conf = Math.round((parsed.confidence || 0) * 100);
             var sev = parsed.severity_recommendation || "";
             var html = '';
-            html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_verdict")) + ' :</strong> ';
+            html += '<div class="ct-mb-2"><strong>' + esc(t("fd.ai_verdict")) + ' :</strong> ';
             html += fp
-                ? '<span style="color:var(--ct-high)">' + esc(t("fd.ai_fp_probable")) + ' (' + conf + '%)</span>'
-                : '<span style="color:var(--ct-low-ink)">' + esc(t("fd.ai_genuine")) + ' (' + conf + '%)</span>';
+                ? '<span class="ct-text-high">' + esc(t("fd.ai_fp_probable")) + ' (' + conf + '%)</span>'
+                : '<span class="ct-text-low-ink">' + esc(t("fd.ai_genuine")) + ' (' + conf + '%)</span>';
             html += ' &mdash; <span>' + esc(t("fd.ai_sev_rec")) + ' : <strong>' + esc(sev) + '</strong></span></div>';
             if (parsed.summary) {
-                html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_summary")) + ' :</strong><br>' + esc(parsed.summary) + '</div>';
+                html += '<div class="ct-mb-2"><strong>' + esc(t("fd.ai_summary")) + ' :</strong><br>' + esc(parsed.summary) + '</div>';
             }
             if (parsed.remediation && parsed.remediation.length) {
-                html += '<div style="margin-bottom:8px"><strong>' + esc(t("fd.ai_remediation")) + ' :</strong><ul style="margin:4px 0 0 20px">';
+                html += '<div class="ct-mb-2"><strong>' + esc(t("fd.ai_remediation")) + ' :</strong><ul style="margin:var(--ct-s1) 0 0 var(--ct-s5)">';
                 parsed.remediation.forEach(function (step) { html += '<li>' + esc(step) + '</li>'; });
                 html += '</ul></div>';
             }
             if (parsed.references && parsed.references.length) {
-                html += '<div><strong>' + esc(t("fd.ai_refs")) + ' :</strong><ul style="margin:4px 0 0 20px;font-size:0.82em">';
+                html += '<div><strong>' + esc(t("fd.ai_refs")) + ' :</strong><ul style="margin:var(--ct-s1) 0 0 var(--ct-s5);font-size:var(--ct-text-label)">';
                 parsed.references.forEach(function (ref) { if (/^https?:\/\//i.test(ref))
                     html += '<li><a href="' + esc(ref) + '" target="_blank" rel="noopener">' + esc(ref) + '</a></li>'; });
                 html += '</ul></div>';
@@ -2645,16 +2762,6 @@ window.AI_APP_CONFIG = {
             }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
         });
     };
-    window._quickScanDialog = function () {
-        var host = prompt(t("prompt.quick_scan_host"), "");
-        if (!host)
-            return;
-        showStatus(t("mon_modal.scan_in_progress"));
-        SurfaceAPI.quickScan(host).then(function (r) {
-            showStatus(r.findings_created + " " + t("prompt.findings_on") + " " + r.target);
-            _loadAndRender();
-        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
-    };
     // ── Bulk import modal ───────────────────────────────────────────
     // A rich dialog that documents the expected JSON schema inline,
     // offers a downloadable template, accepts either file upload or
@@ -2700,7 +2807,7 @@ window.AI_APP_CONFIG = {
         var sampleJson = JSON.stringify(_IMPORT_TEMPLATE, null, 2);
         var h = "";
         // Format spec block
-        h += '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:10px">' + esc(tt("bulk_import.intro")) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + esc(tt("bulk_import.intro")) + '</div>';
         h += '<details class="bulk-import-spec">';
         h += '<summary>' + esc(tt("bulk_import.spec_title")) + '</summary>';
         h += '<table class="bulk-import-table"><thead><tr><th>' + esc(tt("bulk_import.col_field")) + '</th><th>' + esc(tt("bulk_import.col_required")) + '</th><th>' + esc(tt("bulk_import.col_description")) + '</th></tr></thead><tbody>';
@@ -2723,34 +2830,34 @@ window.AI_APP_CONFIG = {
         fields.forEach(function (f) {
             h += '<tr>';
             h += '<td><code>' + esc(f.name) + '</code></td>';
-            h += '<td style="text-align:center">' + (f.required ? '<span style="color:var(--ct-critical);font-weight:600">*</span>' : '–') + '</td>';
+            h += '<td class="ct-ta-c">' + (f.required ? '<span class="ct-text-critical ct-strong">*</span>' : '–') + '</td>';
             h += '<td>' + esc(f.desc) + '</td>';
             h += '</tr>';
         });
         h += '</tbody></table>';
-        h += '<div style="font-size:0.75em;color:var(--text-muted);margin-top:6px">' + esc(tt("bulk_import.wrapper_note")) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mt-1">' + esc(tt("bulk_import.wrapper_note")) + '</div>';
         h += '</details>';
         // Sample + actions
-        h += '<div class="ct-field" style="margin-top:14px">';
-        h += '<label class="ct-field-lbl">' + esc(tt("bulk_import.sample_label")) + '</label>';
+        h += '<div class="ct-field ct-mt-3">';
+        h += '<label class="surface-field-lbl">' + esc(tt("bulk_import.sample_label")) + '</label>';
         h += '<pre id="bulk-import-sample" class="bulk-import-sample">' + esc(sampleJson) + '</pre>';
-        h += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
-        h += '<button type="button" class="btn-add btn-icon" id="bulk-import-download">' + _icon("check", 12) + ' ' + esc(tt("bulk_import.download_template")) + '</button>';
-        h += '<button type="button" class="btn-add btn-icon" id="bulk-import-copy">' + _icon("list", 12) + ' ' + esc(tt("bulk_import.copy_sample")) + '</button>';
-        h += '<button type="button" class="btn-add btn-icon" id="bulk-import-use-sample">' + _icon("arrow_right", 12) + ' ' + esc(tt("bulk_import.use_sample")) + '</button>';
+        h += '<div class="ct-flex ct-gap-1 ct-mt-1 ct-row-wrap">';
+        h += '<button type="button" class="ct-btn mt-8" data-write data-variant="primary" id="bulk-import-download">' + _icon("check", 12) + ' ' + esc(tt("bulk_import.download_template")) + '</button>';
+        h += '<button type="button" class="ct-btn mt-8" data-write data-variant="primary" id="bulk-import-copy">' + _icon("list", 12) + ' ' + esc(tt("bulk_import.copy_sample")) + '</button>';
+        h += '<button type="button" class="ct-btn mt-8" data-write data-variant="primary" id="bulk-import-use-sample">' + _icon("arrow_right", 12) + ' ' + esc(tt("bulk_import.use_sample")) + '</button>';
         h += '</div>';
         h += '</div>';
         // Upload or paste
-        h += '<div class="ct-field" style="margin-top:14px">';
-        h += '<label class="ct-field-lbl">' + esc(tt("bulk_import.upload_label")) + '</label>';
+        h += '<div class="ct-field ct-mt-3">';
+        h += '<label class="surface-field-lbl">' + esc(tt("bulk_import.upload_label")) + '</label>';
         h += '<input type="file" class="ct-input" id="bulk-import-file" accept=".json,application/json">';
         h += '</div>';
         h += '<div class="ct-field">';
-        h += '<label class="ct-field-lbl">' + esc(tt("bulk_import.paste_label")) + '</label>';
-        h += '<textarea class="ct-input" id="bulk-import-textarea" rows="10" style="font-family:monospace;font-size:0.82em" placeholder=\'[{"title":"...","severity":"high","target":"..."}]\'></textarea>';
+        h += '<label class="surface-field-lbl">' + esc(tt("bulk_import.paste_label")) + '</label>';
+        h += '<textarea class="ct-input ct-mono ct-text-label" id="bulk-import-textarea" rows="10" placeholder=\'[{"title":"...","severity":"high","target":"..."}]\'></textarea>';
         h += '</div>';
-        h += '<div id="bulk-import-validation" class="bulk-import-feedback" style="display:none"></div>';
-        h += '<div class="ct-error" id="bulk-import-error" style="display:none"></div>';
+        h += '<div id="bulk-import-validation" class="bulk-import-feedback ct-hidden"></div>';
+        h += '<div class="surface-error ct-hidden" id="bulk-import-error"></div>';
         return h;
     }
     function _ensureBulkImportModal() {
@@ -2759,6 +2866,7 @@ window.AI_APP_CONFIG = {
             ov = document.createElement("div");
             ov.id = "bulk-import-overlay";
             ov.className = "ct-modal-overlay";
+            ov.hidden = true;
             document.body.appendChild(ov);
             var _md = null;
             ov.addEventListener("mousedown", function (e) { _md = e.target; });
@@ -2768,7 +2876,7 @@ window.AI_APP_CONFIG = {
         var tt = typeof t === "function" ? t : function (k) { return k; };
         ov.innerHTML =
             '<div class="ct-modal" style="max-width:720px">' +
-                '<div class="ct-modal-header"><span>' + esc(tt("bulk_import.title")) + '</span><button class="ct-modal-close" data-click="_closeBulkImportModal">' + _icon("x", 18) + '</button></div>' +
+                '<div class="ct-modal-header"><span>' + esc(tt("bulk_import.title")) + '</span><button class="surface-modal-close" data-click="_closeBulkImportModal">' + _icon("x", 18) + '</button></div>' +
                 '<div class="ct-modal-body" id="bulk-import-body"></div>' +
                 '<div class="ct-modal-footer">' +
                 '<button class="ct-modal-btn" data-click="_closeBulkImportModal">' + esc(tt("action.cancel")) + '</button>' +
@@ -2783,7 +2891,7 @@ window.AI_APP_CONFIG = {
     window._closeBulkImportModal = function () {
         var ov = document.getElementById("bulk-import-overlay");
         if (ov)
-            ov.classList.remove("open");
+            ov.hidden = true;
     };
     function _wireBulkImportHandlers() {
         document.getElementById("bulk-import-download").onclick = function () {
@@ -2919,7 +3027,7 @@ window.AI_APP_CONFIG = {
     }
     window._bulkImportDialog = function () {
         var ov = _ensureBulkImportModal();
-        ov.classList.add("open");
+        ov.hidden = false;
     };
     // ═══════════════════════════════════════════════════════════════
     // MEASURES
@@ -2929,16 +3037,16 @@ window.AI_APP_CONFIG = {
         var done = _measures.filter(function (m) { return m.statut === "termine"; }).length;
         var inProg = _measures.filter(function (m) { return m.statut === "en_cours"; }).length;
         var todo = total - done - inProg;
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + esc(t("measures.title")) + '</h2>';
-        h += '<span style="flex:1"></span>';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + esc(t("measures.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
         if (total > 0) {
-            h += '<span class="sev-badge" style="background:var(--ct-low-tint);color:var(--ct-low-ink)">' + done + ' ' + esc(t("measures.status.termine")) + '</span>';
-            h += '<span class="sev-badge" style="background:var(--ct-info-tint);color:var(--ct-info)">' + inProg + ' ' + esc(t("measures.status.en_cours")) + '</span>';
-            h += '<span class="sev-badge" style="background:var(--ct-surface-2);color:var(--ct-ink-2)">' + todo + ' ' + esc(t("measures.status.a_faire")) + '</span>';
+            h += '<span class="ct-badge ct-bg-low-tint ct-text-low-ink" data-tone="neutral">' + done + ' ' + esc(t("measures.status.termine")) + '</span>';
+            h += '<span class="ct-badge ct-bg-info-tint ct-text-info" data-tone="neutral">' + inProg + ' ' + esc(t("measures.status.en_cours")) + '</span>';
+            h += '<span class="ct-badge ct-bg-alt ct-muted" data-tone="neutral">' + todo + ' ' + esc(t("measures.status.a_faire")) + '</span>';
         }
         h += '</div>';
-        h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("measures.help")) + '</div>';
+        h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("measures.help")) + '</div>';
         if (!total) {
             h += '<div class="empty-state">' + esc(t("measures.empty")) + '</div>';
             c.innerHTML = h;
@@ -2956,7 +3064,7 @@ window.AI_APP_CONFIG = {
             },
             columns: [
                 { key: "id", label: t("measures.col.id"), width: "110px",
-                    render: function (m) { return '<span style="font-family:monospace;font-size:0.85em;font-weight:600">' + esc(m.id) + '</span>'; } },
+                    render: function (m) { return '<span class="ct-mono ct-text-meta ct-strong">' + esc(m.id) + '</span>'; } },
                 { key: "title", label: t("measures.col.title"),
                     render: function (m) { return esc(m.title || ""); } },
                 { key: "finding_ids", label: t("measures.col.findings") || "Findings", width: "90px",
@@ -2974,7 +3082,7 @@ window.AI_APP_CONFIG = {
                             return "";
                         var overdue = m.statut !== "termine" && m.echeance < today;
                         return overdue
-                            ? '<span style="color:var(--ct-critical);font-weight:600">' + esc(m.echeance) + ' ⚠</span>'
+                            ? '<span class="ct-text-critical ct-strong">' + esc(m.echeance) + ' ⚠</span>'
                             : esc(m.echeance);
                     } }
             ]
@@ -2982,13 +3090,13 @@ window.AI_APP_CONFIG = {
         c.innerHTML = h;
         ct_bulkbar.attach({
             scope: "surface-measures",
-            label: "{n} mesure(s) sélectionnée(s)",
+            label: "{n} remédiation(s) sélectionnée(s)",
             actions: [
                 { id: "done", icon: "check", label: t("measures.status.termine") || "Terminé", variant: "success",
                     onClick: "_bulkSurfaceMeasuresDone" },
                 { id: "delete", icon: "trash", label: t("bulk.delete") || "Supprimer", danger: true,
                     onClick: "_bulkSurfaceMeasuresDelete",
-                    confirm: { title: "Supprimer {n} mesure(s) ?", message: "Cette action est irréversible." } }
+                    confirm: { title: "Supprimer {n} remédiation(s) ?", message: "Cette action est irréversible." } }
             ]
         });
         ct_bulkbar.update("surface-measures");
@@ -3013,7 +3121,7 @@ window.AI_APP_CONFIG = {
             },
             onDelete: function () {
                 ct_modal.confirm({
-                    title: "Supprimer la mesure",
+                    title: "Supprimer la remédiation",
                     message: "Cette action est irréversible.",
                     danger: true
                 }).then(function (ok) {
@@ -3040,7 +3148,7 @@ window.AI_APP_CONFIG = {
             return;
         Promise.all(ids.map(function (id) { return SurfaceAPI.updateMeasure(id, { statut: "termine" }); }))
             .then(function () {
-            showStatus(ids.length + " " + (t("measures.marked_done") || "mesure(s) terminée(s)"));
+            showStatus(ids.length + " " + (t("measures.marked_done") || "remédiation(s) terminée(s)"));
             ct_bulkbar.clear(scope);
             _loadAndRender();
         })
@@ -3052,7 +3160,7 @@ window.AI_APP_CONFIG = {
             return;
         Promise.all(ids.map(function (id) { return SurfaceAPI.deleteMeasure(id); }))
             .then(function () {
-            showStatus(ids.length + " " + (t("measures.deleted") || "mesure(s) supprimée(s)"));
+            showStatus(ids.length + " " + (t("measures.deleted") || "remédiation(s) supprimée(s)"));
             ct_bulkbar.clear(scope);
             _loadAndRender();
         })
@@ -3111,17 +3219,100 @@ window.AI_APP_CONFIG = {
             return a.kind === "file_share" && _shareHostname(a.value) === k;
         }).sort(function (a, b) { return (a.value || "").localeCompare(b.value || ""); });
     }
-    // Does a finding's target belong to the given host key?
-    function _findingMatchesHost(target, key) {
-        var t = target || "";
+    // Host/IP part of a finding target, minus any trailing :port. Lower-cased.
+    // "93.184.216.34:443" -> "93.184.216.34" ; "host.tld:8080" -> "host.tld".
+    function _targetHostPart(target) {
+        var t = (target || "").trim();
+        if (!t)
+            return "";
         if (/^(\\\\|\/\/|smb:\/\/)/i.test(t))
-            return _shareHostname(t) === String(key).toLowerCase();
-        return t === key || t.indexOf(key + ":") === 0;
+            return _shareHostname(t);
+        var m = t.match(/^(.*):(\d+)$/); // strip a trailing :<port> (greedy — IPv6-safe enough)
+        return (m ? m[1] : t).toLowerCase();
+    }
+    // IPv4 membership test: is `ip` inside `cidr` (a.b.c.d/n) ? false for
+    // non-IPv4 addresses or malformed CIDR (so hostnames simply don't match).
+    function _ipInCidr(ip, cidr) {
+        if (!ip || !cidr || cidr.indexOf("/") < 0)
+            return false;
+        var parts = cidr.split("/");
+        var bits = parseInt(parts[1], 10);
+        if (isNaN(bits) || bits < 0 || bits > 32)
+            return false;
+        var toInt = function (s) {
+            var o = (s || "").split(".");
+            if (o.length !== 4)
+                return null;
+            var n = 0;
+            for (var i = 0; i < 4; i++) {
+                var v = parseInt(o[i], 10);
+                if (String(v) !== o[i] || v < 0 || v > 255)
+                    return null;
+                n = (n * 256) + v;
+            }
+            return n >>> 0;
+        };
+        var ipN = toInt(ip), netN = toInt(parts[0]);
+        if (ipN === null || netN === null)
+            return false;
+        var mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+        return ((ipN & mask) >>> 0) === ((netN & mask) >>> 0);
+    }
+    // Does a finding belong to a monitored asset? Scanners key findings
+    // differently: nmap/discovery put the resolved IP in `target` (the hostname
+    // only survives in evidence.hostname), while tls/headers/quick-scan put the
+    // hostname. We reconcile by matching on ANY of: the target host/ip part, the
+    // evidence hostname, or the evidence/target IP against the asset's resolved_ip.
+    // Domains roll up their subdomains; ip_ranges match by CIDR containment.
+    function _findingMatchesAsset(f, a) {
+        var target = f.target || "";
+        var ev = f.evidence || {};
+        var evHost = String(ev.hostname || ev.host || "").toLowerCase();
+        var evAddr = String(ev.address || "").toLowerCase();
+        var hostPart = _targetHostPart(target);
+        var val = (a.value || "").toLowerCase();
+        if (a.kind === "file_share") {
+            return _shareHostname(target) === _shareHostname(a.value);
+        }
+        if (a.kind === "domain") {
+            // exact domain, or any subdomain of it (rollup): "x.y.domain".
+            var isSub = function (n) {
+                return !!n && (n === val || (n.length > val.length + 1 && n.slice(-(val.length + 1)) === "." + val));
+            };
+            return isSub(hostPart) || isSub(evHost);
+        }
+        if (a.kind === "ip_range") {
+            // exact CIDR (e.g. discovery_summary target) or an IP inside the range.
+            return hostPart === val || _ipInCidr(hostPart, a.value) || _ipInCidr(evAddr, a.value);
+        }
+        // host — hostname or IP, direct or via the asset's cached resolved_ip.
+        if (hostPart === val || evHost === val)
+            return true;
+        var rip = (a.resolved_ip || "").toLowerCase();
+        if (rip && (hostPart === rip || evAddr === rip))
+            return true;
+        return false;
+    }
+    // A host plus its same-IP aliases: findings keyed by a shared resolved IP
+    // belong to all of them, so a card and its detail count/list the same set.
+    function _assetAliases(a) {
+        if (a.kind !== "host" || !a.resolved_ip)
+            return [];
+        return (_monitored || []).filter(function (x) {
+            return x.kind === "host" && x.id !== a.id && x.resolved_ip === a.resolved_ip;
+        });
+    }
+    function _assetGroup(a) {
+        return [a].concat(_assetAliases(a));
     }
     // Assets shown as cards in the Hosts view: every host, plus one card per
     // file-share hostname that isn't already a monitored host (its findings would
     // otherwise be invisible). When a host of the same name exists, the share's
     // findings already roll up onto that host card, so we don't duplicate it.
+    // Disabled DOMAINS are also surfaced here (as greyed cards in the disabled
+    // section) so an operator can see and re-enable a domain they turned off
+    // without leaving the Hosts view; enabled domains stay in the Surveillance
+    // table only (this view is host-centric).
     function _hostsViewAssets() {
         var hostAssets = _monitored.filter(function (a) { return a.kind === "host"; });
         var hostNames = {};
@@ -3136,24 +3327,36 @@ window.AI_APP_CONFIG = {
             seenShare[hn] = true;
             return true;
         });
-        return hostAssets.concat(shareAssets);
+        var disabledDomains = _monitored.filter(function (a) {
+            return a.kind === "domain" && a.enabled === false;
+        });
+        return hostAssets.concat(shareAssets, disabledDomains);
     }
-    function _countFindingsByHost(hostValue) {
-        // `total`          — all findings on this host (audit)
-        // `active`         — new/to_fix + not info (actionable work)
-        // `open`           — displayed as "N à traiter" — MUST exclude info
-        //                    so informational findings (tls_valid, scan_clean,
-        //                    ct_discovery, shodan_no_data...) never drive an
-        //                    alert requiring triage.
-        // `critical..info` — per-severity counts of new/to_fix only
-        // `false_positive` / `fixed` — separated for audit display
+    // Aggregate finding counts over a set of assets (a host + its aliases, or a
+    // domain + itself). A finding matching several assets in the set is counted
+    // ONCE (union), so card and detail totals never double up.
+    //   `total`          — all findings on these assets (audit)
+    //   `active`         — new/to_fix + not info (actionable work)
+    //   `open`           — displayed as "N à traiter" — MUST exclude info so
+    //                      informational findings (tls_valid, scan_clean,
+    //                      ct_discovery, shodan_no_data...) never require triage.
+    //   `critical..info` — per-severity counts of new/to_fix only
+    //   `false_positive` / `fixed` — separated for audit display
+    function _countFindingsForAssets(assets) {
         var out = {
             total: 0, active: 0, open: 0,
             critical: 0, high: 0, medium: 0, low: 0, info: 0,
             false_positive: 0, fixed: 0,
         };
         _findings.forEach(function (f) {
-            if (!_findingMatchesHost(f.target || "", hostValue))
+            var hit = false;
+            for (var i = 0; i < assets.length; i++) {
+                if (_findingMatchesAsset(f, assets[i])) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit)
                 return;
             out.total++;
             if (f.status === "false_positive") {
@@ -3174,24 +3377,29 @@ window.AI_APP_CONFIG = {
         });
         return out;
     }
+    // Single-asset convenience wrapper (does NOT fold in aliases — callers that
+    // want the shared-IP rollup pass _assetGroup(a) to _countFindingsForAssets).
+    function _countFindingsByHost(a) {
+        return _countFindingsForAssets([a]);
+    }
     function _renderHosts(c) {
         if (_selectedHost) {
             _renderHostDetail(c);
             return;
         }
         var hosts = _hostsViewAssets();
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<h2 style="margin:0">' + esc(t("hosts.title")) + '</h2>';
-        h += '<span style="flex:1"></span>';
-        h += '<span style="font-size:0.78em;color:var(--text-muted)">' + hosts.length + ' ' + esc(t("hosts.count")) + '</span>';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        h += '<h2 class="ct-m-0">' + esc(t("hosts.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
+        h += '<span class="ct-text-label ct-muted">' + hosts.length + ' ' + esc(t("hosts.count")) + '</span>';
         h += '</div>';
-        h += '<div style="font-size:0.85em;color:var(--text-muted);margin-bottom:12px">' + esc(t("hosts.help")) + '</div>';
+        h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("hosts.help")) + '</div>';
         // Search bar — rendered ONCE. Subsequent updates only touch #host-cards-wrap
         // so the input element is never destroyed and keeps focus naturally.
-        h += '<div class="surface-filters" style="margin-bottom:12px">';
-        h += '<input type="text" class="surface-filter" placeholder="' + esc(t("hosts.search.placeholder")) + '" style="min-width:320px;flex:1"';
+        h += '<div class="surface-filters ct-mb-3">';
+        h += '<input type="text" class="surface-filter ct-minw-320 ct-flex-1" placeholder="' + esc(t("hosts.search.placeholder")) + '"';
         h += ' id="host-search" value="' + esc(_hostSearch) + '" data-input="_setHostSearch" data-pass-value autocomplete="off">';
-        h += '<button class="btn-add" id="host-search-clear" data-click="_clearHostSearch"' + (_hostSearch ? '' : ' style="display:none"') + '>x</button>';
+        h += '<button class="ct-btn mt-8 ct-hidden" data-write data-variant="primary" id="host-search-clear" data-click="_clearHostSearch"' + (_hostSearch ? '' : '') + '>x</button>';
         h += '</div>';
         // Empty wrapper the search handler refreshes in-place
         h += '<div id="host-cards-wrap"></div>';
@@ -3233,7 +3441,9 @@ window.AI_APP_CONFIG = {
         // must join the same bucket as any hostname that resolved to them.
         // Only hosts with NO resolved_ip go to singletons.
         filtered.forEach(function (a) {
-            var ip = a.resolved_ip || "";
+            // Only hosts group by resolved_ip. Domains and file-shares are always
+            // their own card, never merged onto a host that shares their IP.
+            var ip = a.kind === "host" ? (a.resolved_ip || "") : "";
             if (!ip) {
                 singletons.push({ primary: a, aliases: [], ip: "" });
                 return;
@@ -3252,56 +3462,74 @@ window.AI_APP_CONFIG = {
                 return;
             }
             members.sort(function (x, y) {
-                return _countFindingsByHost(y.value).active - _countFindingsByHost(x.value).active;
+                return _countFindingsByHost(y).active - _countFindingsByHost(x).active;
             });
             entries.push({ primary: members[0], aliases: members.slice(1), ip: ip });
         });
-        // Sort: entries with most ACTIVE (non-triaged) findings first, then alpha.
+        // Precompute each card's aggregated counts ONCE (union over primary +
+        // aliases, deduped) — reused by the sort and the render below, so we never
+        // rescan all findings per comparison.
+        var _entryCounts = {};
+        entries.forEach(function (e) {
+            _entryCounts[e.primary.id] = _countFindingsForAssets([e.primary].concat(e.aliases));
+        });
+        // Sort: enabled cards first (most ACTIVE findings first, then alpha), then
+        // all scanning-disabled cards grouped at the very end (alpha).
         entries.sort(function (a, b) {
-            var ca = _countFindingsByHost(_assetHostKey(a.primary)).active;
-            var cb = _countFindingsByHost(_assetHostKey(b.primary)).active;
+            var da = a.primary.enabled === false ? 1 : 0;
+            var db = b.primary.enabled === false ? 1 : 0;
+            if (da !== db)
+                return da - db;
+            var ca = _entryCounts[a.primary.id].active;
+            var cb = _entryCounts[b.primary.id].active;
             if (ca !== cb)
                 return cb - ca;
             return (a.primary.value || "").localeCompare(b.primary.value || "");
         });
+        var _disabledCount = entries.filter(function (e) { return e.primary.enabled === false; }).length;
         var shownHosts = entries.reduce(function (n, e) { return n + 1 + e.aliases.length; }, 0);
-        var h = '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups")) + '</div>';
+        var h = '<div class="ct-text-label ct-muted ct-mb-2">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups")) + '</div>';
         if (!filtered.length) {
             h += '<div class="empty-state">' + esc(hosts.length ? t("hosts.no_match") : t("hosts.empty")) + '</div>';
             wrap.innerHTML = h;
             return;
         }
         h += '<div class="host-cards-grid">';
+        var _dividerShown = false;
         entries.forEach(function (entry) {
             var a = entry.primary;
             var isShare = a.kind === "file_share";
-            // Aggregate counts across primary + aliases so the card reflects
-            // everything that's observable at this IP, even though each alias
-            // keeps its own MonitoredAsset row under the hood.
-            var counts = _countFindingsByHost(_assetHostKey(a));
-            entry.aliases.forEach(function (al) {
-                var cc = _countFindingsByHost(_assetHostKey(al));
-                Object.keys(counts).forEach(function (k) { counts[k] = (counts[k] || 0) + (cc[k] || 0); });
-            });
+            // Divider before the first scanning-disabled card (they're sorted last).
+            if (a.enabled === false && !_dividerShown) {
+                _dividerShown = true;
+                h += '<div class="host-cards-divider">' + esc(t("hosts.disabled_section")) + ' (' + _disabledCount + ')</div>';
+            }
+            // Counts aggregated over primary + aliases (deduped union), precomputed
+            // above — reflects everything observable at this IP without double
+            // counting a finding that matches several same-IP aliases.
+            var counts = _entryCounts[a.id];
             var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
             var last = a.last_scan_at ? _fmtDate(a.last_scan_at) : t("monitored.last.never");
             var score = _riskScoreFor(a, counts);
             var tier = _riskTier(score);
-            h += '<div class="host-card" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
+            var _cardCls = "host-card" + (a.enabled === false ? " host-card-disabled" : "");
+            h += '<div class="' + _cardCls + '" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
             h += '<div class="host-card-top">';
             h += '<div class="host-card-value">' + esc(isShare ? _assetHostKey(a) : a.value) + '</div>';
             if (isShare)
-                h += '<span class="host-badge host-badge-share">' + esc(t("hosts.badge.share")) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="medium">' + esc(t("hosts.badge.share")) + '</span>';
+            if (a.kind === "domain")
+                h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(_kindLabel("domain")) + '</span>';
             if (!a.enabled)
-                h += '<span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="neutral">' + esc(t("hosts.badge.disabled")) + '</span>';
             if (autoDiscovered)
-                h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="accent">' + esc(t("hosts.source.auto")) + '</span>';
             else
-                h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(t("hosts.source.manual")) + '</span>';
             if (a.criticality && a.criticality !== "medium") {
-                h += '<span class="host-badge host-badge-crit-' + esc(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="' + _surfaceTone(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
             }
-            h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + '</span>';
+            h += '<span class="ct-badge" data-fill data-tone="' + _surfaceTone(tier.lvl) + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + '</span>';
             h += '</div>';
             // Screenshot thumbnail from the cached /api/findings/screenshots map.
             var shotValues = [a.value].concat(entry.aliases.map(function (al) { return al.value; }));
@@ -3317,7 +3545,7 @@ window.AI_APP_CONFIG = {
                     h += '<div class="host-card-sharecount">' + _icon("folder", 11) + ' ' + esc(t("hosts.share_count").replace("{n}", String(cardShares.length))) + '</div>';
                 }
                 cardShares.forEach(function (sh) {
-                    h += '<div class="host-card-ip" title="' + esc(sh.value) + '">' + _icon("folder", 11) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>';
+                    h += '<div class="host-card-ip" title="' + esc(sh.value) + '">' + _icon("folder", 11) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="ct-badge" data-size="sm" data-tone="neutral">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>';
                 });
             }
             if (a.label)
@@ -3346,7 +3574,7 @@ window.AI_APP_CONFIG = {
                 h += '<div class="host-card-findings">';
                 ["critical", "high", "medium", "low", "info"].forEach(function (s) {
                     if (counts[s]) {
-                        h += '<span class="sev-badge sev-' + s + '" title="' + counts[s] + ' ' + esc(t("sev." + s)) + '">' + counts[s] + '</span>';
+                        h += '<span class="ct-badge" data-tone="' + _surfaceTone(s) + '" title="' + counts[s] + ' ' + esc(t("sev." + s)) + '">' + counts[s] + '</span>';
                     }
                 });
                 if (counts.open)
@@ -3361,7 +3589,14 @@ window.AI_APP_CONFIG = {
             var scs = a.enabled_scanners || [];
             h += '<div class="host-card-footer">';
             h += '<span class="host-card-scancount">' + _icon("search", 12) + ' ' + scs.length + ' ' + esc(t("hosts.scanners")) + '</span>';
-            h += '<button class="ct-btn" data-size="sm" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
+            if (a.enabled === false) {
+                // Re-enable scanning straight from the greyed card. data-stop so the
+                // click doesn't bubble to the card's "open detail" handler.
+                h += '<button class="ct-btn" data-size="sm" data-variant="success" data-click="_toggleHostFromDetail" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("host.enable_scan")) + '">' + _icon("check", 12) + ' ' + esc(t("hosts.reactivate")) + '</button>';
+            }
+            else {
+                h += '<button class="ct-btn" data-size="sm" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
+            }
             h += '</div>';
             h += '</div>';
         });
@@ -3391,16 +3626,40 @@ window.AI_APP_CONFIG = {
     };
     window._openHost = function (id) {
         var a = _monitored.find(function (x) { return x.id === id; });
-        if (!a || (a.kind !== "host" && a.kind !== "file_share"))
+        // Any monitored asset is openable in the detail view — hosts and file
+        // shares, but also domains (which roll up their subdomains' findings) and
+        // ip_ranges (CIDR containment). Only unknown ids are rejected.
+        if (!a)
             return;
         _selectedHost = a;
+        _selectedHostReturnPanel = null; // opened from the Hosts grid → back goes there
         _bulkSelection = {}; // fresh selection when entering the host detail
+        renderPanel();
+    };
+    // Open any monitored asset's detail from the Surveillance table: switch to the
+    // Hosts view (where the detail lives) and select it. Lets domains and
+    // ip_ranges — which have no card of their own — reach the same detail panel.
+    window._openMonitoredDetail = function (id) {
+        var a = _monitored.find(function (x) { return x.id === id; });
+        if (!a)
+            return;
+        _selectedHostReturnPanel = _panel; // come back to the Surveillance table
+        _panel = "hosts";
+        _selectedHost = a;
+        _hostSelectedFinding = null;
+        _bulkSelection = {};
         renderPanel();
     };
     window._backToHosts = function () {
         _selectedHost = null;
         _hostSelectedFinding = null;
         _bulkSelection = {};
+        // Return to whichever list the user opened the detail from. Domains/
+        // ip_ranges are reached from the Surveillance table; hosts from the grid.
+        if (_selectedHostReturnPanel) {
+            _panel = _selectedHostReturnPanel;
+            _selectedHostReturnPanel = null;
+        }
         renderPanel();
     };
     // NB: hostValue jamais passé par l'appelant (param mort hérité de la source).
@@ -3412,7 +3671,8 @@ window.AI_APP_CONFIG = {
         var linked = null;
         if (f.measure_id)
             linked = _measures.find(function (x) { return x.id === f.measure_id; }) || null;
-        c.innerHTML = ct_finding_view.render(f, {
+        var fd = Object.assign({}, f, { title: _findingTitle(f), description: _findingDesc(f) });
+        c.innerHTML = ct_finding_view.render(fd, {
             backHandler: "_backToHostFromFinding",
             triageHandler: "_triageHostFindingDetail",
             aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
@@ -3429,24 +3689,29 @@ window.AI_APP_CONFIG = {
         var a = _selectedHost;
         var isShare = a.kind === "file_share";
         var hostKey = _assetHostKey(a);
-        var counts = _countFindingsByHost(hostKey);
+        // Detail counts/list use the same deduped union as the card: the asset plus
+        // its same-IP aliases (empty for domains/ip_ranges), so card and detail agree.
+        var detailGroup = _assetGroup(a);
+        var counts = _countFindingsForAssets(detailGroup);
         var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
         var last = a.last_scan_at ? _fmtDate(a.last_scan_at, "long") : t("monitored.last.never");
         var score = _riskScoreFor(a, counts);
         var tier = _riskTier(score);
-        var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
-        h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(t("host.back")) + '</button>';
-        h += '<h2 style="margin:0;flex:1">' + esc(isShare ? hostKey : a.value) + '</h2>';
+        var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
+        var backLabel = _selectedHostReturnPanel === "monitored" ? t("host.back_monitored") : t("host.back");
+        h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(backLabel) + '</button>';
+        h += '<span class="ct-ref" data-size="sm">' + esc(_kindLabel(a.kind)) + '</span>';
+        h += '<h2 class="ct-m-0 ct-flex-1">' + esc(isShare ? hostKey : a.value) + '</h2>';
         if (isShare)
-            h += '<span class="host-badge host-badge-share">' + esc(t("hosts.badge.share")) + '</span>';
+            h += '<span class="ct-badge" data-size="sm" data-tone="medium">' + esc(t("hosts.badge.share")) + '</span>';
         if (autoDiscovered)
-            h += '<span class="host-badge host-badge-auto">' + esc(t("hosts.source.auto")) + '</span>';
+            h += '<span class="ct-badge" data-size="sm" data-tone="accent">' + esc(t("hosts.source.auto")) + '</span>';
         else
-            h += '<span class="host-badge host-badge-manual">' + esc(t("hosts.source.manual")) + '</span>';
+            h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(t("hosts.source.manual")) + '</span>';
         if (a.criticality && a.criticality !== "medium") {
-            h += '<span class="host-badge host-badge-crit-' + esc(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
+            h += '<span class="ct-badge" data-size="sm" data-tone="' + _surfaceTone(a.criticality) + '">' + esc(t("crit." + a.criticality)) + '</span>';
         }
-        h += '<span class="host-badge host-badge-risk risk-' + tier.lvl + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + ' — ' + esc(tier.lbl) + '</span>';
+        h += '<span class="ct-badge" data-fill data-tone="' + _surfaceTone(tier.lvl) + '" title="' + esc(t("risk.score_tooltip")) + '">' + score + ' — ' + esc(tier.lbl) + '</span>';
         h += '</div>';
         // A file server can host several shares (each its own asset) — list every
         // one with its own scan/edit/delete actions, so the detail isn't limited to
@@ -3456,36 +3721,49 @@ window.AI_APP_CONFIG = {
         h += '<div class="surface-card">';
         if (isShare) {
             var sharesRows = detailShares.map(function (sh) {
-                var acts = '<button class="ct-btn" data-size="sm" data-click="_scanHost" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.scan_now")) + '">' + _icon("search", 12) + '</button>' +
-                    '<button class="ct-btn" data-size="sm" data-click="_editMonitoredDialog" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.edit")) + '">' + _icon("edit", 12) + '</button>' +
-                    '<button class="ct-btn" data-size="sm" data-variant="danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("action.delete")) + '">' + _icon("trash", 12) + '</button>';
-                var shScanners = (sh.enabled_scanners || []).map(function (s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ");
+                var acts = '<button class="ct-btn" data-size="xs" data-click="_scanHost" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.scan_now")) + '" data-icon>' + _icon("search", 12) + '</button>' +
+                    '<button class="ct-btn" data-size="xs" data-click="_editMonitoredDialog" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("host.edit")) + '" data-icon>' + _icon("edit", 12) + '</button>' +
+                    '<button class="ct-btn" data-size="xs" data-variant="danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(sh.id) + '\' data-stop title="' + esc(t("action.delete")) + '" data-icon>' + _icon("trash", 12) + '</button>';
+                var shScanners = (sh.enabled_scanners || []).map(function (s) { return '<span class="ct-badge" data-size="sm" data-tone="low" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ");
                 var shLast = sh.last_scan_at ? _fmtDate(sh.last_scan_at) : t("monitored.last.never");
                 return '<div class="host-share-row">' +
-                    '<div class="host-share-path" style="font-family:monospace" title="' + esc(sh.value) + '">' + _icon("folder", 12) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="host-badge host-badge-off">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>' +
+                    '<div class="host-share-path ct-mono" title="' + esc(sh.value) + '">' + _icon("folder", 12) + ' ' + esc(sh.value) + (!sh.enabled ? ' <span class="ct-badge" data-size="sm" data-tone="neutral">' + esc(t("hosts.badge.disabled")) + '</span>' : '') + '</div>' +
                     '<div class="host-share-acts">' + acts + '</div>' +
                     (shScanners ? '<div class="host-share-scanners">' + shScanners + '</div>' : '') +
                     '<div class="host-share-meta">' + esc(t("hosts.last_scan")) + ' : ' + esc(shLast) + '</div>' +
                     '</div>';
             }).join("");
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.shares")) + ' (' + detailShares.length + ')</div><div style="flex:1">' + sharesRows + '</div></div>';
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.shares")) + ' (' + detailShares.length + ')</div><div class="ct-flex-1">' + sharesRows + '</div></div>';
         }
         else {
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.value")) + '</div><div style="font-family:monospace">' + esc(a.value) + '</div></div>';
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.value")) + '</div><div class="ct-mono">' + esc(a.value) + '</div></div>';
         }
         if (a.resolved_ip && a.resolved_ip !== a.value) {
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.resolved_ip")) + '</div><div style="font-family:monospace">' + esc(a.resolved_ip) + '</div></div>';
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.resolved_ip")) + '</div><div class="ct-mono">' + esc(a.resolved_ip) + '</div></div>';
         }
-        // Aliases sharing the same IP — computed at render time from _monitored
-        if (a.resolved_ip) {
-            var aliases = (_monitored || []).filter(function (x) {
-                return x.kind === "host" && x.id !== a.id && x.resolved_ip === a.resolved_ip;
-            });
+        // Aliases sharing the same IP (hosts only) — computed at render time.
+        if (a.kind === "host" && a.resolved_ip) {
+            var aliases = _assetAliases(a);
             if (aliases.length) {
                 var aliH = aliases.map(function (al) {
                     return '<button class="host-alias-pill" data-click="_openHost" data-args=\'' + _da(al.id) + '\' title="' + esc(al.value) + '">' + esc(al.value) + '</button>';
                 }).join(" ");
                 h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.aliases")) + '</div><div>' + aliH + '</div></div>';
+            }
+        }
+        // Subdomains rolled up under a domain — every monitored asset whose value is
+        // a subdomain of this domain, clickable through to its own detail.
+        if (a.kind === "domain") {
+            var domVal = (a.value || "").toLowerCase();
+            var subs = (_monitored || []).filter(function (x) {
+                var xv = (x.value || "").toLowerCase();
+                return x.id !== a.id && xv.length > domVal.length + 1 && xv.slice(-(domVal.length + 1)) === "." + domVal;
+            }).sort(function (x, y) { return (x.value || "").localeCompare(y.value || ""); });
+            if (subs.length) {
+                var subH = subs.map(function (sd) {
+                    return '<button class="host-alias-pill" data-click="_openHost" data-args=\'' + _da(sd.id) + '\' title="' + esc(sd.value) + '">' + esc(sd.value) + '</button>';
+                }).join(" ");
+                h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.subdomains")) + ' (' + subs.length + ')</div><div>' + subH + '</div></div>';
             }
         }
         if (a.label)
@@ -3498,23 +3776,29 @@ window.AI_APP_CONFIG = {
             h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.last_scan")) + '</div><div>' + esc(last) + '</div></div>';
         }
         if (!isShare && a.enabled_scanners && a.enabled_scanners.length) {
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.scanners")) + '</div><div>' + a.enabled_scanners.map(function (s) { return '<span class="host-badge host-badge-scanner" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ") + '</div></div>';
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.scanners")) + '</div><div>' + a.enabled_scanners.map(function (s) { return '<span class="ct-badge" data-size="sm" data-tone="low" title="' + esc(s) + '">' + esc(_scannerLabel(s)) + '</span>'; }).join(" ") + '</div></div>';
         }
         if (a.notes)
-            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.notes")) + '</div><div style="white-space:pre-wrap;font-size:0.85em;color:var(--text-muted)">' + esc(a.notes) + '</div></div>';
+            h += '<div class="surface-row"><div class="surface-lbl">' + esc(t("host.col.notes")) + '</div><div style="white-space:pre-wrap;font-size:var(--ct-text-meta);color:var(--ct-ink-2)">' + esc(a.notes) + '</div></div>';
         h += '</div>';
         // Action buttons. For a multi-share server, "scan now" fans out to every
         // share and per-share edit/delete live in the shares list above, so we only
         // offer the bulk scan here. A single share keeps the usual scan/edit/delete.
-        h += '<div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">';
+        h += '<div style="display:flex;gap:var(--ct-s2);margin:var(--ct-s3) 0;flex-wrap:wrap">';
         if (isShare && detailShares.length > 1) {
-            h += '<button class="btn-add btn-icon" data-click="_scanSharesOnHost" data-args=\'' + _da(hostKey) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_all_shares")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_scanSharesOnHost" data-args=\'' + _da(hostKey) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_all_shares")) + '</button>';
         }
         else {
-            h += '<button class="btn-add btn-icon" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
-            h += '<button class="btn-add" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.edit")) + '</button>';
-            h += '<span style="flex:1"></span>';
-            h += '<button class="btn-add surface-danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_scanHost" data-args=\'' + _da(a.id) + '\'>' + _icon("search", 14) + ' ' + esc(t("host.scan_now")) + '</button>';
+            // Single enable/disable control. Disabling opens a confirmation that
+            // ALSO offers, via a checkbox, the stronger "exclude permanently"
+            // (blocklist) action — so the two related operations live behind one
+            // button instead of two look-alike ones.
+            var toggleLbl = a.enabled ? t("host.disable_scan") : t("host.enable_scan");
+            h += '<button class="ct-btn mt-8" data-write data-variant="' + (a.enabled ? "warning" : "success") + '" data-click="_toggleHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + _icon(a.enabled ? "x" : "check", 14) + ' ' + esc(toggleLbl) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.edit")) + '</button>';
+            h += '<span class="ct-flex-1"></span>';
+            h += '<button class="ct-btn mt-8" data-write data-variant="danger" data-click="_deleteHostFromDetail" data-args=\'' + _da(a.id) + '\'>' + esc(t("host.delete")) + '</button>';
         }
         h += '</div>';
         // Per-host scan timeline — list the last 8 scan jobs that targeted
@@ -3525,7 +3809,7 @@ window.AI_APP_CONFIG = {
         var histTargets = isShare ? detailShares.map(function (s) { return s.value; }) : [a.value];
         var hostJobs = (_jobs || []).filter(function (j) { return histTargets.indexOf(j.target) >= 0; }).slice(0, 8);
         if (hostJobs.length) {
-            h += '<h3 style="margin-top:20px">' + esc(t("host.scan_history")) + '</h3>';
+            h += '<h3 class="ct-mt-5">' + esc(t("host.scan_history")) + '</h3>';
             h += '<div class="host-timeline">';
             hostJobs.forEach(function (j) {
                 var dateStr = _fmtDate(j.created_at || "");
@@ -3533,8 +3817,8 @@ window.AI_APP_CONFIG = {
                 h += '<div class="host-timeline-row">';
                 h += '<span class="host-timeline-dot"></span>';
                 h += '<span class="host-timeline-date">' + esc(dateStr) + '</span>';
-                h += '<span class="scanner-badge ' + _scannerBadgeCls(j.scanner) + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
-                h += '<span class="host-timeline-status job-status job-' + esc(j.status) + '">' + esc(_jobStatusLabel(j.status)) + '</span>';
+                h += '<span class="ct-badge" data-size="sm" data-tone="' + _scannerTone(j.scanner) + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
+                h += '<span class="host-timeline-status ct-badge" data-size="sm" data-tone="' + _jobTone(j.status) + '"' + (j.status === "running" ? " data-live" : "") + '>' + esc(_jobStatusLabel(j.status)) + '</span>';
                 var bits = [];
                 if (diff.added)
                     bits.push('<span class="job-diff-added">+' + diff.added + '</span>');
@@ -3549,7 +3833,7 @@ window.AI_APP_CONFIG = {
                 if (diff.scanned != null)
                     h += '<span class="host-timeline-scanned text-muted">' + esc(t("jobs.scanned_files").replace("{n}", String(diff.scanned))) + '</span>';
                 if (j.error)
-                    h += '<span class="host-timeline-err" title="' + esc(j.error) + '">' + _icon("alert", 12) + '</span>';
+                    h += '<span class="host-timeline-err" title="' + esc(_jobErrorText(j.error)) + '">' + _icon("alert", 12) + '</span>';
                 h += '</div>';
             });
             h += '</div>';
@@ -3557,9 +3841,9 @@ window.AI_APP_CONFIG = {
         // Findings summary + list. Severity stats count only active findings
         // (new / to_fix). False positives and fixed are kept as separate tiles
         // for audit visibility without polluting the main severity counters.
-        h += '<h3 style="margin-top:20px">' + esc(t("host.findings_title")) + '</h3>';
+        h += '<h3 class="ct-mt-5">' + esc(t("host.findings_title")) + '</h3>';
         if (counts.total) {
-            h += '<div class="surface-stats" style="margin-bottom:12px">';
+            h += '<div class="ct-kpigrid ct-mb-4">';
             h += _statCard(counts.active, t("dash.findings_total"), "");
             h += _statCard(counts.critical, t("sev.critical"), counts.critical ? "stat-critical" : "stat-muted");
             h += _statCard(counts.high, t("sev.high"), counts.high ? "stat-high" : "stat-muted");
@@ -3573,7 +3857,11 @@ window.AI_APP_CONFIG = {
             h += '</div>';
         }
         var hostFindingsAll = _findings.filter(function (f) {
-            return _findingMatchesHost(f.target || "", hostKey);
+            for (var i = 0; i < detailGroup.length; i++) {
+                if (_findingMatchesAsset(f, detailGroup[i]))
+                    return true;
+            }
+            return false;
         });
         var fpCount = hostFindingsAll.filter(function (f) { return f.status === "false_positive"; }).length;
         var hostFindings = _hostHideFP ? hostFindingsAll.filter(function (f) { return f.status !== "false_positive"; }) : hostFindingsAll;
@@ -3586,8 +3874,8 @@ window.AI_APP_CONFIG = {
             return (f2.created_at || "").localeCompare(f1.created_at || "");
         });
         if (fpCount > 0) {
-            h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:0.85em;color:var(--text-muted)">';
-            h += '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">';
+            h += '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-2 ct-text-meta ct-muted">';
+            h += '<label class="ct-flex ct-items-center ct-gap-1 ct-clickable">';
             h += '<input type="checkbox"' + (_hostHideFP ? " checked" : "") + ' data-change="_toggleHostHideFP">';
             h += esc(t("host.hide_fp").replace("{n}", String(fpCount)));
             h += '</label></div>';
@@ -3610,17 +3898,17 @@ window.AI_APP_CONFIG = {
                 bulk: { scope: "surface-findings" },
                 columns: [
                     { key: "severity", label: t("findings.col.severity"), width: "80px",
-                        render: function (f) { return '<span class="sev-badge sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span>'; } },
+                        render: function (f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.severity) + '">' + esc(f.severity) + '</span>'; } },
                     { key: "scanner", label: "Scanner",
-                        render: function (f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.scanner || "") + '</span>'; } },
+                        render: function (f) { return '<span class="ct-text-label ct-muted">' + esc(f.scanner || "") + '</span>'; } },
                     { key: "type", label: t("findings.col.type"),
-                        render: function (f) { return '<span style="font-size:0.82em;color:var(--text-muted)">' + esc(f.type || "") + '</span>'; } },
+                        render: function (f) { return '<span class="ct-text-label ct-muted">' + esc(f.type || "") + '</span>'; } },
                     { key: "title", label: t("findings.col.title"),
-                        render: function (f) { return '<span style="font-weight:600">' + esc(f.title || "") + '</span>'; } },
+                        render: function (f) { return '<span class="ct-strong">' + esc(_findingTitle(f)) + '</span>'; } },
                     { key: "status", label: t("findings.col.status"), width: "110px",
-                        render: function (f) { return '<span class="status-badge status-' + esc(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
+                        render: function (f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
                     { key: "created_at", label: t("findings.col.datetime"), width: "130px",
-                        render: function (f) { return '<span style="font-size:0.78em;color:var(--text-muted);white-space:nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
+                        render: function (f) { return '<span class="ct-text-label ct-muted ct-nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
                 ],
                 actions: [
                     { icon: "check", label: t("status.to_fix"), onClick: "_quickTriageRow",
@@ -3768,6 +4056,26 @@ window.AI_APP_CONFIG = {
             _loadAndRender();
         }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
     };
+    // Enable/disable scanning for this asset (used by the detail button AND the
+    // card re-activate button). A plain, reversible toggle: a disabled asset stays
+    // visible (greyed) and is never scanned NOR re-enrolled/re-enabled if a later
+    // scan rediscovers it — the auto-enroll skips any value that already exists as
+    // an asset, enabled or not (see scheduler.py). It stays off until re-enabled
+    // here. Permanent blocklisting is a separate concept managed in the Surveillance
+    // "scan exclusions" panel.
+    window._toggleHostFromDetail = function (id) {
+        var a = _monitored.find(function (x) { return x.id === id; });
+        if (!a)
+            return;
+        var next = !a.enabled;
+        SurfaceAPI.updateMonitored(id, { enabled: next }).then(function () {
+            a.enabled = next;
+            if (_selectedHost && _selectedHost.id === id)
+                _selectedHost.enabled = next;
+            showStatus(next ? t("host.enabled_ok") : t("host.disabled_ok"));
+            renderPanel();
+        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
+    };
     // ═══════════════════════════════════════════════════════════════
     // SETTINGS PANEL — Nuclei tuning injected into the shared AI panel
     // ═══════════════════════════════════════════════════════════════
@@ -3782,7 +4090,7 @@ window.AI_APP_CONFIG = {
         SurfaceAPI.nucleiConfig().then(function (cfg) {
             _renderNucleiFormInto(holder, cfg);
         }).catch(function (e) {
-            holder.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("nuclei.config_error")) + '</div>';
+            holder.innerHTML = '<div class="ct-text-critical">' + esc(e.message || t("nuclei.config_error")) + '</div>';
         });
     }
     // Last config received from GET /nuclei/config — used by the reset button
@@ -3791,7 +4099,7 @@ window.AI_APP_CONFIG = {
     function _renderNucleiFormInto(holder, cfg) {
         _nucleiLastConfig = cfg;
         if (!cfg || !cfg.installed) {
-            holder.innerHTML = '<div style="color:var(--ct-critical)">' + esc(t("nuclei.not_installed")) + '</div>';
+            holder.innerHTML = '<div class="ct-text-critical">' + esc(t("nuclei.not_installed")) + '</div>';
             return;
         }
         var tuning = cfg.tuning || {};
@@ -3802,32 +4110,32 @@ window.AI_APP_CONFIG = {
             var lim = limits[key] || { min: 0, max: 99999 };
             var def = defaults[key];
             var cur = tuning[key] != null ? tuning[key] : def;
-            return '<div style="margin-bottom:10px">'
-                + '<label style="display:block;font-weight:600;font-size:0.82em;margin-bottom:2px">' + esc(t(labelKey)) + '</label>'
-                + '<input type="number" class="settings-input" id="nuclei-' + key + '" value="' + cur + '" min="' + lim.min + '" max="' + lim.max + '" style="width:100%">'
-                + '<div style="font-size:0.72em;color:var(--text-muted);margin-top:2px">'
+            return '<div class="ct-mb-2">'
+                + '<label class="ct-block ct-strong ct-text-label ct-mb-1">' + esc(t(labelKey)) + '</label>'
+                + '<input type="number" class="settings-input ct-w-full" id="nuclei-' + key + '" value="' + cur + '" min="' + lim.min + '" max="' + lim.max + '">'
+                + '<div class="ct-text-label ct-muted ct-mt-1">'
                 + esc(t(helpKey)) + ' (' + esc(t("nuclei.form.def")) + ': ' + def + ', ' + esc(t("nuclei.form.min")) + ' ' + lim.min + ', ' + esc(t("nuclei.form.max")) + ' ' + lim.max + ')'
                 + '</div>'
                 + '</div>';
         }
         var h = "";
-        h += '<div style="background:var(--ct-surface-2);border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:10px">';
+        h += '<div class="ct-bg-alt ct-bordered ct-r-sm ct-p-2 ct-mb-2">';
         h += '<div><strong>' + esc(t("nuclei.version")) + '</strong> ' + esc(cfg.version || "?") + '</div>';
-        h += '<div><strong>' + esc(t("nuclei.templates")) + '</strong> ' + esc(String(cfg.templates_count)) + ' <span style="color:var(--text-muted)">(' + esc(t("nuclei.last_update")) + ' ' + esc(last) + ')</span></div>';
+        h += '<div><strong>' + esc(t("nuclei.templates")) + '</strong> ' + esc(String(cfg.templates_count)) + ' <span class="ct-muted">(' + esc(t("nuclei.last_update")) + ' ' + esc(last) + ')</span></div>';
         h += '</div>';
-        h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:8px">' + esc(t("nuclei.help")) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + esc(t("nuclei.help")) + '</div>';
         h += numField("rate_limit", "nuclei.form.rate_limit", "nuclei.form.rate_limit_h");
         h += numField("concurrency", "nuclei.form.concurrency", "nuclei.form.concurrency_h");
         h += numField("bulk_size", "nuclei.form.bulk_size", "nuclei.form.bulk_size_h");
         h += numField("timeout", "nuclei.form.timeout", "nuclei.form.timeout_h");
         h += numField("retries", "nuclei.form.retries", "nuclei.form.retries_h");
-        h += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
-        h += '<button class="ai-btn-accept" id="nuclei-save-btn" data-click="_nucleiSaveTuning" style="flex:1">' + esc(t("nuclei.save_btn")) + '</button>';
-        h += '<button class="ai-btn-close" id="nuclei-reset-btn" data-click="_nucleiResetTuning" title="' + esc(t("nuclei.save_btn")) + '">' + _icon("refresh", 14) + '</button>';
+        h += '<div class="ct-flex ct-gap-2 ct-mt-3 ct-row-wrap">';
+        h += '<button class="ct-btn ai-btn-accept ct-flex-1" data-variant="primary" id="nuclei-save-btn" data-click="_nucleiSaveTuning">' + esc(t("nuclei.save_btn")) + '</button>';
+        h += '<button class="ct-btn ai-btn-close" id="nuclei-reset-btn" data-click="_nucleiResetTuning" title="' + esc(t("nuclei.save_btn")) + '" data-size="xs" data-icon>' + _icon("refresh", 14) + '</button>';
         h += '</div>';
-        h += '<div style="border-top:1px solid var(--border);margin:12px 0;padding-top:10px">';
-        h += '<button class="ai-btn-close btn-icon" data-click="_nucleiUpdateTemplates" id="nuclei-update-btn" style="width:100%">' + _icon("refresh", 14) + ' ' + esc(t("nuclei.update_btn")) + '</button>';
-        h += '<div id="nuclei-update-result" style="margin-top:8px;font-size:0.78em"></div>';
+        h += '<div style="border-top:1px solid var(--ct-line);margin:var(--ct-s3) 0;padding-top:10px">';
+        h += '<button class="ct-btn ai-btn-close ct-w-full" data-click="_nucleiUpdateTemplates" id="nuclei-update-btn">' + _icon("refresh", 14) + ' ' + esc(t("nuclei.update_btn")) + '</button>';
+        h += '<div id="nuclei-update-result" class="ct-mt-2 ct-text-label"></div>';
         h += '</div>';
         holder.innerHTML = h;
     }
@@ -3875,15 +4183,15 @@ window.AI_APP_CONFIG = {
             res.innerHTML = "";
         SurfaceAPI.nucleiUpdateTemplates().then(function (r) {
             if (res) {
-                res.innerHTML = '<div style="color:var(--ct-low);margin-bottom:6px;display:flex;align-items:center;gap:6px">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>'
-                    + (r.stdout ? '<pre style="background:var(--ct-surface);padding:6px;border-radius:3px;font-size:0.7em;overflow:auto;max-height:140px">' + esc(r.stdout) + '</pre>' : '');
+                res.innerHTML = '<div class="ct-text-low ct-mb-1 ct-flex ct-items-center ct-gap-1">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>'
+                    + (r.stdout ? '<pre style="background:var(--ct-surface);padding:var(--ct-s1);border-radius:var(--ct-r-sm);font-size:var(--ct-text-label);overflow:auto;max-height:140px">' + esc(r.stdout) + '</pre>' : '');
             }
             var holder = document.getElementById("surface-nuclei-section");
             if (holder)
                 SurfaceAPI.nucleiConfig().then(function (cfg) { _renderNucleiFormInto(holder, cfg); });
         }).catch(function (e) {
             if (res)
-                res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
+                res.innerHTML = '<div class="ct-text-critical">' + esc(e.message || t("common.error")) + '</div>';
             if (btn) {
                 btn.disabled = false;
                 btn.textContent = "\u21bb " + t("nuclei.update_btn");
@@ -3911,6 +4219,19 @@ window.AI_APP_CONFIG = {
         var _hashPanel = (location.hash || "").replace("#", "");
         if (_hashPanel && typeof selectPanel === "function") {
             setTimeout(function () { selectPanel(_hashPanel); }, 200);
+        }
+        // FEAT-13 — deep-linked measure from Pilot (?measure=MES-xxx): open the
+        // native edit modal once the measures list is loaded (shared retry loop).
+        if (typeof window.ct_handleMeasureDeepLink === "function") {
+            window.ct_handleMeasureDeepLink({ open: function (mid) {
+                    if (!_measures.some(function (m) { return m.id === mid; }))
+                        return false;
+                    if (typeof selectPanel === "function")
+                        selectPanel("measures");
+                    if (typeof window._editSurfaceMeasureRow === "function")
+                        window._editSurfaceMeasureRow({ id: mid });
+                    return true;
+                } });
         }
         // Settings wrapper
         var original = window.openSettings;
@@ -3944,7 +4265,7 @@ window.AI_APP_CONFIG = {
         SurfaceAPI.shodanConfig().then(function (cfg) {
             _renderShodanFormInto(holder, cfg);
         }).catch(function (e) {
-            holder.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
+            holder.innerHTML = '<div class="ct-text-critical">' + esc(e.message || t("common.error")) + '</div>';
         });
     }
     function _renderShodanFormInto(holder, cfg) {
@@ -3953,28 +4274,28 @@ window.AI_APP_CONFIG = {
         var masked = (cfg && cfg.masked) || "";
         var lastCheck = (cfg && cfg.last_check_at) ? _fmtDate(cfg.last_check_at, "long") : "";
         var h = "";
-        h += '<div style="font-size:0.78em;color:var(--text-muted);margin-bottom:10px">' + esc(tt("shodan.help")) + '</div>';
+        h += '<div class="ct-text-label ct-muted ct-mb-2">' + esc(tt("shodan.help")) + '</div>';
         if (isConfigured) {
-            h += '<div style="background:var(--ct-low-tint);border:1px solid var(--ct-low-tint);border-radius:4px;padding:10px;margin-bottom:12px">';
-            h += '<div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ct-low-ink)">' + _icon("check_circle", 16) + ' ' + esc(tt("shodan.configured")) + '</div>';
-            h += '<div style="font-family:monospace;font-size:0.9em;margin-top:6px">' + esc(masked) + '</div>';
+            h += '<div style="background:var(--ct-low-tint);border:1px solid var(--ct-low-tint);border-radius:var(--ct-r-sm);padding:var(--ct-s2);margin-bottom:var(--ct-s3)">';
+            h += '<div class="ct-flex ct-items-center ct-gap-2 ct-strong ct-text-low-ink">' + _icon("check_circle", 16) + ' ' + esc(tt("shodan.configured")) + '</div>';
+            h += '<div class="ct-mono ct-text-data ct-mt-1">' + esc(masked) + '</div>';
             if (lastCheck) {
-                h += '<div style="font-size:0.72em;color:var(--text-muted);margin-top:4px">' + esc(tt("shodan.last_check")) + ' : ' + esc(lastCheck) + '</div>';
+                h += '<div class="ct-text-label ct-muted ct-mt-1">' + esc(tt("shodan.last_check")) + ' : ' + esc(lastCheck) + '</div>';
             }
             h += '</div>';
-            h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-            h += '<button class="ai-btn-accept btn-icon" id="shodan-replace-btn">' + _icon("edit", 14) + ' ' + esc(tt("shodan.replace")) + '</button>';
+            h += '<div class="ct-flex ct-gap-2 ct-row-wrap">';
+            h += '<button class="ct-btn ai-btn-accept" data-variant="primary" data-size="sm" id="shodan-replace-btn">' + _icon("edit", 14) + ' ' + esc(tt("shodan.replace")) + '</button>';
             h += '<button class="ct-btn" data-variant="danger" data-size="sm" id="shodan-delete-btn">' + _icon("trash", 14) + ' ' + esc(tt("shodan.delete")) + '</button>';
             h += '</div>';
         }
         else {
-            h += '<div style="background:var(--ct-medium-tint);border-left:4px solid var(--ct-medium);padding:10px;margin-bottom:12px;border-radius:0 6px 6px 0;font-size:0.82em;color:#78350f">';
+            h += '<div style="background:var(--ct-medium-tint);border-left:4px solid var(--ct-medium);padding:var(--ct-s2);margin-bottom:var(--ct-s3);border-radius:0 6px 6px 0;font-size:var(--ct-text-label);color:var(--ct-high-ink)">';
             h += '<strong>' + esc(tt("shodan.warning_title")) + '</strong> ' + esc(tt("shodan.warning_body"));
             h += '</div>';
             _renderShodanKeyInput(h, holder, tt);
             return;
         }
-        h += '<div id="shodan-input-area" style="margin-top:12px;display:none"></div>';
+        h += '<div id="shodan-input-area" class="ct-mt-3 ct-hidden"></div>';
         holder.innerHTML = h;
         document.getElementById("shodan-replace-btn").onclick = function () {
             var area = document.getElementById("shodan-input-area");
@@ -3996,15 +4317,15 @@ window.AI_APP_CONFIG = {
     }
     function _shodanInputMarkup(tt) {
         return '<div class="ct-field">' +
-            '<label class="ct-field-lbl">' + esc(tt("shodan.key_label")) + '</label>' +
-            '<input type="password" class="settings-input" id="shodan-key-input" autocomplete="off" spellcheck="false" style="width:100%;font-family:monospace">' +
-            '<div style="font-size:0.72em;color:var(--text-muted);margin-top:4px">' + esc(tt("shodan.key_help")) + '</div>' +
+            '<label class="surface-field-lbl">' + esc(tt("shodan.key_label")) + '</label>' +
+            '<input type="password" class="settings-input ct-w-full ct-mono" id="shodan-key-input" autocomplete="off" spellcheck="false">' +
+            '<div class="ct-text-label ct-muted ct-mt-1">' + esc(tt("shodan.key_help")) + '</div>' +
             '</div>' +
-            '<div style="display:flex;gap:8px;margin-top:10px">' +
-            '<button class="ai-btn-accept btn-icon" id="shodan-save-btn" style="flex:1">' + _icon("check", 14) + ' ' + esc(tt("shodan.save")) + '</button>' +
-            '<button class="ai-btn-close btn-icon" id="shodan-cancel-btn">' + _icon("x", 14) + ' ' + esc(tt("action.cancel")) + '</button>' +
+            '<div class="ct-flex ct-gap-2 ct-mt-2">' +
+            '<button class="ct-btn ai-btn-accept ct-flex-1" data-variant="primary" id="shodan-save-btn">' + _icon("check", 14) + ' ' + esc(tt("shodan.save")) + '</button>' +
+            '<button class="ct-btn ai-btn-close" id="shodan-cancel-btn">' + _icon("x", 14) + ' ' + esc(tt("action.cancel")) + '</button>' +
             '</div>' +
-            '<div id="shodan-save-result" style="margin-top:8px;font-size:0.8em"></div>';
+            '<div id="shodan-save-result" class="ct-mt-2 ct-text-label"></div>';
     }
     function _renderShodanKeyInput(hPrefix, holder, tt) {
         var h = hPrefix;
@@ -4042,7 +4363,7 @@ window.AI_APP_CONFIG = {
         var res = document.getElementById("shodan-save-result");
         if (!key) {
             if (res)
-                res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(t("shodan.key_required")) + '</div>';
+                res.innerHTML = '<div class="ct-text-critical">' + esc(t("shodan.key_required")) + '</div>';
             return;
         }
         if (saveBtn) {
@@ -4050,13 +4371,13 @@ window.AI_APP_CONFIG = {
             saveBtn.textContent = "...";
         }
         if (res)
-            res.innerHTML = '<div style="color:var(--text-muted)">' + esc(t("shodan.testing")) + '</div>';
+            res.innerHTML = '<div class="ct-muted">' + esc(t("shodan.testing")) + '</div>';
         SurfaceAPI.shodanSaveKey(key).then(function (r) {
             showStatus(t("shodan.saved"));
             _surfaceWireShodanSection();
         }).catch(function (e) {
             if (res)
-                res.innerHTML = '<div style="color:var(--ct-critical)">' + esc(e.message || t("common.error")) + '</div>';
+                res.innerHTML = '<div class="ct-text-critical">' + esc(e.message || t("common.error")) + '</div>';
             if (saveBtn) {
                 saveBtn.disabled = false;
                 saveBtn.textContent = t("shodan.save");
@@ -4119,6 +4440,23 @@ window.AI_APP_CONFIG = {
     }
     function _renderSmtpFormInto(holder, cfg) {
         var h = '';
+        // Suite : la config SERVEUR (hôte/auth/expéditeur) est centralisée dans
+        // Pilot et poussée au module — seuls les destinataires se règlent ici.
+        if (cfg.managed) {
+            h += '<div class="surface-settings-help">' + esc(t("smtp.managed_notice")) + '</div>';
+            h += '<div class="surface-settings-grid">';
+            h += '<label class="surface-settings-label">' + esc(t("smtp.host")) + '</label>';
+            h += '<div class="surface-settings-muted">' + (cfg.host ? esc(cfg.host) + (cfg.port ? ":" + esc(String(cfg.port)) : "") : esc(t("smtp.not_configured"))) + '</div>';
+            h += '<label class="surface-settings-label">' + esc(t("smtp.recipients")) + '</label>';
+            h += '<input type="text" id="surface-smtp-rcpt" class="surface-settings-input" placeholder="ciso@example.com, soc@example.com" value="' + esc(cfg.recipients || "") + '">';
+            h += '</div>';
+            h += '<div class="ct-flex ct-gap-2 ct-mt-2">';
+            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_saveSmtpRecipients">' + esc(t("smtp.save")) + '</button>';
+            h += '<button class="ct-btn mt-8" data-write data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
+            h += '</div>';
+            holder.innerHTML = h;
+            return;
+        }
         h += '<div class="surface-settings-help">' + esc(t("smtp.help")) + '</div>';
         h += '<div class="surface-settings-grid">';
         h += '<label class="surface-settings-label">' + esc(t("smtp.host")) + '</label>';
@@ -4136,12 +4474,20 @@ window.AI_APP_CONFIG = {
         h += '<input type="text" id="surface-smtp-rcpt" class="surface-settings-input" placeholder="ciso@example.com, soc@example.com" value="' + esc(cfg.recipients || "") + '">';
         h += '</div>';
         h += '<label class="surface-settings-check"><input type="checkbox" id="surface-smtp-tls"' + (cfg.use_tls !== false ? " checked" : "") + '> ' + esc(t("smtp.use_tls")) + '</label>';
-        h += '<div style="display:flex;gap:8px;margin-top:10px">';
-        h += '<button class="btn-add" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
-        h += '<button class="btn-add" data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
+        h += '<div class="ct-flex ct-gap-2 ct-mt-2">';
+        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
+        h += '<button class="ct-btn mt-8" data-write data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
         h += '</div>';
         holder.innerHTML = h;
     }
+    window._saveSmtpRecipients = function () {
+        var body = {
+            recipients: (document.getElementById("surface-smtp-rcpt") || {}).value || "",
+        };
+        SurfaceAPI.smtpSetConfig(body).then(function () {
+            showStatus(t("smtp.saved"));
+        }).catch(function (e) { showStatus(e.message || String(e), true); });
+    };
     window._saveSmtpConfig = function () {
         var body = {
             host: (document.getElementById("surface-smtp-host") || {}).value || "",
@@ -4160,7 +4506,25 @@ window.AI_APP_CONFIG = {
     window._sendSmtpDigestNow = function () {
         showStatus(t("smtp.sending"));
         SurfaceAPI.sendEmailDigest().then(function (r) {
-            showStatus(t("smtp.sent").replace("{n}", String((r.recipients || []).length)));
-        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
+            // Confirmation bloquante : le toast de 3 s se rate (retour utilisateur),
+            // et un envoi mail mérite un accusé explicite.
+            alert(t("smtp.sent_confirm").replace("{recipients}", (r.recipients || []).join(", ")));
+        }).catch(function (e) { alert(t("smtp.send_failed").replace("{msg}", e.message || String(e))); });
     };
 })();
+// FEAT-35 — préférences de notification (modale partagée ct_notifprefs)
+window._openNotifPrefs = function () {
+    if (!window.ct_notifprefs)
+        return;
+    var isAdmin = !!(window._currentUser && window._currentUser.role === "admin");
+    var cfg = (window.CT_CONFIG || {});
+    var mods = cfg.modules ? cfg.modules.map(function (m) { return m.id; })
+        : (cfg.deployed && cfg.deployed.length ? cfg.deployed : null);
+    window.ct_notifprefs.open({
+        fetchPrefs: function () { return SurfaceAPI.get("/me/notification-prefs"); },
+        savePrefs: function (prefs) { return SurfaceAPI.put("/me/notification-prefs", prefs); },
+        sendTest: function () { return SurfaceAPI.post("/me/notification-prefs/test"); },
+        isAdmin: isAdmin,
+        modules: mods
+    });
+};

@@ -1,0 +1,3 @@
+# Runtime system packages required by this add-on (installed by Dockerfile.addons).
+# The Rust worker (bin/ciso-smb-scan) is dynamically linked against libsmbclient.
+libsmbclient

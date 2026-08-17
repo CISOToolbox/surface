@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/backend/ai_backend.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — AI Backend Overrides
  *
@@ -224,7 +225,7 @@
             '</div>' +
             (canUse
                 ? '<p class="fs-xs text-muted" style="margin:4px 0 0">' + esc(t("settings.ai_managed_note") || "Provider, model and API key are managed centrally by your administrator.") + '</p>'
-                : '<p class="fs-xs" style="margin:4px 0 0;color:var(--red)">' + esc(t("settings.ai_no_access") || "AI access has not been granted to your account. Contact your administrator.") + '</p>') +
+                : '<p class="fs-xs" style="margin:4px 0 0;color:var(--ct-critical)">' + esc(t("settings.ai_no_access") || "AI access has not been granted to your account. Contact your administrator.") + '</p>') +
             '</div>';
         h += (cfg.settingsExtraHTML ? cfg.settingsExtraHTML() : '');
         h += '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">' +

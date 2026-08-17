@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/gen/cisotoolbox.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Bibliothèque JS commune
  *
@@ -252,6 +257,15 @@ declare function _svgHeatmap(data?: CtHeatmapData | null, opts?: CtHeatmapOpts):
 declare function _svgTimeline(data?: CtTimelineData | null, opts?: CtTimelineOpts): string;
 declare function _postureColor(value: number, max?: number): string;
 declare function _postureLabel(score: number | null | undefined): string;
+interface CtKpiToneOpts {
+    dir?: "up" | "down";
+    target?: number | null;
+    amber?: number | null;
+    red?: number | null;
+    warn?: number | null;
+    bad?: number | null;
+}
+declare function _kpiTone(value: number | null | undefined, opts?: CtKpiToneOpts): string;
 declare function _svgBreakdown(breakdown: CtBreakdown | null | undefined, opts?: CtBreakdownOpts): string;
 /**
  * Update sidebar: set active item + open the right accordion group.
@@ -325,12 +339,16 @@ declare function toggleMenu(): void;
 declare function toggleSidebar(): void;
 declare var _undoStack: string[];
 declare var _redoStack: string[];
+declare function _undoEnabled(): boolean;
 declare function _saveState(): void;
 declare function _updateUndoButtons(): void;
 declare function _replaceD(json: string): void;
 declare function undo(): void;
 declare function redo(): void;
-declare function _confirmDialog(title: string, body?: string): Promise<boolean>;
+declare function _confirmDialog(title: string, body?: string, opts?: {
+    yes?: string;
+    no?: string;
+}): Promise<boolean>;
 declare function _deriveKey(password: string, salt: BufferSource): Promise<CryptoKey>;
 declare function _encryptData(jsonStr: string, password: string): Promise<Uint8Array<ArrayBuffer>>;
 declare function _decryptData(buffer: ArrayBuffer | Uint8Array<ArrayBuffer>, password: string): Promise<string>;
@@ -384,8 +402,12 @@ declare function ct_initTheme(): void;
 declare function ct_toggleTheme(): void;
 declare function _ctSyncThemeIcon(): void;
 declare function ct_toggleLang(): void;
+declare function ct_setLang(lang: string): void;
 declare function ct_go(view: string): void;
 declare function ct_toggleRailGroup(el: HTMLElement): void;
+declare function _ctCloseModuleMenu(): void;
+declare function _ctModuleMenuOutside(e: MouseEvent): void;
+declare function _ctModuleMenuEsc(e: KeyboardEvent): void;
 declare function ct_toggleModuleMenu(): void;
 /** Build the appbar markup for the current edition (SPEC §0/§10). Returns an
  *  HTML string; the caller injects it and then calls ct_hydrateIcons(). */
@@ -410,5 +432,11 @@ declare function ct_renderRail(spec: {
     foot?: string;
 }): string;
 declare var _w: Record<string, unknown>;
+declare function ct_handleMeasureDeepLink(opts: {
+    open: (measureId: string, entityId: string) => boolean;
+    tries?: number;
+    interval?: number;
+}): void;
+declare function ct_highlightMeasureRow(measureId: string): boolean;
 declare function ct_initModulePicker(): void;
 declare function _ctChromeBoot(): void;

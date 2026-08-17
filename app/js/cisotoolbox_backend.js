@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/backend/cisotoolbox_backend.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Backend persistence layer
  *
@@ -10,23 +11,15 @@
  * Snapshots disabled (use database backups instead).
  * Load AFTER cisotoolbox.js. Used by backend apps only.
  *
- * MASTER FACTORISÉ (migration TS) — remplace les 5 variantes historiques
- * (risk=vendor=asset=access ; appsec=watch=shared/js ; pilot ; surface ;
- * compliance) par un seul fichier paramétré par deux flags runtime, lus
- * au moment de l'action (jamais au chargement) :
+ * MASTER FACTORISÉ (migration TS) — remplace les variantes historiques
+ * par un seul fichier paramétré par un flag runtime, lu au moment de
+ * l'action (jamais au chargement) :
  *
  *   window._CT_IMPORT_NO_UNWRAP = true
  *       → désactive la détection/dépliage du format de backup Pilot
  *         {"module":...,"data":[{"id":...,"data":{...}}]} à l'import.
  *         À poser par le front du module PILOT (il ne doit pas déplier
  *         ses propres backups). Défaut : unwrap actif (8/9 modules).
- *
- *   window._BACKEND_BACKUPS_VIA_PILOT = true
- *       → les 6 stubs snapshots affichent la notice "snapshots gérés
- *         dans Pilot" (t("snap.backend.notice")) au lieu du message
- *         "Snapshots not available in backend mode" (et les stubs
- *         non-create deviennent parlants au lieu de muets).
- *         À poser par le front du module COMPLIANCE (suite mode).
  *
  * La délégation newAnalysis → window.catalogCreate reste gardée par un
  * typeof à l'exécution : les modules sans catalogue (pilot, appsec,
@@ -245,41 +238,15 @@ document.addEventListener("keydown", function (e) {
     }
 });
 // ═══════════════════════════════════════════════════════════════════════
-// SNAPSHOTS — No-ops (use database backups instead)
-//
-// In suite mode, point-in-time backups are centralized in Pilot:
-//   * Pilot /api/backups/* drives module export/restore via service token
-//   * Snapshots stored in the browser would not survive a redeploy of
-//     the module container, so we explicitly disable that path.
-//
-// Modules in that situation set `window._BACKEND_BACKUPS_VIA_PILOT`
-// (compliance) so their `renderHistory()` can render a clear redirect
-// notice instead of an empty panel with non-functional buttons.
+// SNAPSHOTS / HISTORIQUE — retirés en suite/standalone.
+// Fonctionnalité supprimée (l'onglet Historique n'existe plus). Stubs
+// conservés au cas où un vieux code appellerait encore ces noms.
 // ═══════════════════════════════════════════════════════════════════════
-function _snapBackendNotice() {
-    if (window._BACKEND_BACKUPS_VIA_PILOT) {
-        showStatus(typeof t === "function" ? t("snap.backend.notice") : "Snapshots are managed in Pilot in suite mode.");
-    }
-    else {
-        showStatus("Snapshots not available in backend mode");
-    }
-}
-function createSnapshot() { _snapBackendNotice(); }
-function restoreSnapshot() { if (window._BACKEND_BACKUPS_VIA_PILOT)
-    _snapBackendNotice(); }
-function deleteSnapshot() { if (window._BACKEND_BACKUPS_VIA_PILOT)
-    _snapBackendNotice(); }
-function exportSnapshot() { if (window._BACKEND_BACKUPS_VIA_PILOT)
-    _snapBackendNotice(); }
-function enableSnapEncryption() { if (window._BACKEND_BACKUPS_VIA_PILOT)
-    _snapBackendNotice(); }
-function disableSnapEncryption() { if (window._BACKEND_BACKUPS_VIA_PILOT)
-    _snapBackendNotice(); }
+function createSnapshot() { }
+function restoreSnapshot() { }
+function deleteSnapshot() { }
+function exportSnapshot() { }
+function enableSnapEncryption() { }
+function disableSnapEncryption() { }
 function _isSnapEncrypted() { return false; }
 function _getSnapshots() { return Promise.resolve([]); }
-// Libellés par défaut de la notice snapshots-via-Pilot — le module peut
-// les surcharger (ses dictionnaires chargent après ce fichier).
-if (typeof _registerTranslations === "function") {
-    _registerTranslations("fr", { "snap.backend.notice": "Les snapshots sont gérés dans Pilot (sauvegardes centralisées de la suite)." });
-    _registerTranslations("en", { "snap.backend.notice": "Snapshots are managed in Pilot (suite-level centralized backups)." });
-}

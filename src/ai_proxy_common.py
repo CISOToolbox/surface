@@ -1,3 +1,8 @@
+# -----------------------------------------------------------------------------
+# REPLICATED from the private shared repository (shared/python/ai_proxy_common.py).
+# DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+# Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+# -----------------------------------------------------------------------------
 """Shared AI-proxy core for CISO Toolbox backend modules.
 
 This file is COPIED into each module's src/ directory (like auth_common.py).
@@ -37,48 +42,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import auth_enabled, get_current_user, require_admin
 from src.database import get_db
 from src.models import AppSettings, User
+from src.settings_crypto import decrypt_setting, encrypt_setting, is_secret_key
+from src.ai_models_common import AI_PROVIDERS
 from src.schemas import AICompleteRequest, AICompleteResponse, AIConfigResponse, AIRuntimeResponse
 
-AI_PROVIDERS = {
-    "anthropic": {
-        "label": "Anthropic (Claude)",
-        "models": [
-            {"id": "claude-opus-4-8", "label": "Claude Opus 4.8"},
-            {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
-            {"id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
-            {"id": "claude-opus-4-6", "label": "Claude Opus 4.6"},
-        ],
-        "defaultModel": "claude-sonnet-4-6",
-        "endpoint": "https://api.anthropic.com/v1/messages",
-    },
-    "openai": {
-        "label": "OpenAI (GPT)",
-        "models": [
-            {"id": "gpt-5.5", "label": "GPT-5.5"},
-            {"id": "gpt-5.5-pro", "label": "GPT-5.5 Pro"},
-            {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini"},
-            {"id": "gpt-4o", "label": "GPT-4o"},
-            {"id": "gpt-4o-mini", "label": "GPT-4o mini"},
-        ],
-        "defaultModel": "gpt-5.5",
-        "endpoint": "https://api.openai.com/v1/chat/completions",
-    },
-    "bedrock": {
-        "label": "AWS Bedrock",
-        "models": [
-            {"id": "anthropic.claude-sonnet-4-6-20250514-v1:0", "label": "Claude Sonnet 4.6 (Bedrock)"},
-            {"id": "anthropic.claude-haiku-4-5-20251001-v1:0", "label": "Claude Haiku 4.5 (Bedrock)"},
-        ],
-        "defaultModel": "anthropic.claude-sonnet-4-6-20250514-v1:0",
-        "endpoint": "https://bedrock-runtime.{region}.amazonaws.com",
-    },
-}
 
 
 async def _get_setting(key: str, db: AsyncSession) -> str:
     r = await db.execute(select(AppSettings).where(AppSettings.key == key))
     s = r.scalar_one_or_none()
-    return (s.value if s and s.value else "") or ""
+    raw = (s.value if s and s.value else "") or ""
+    # Secrets are stored encrypted; rows written before that are returned
+    # unchanged and get encrypted on their next write (see settings_crypto).
+    return decrypt_setting(raw) if is_secret_key(key) else raw
 
 
 async def _get_custom_llm(db):
@@ -101,11 +77,13 @@ async def _get_api_key(provider: str, db: AsyncSession) -> str | None:
     result = await db.execute(select(AppSettings).where(AppSettings.key == key_name))
     setting = result.scalar_one_or_none()
     if setting and setting.value:
-        return setting.value
+        return decrypt_setting(setting.value)
     if provider == "anthropic":
         return os.getenv("ANTHROPIC_API_KEY")
     if provider == "openai":
         return os.getenv("OPENAI_API_KEY")
+    if provider == "gemini":
+        return os.getenv("GEMINI_API_KEY")
     return None
 
 
@@ -183,8 +161,28 @@ def _check_ai_access(user: Optional[User]) -> None:
         raise HTTPException(status_code=403, detail="AI access not granted. Contact your administrator.")
 
 
+# Output cap sent to every provider. 4096 truncated the bulk assistants
+# (grouping, plan suggestions) mid-JSON; overridable per deployment.
+AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "8192"))
+
+
+def _hit_output_cap(provider: str, data: dict) -> bool:
+    """Did the provider stop because it ran out of output budget?
+
+    Each vendor names it differently, and all of them answer HTTP 200 while
+    doing it — the truncation shows up only in this field.
+    """
+    if provider in ("anthropic", "bedrock", "custom"):
+        return data.get("stop_reason") == "max_tokens"
+    if provider == "gemini":
+        cands = data.get("candidates") or [{}]
+        return (cands[0] or {}).get("finishReason") == "MAX_TOKENS"
+    choices = data.get("choices") or [{}]
+    return (choices[0] or {}).get("finish_reason") == "length"
+
+
 async def call_llm(db: AsyncSession, system: str, user_msg: str,
-                   provider: str, model: str, max_tokens: int = 4096) -> str:
+                   provider: str, model: str, max_tokens: int = AI_MAX_TOKENS) -> str:
     """Call the configured AI provider with a system + user prompt and return
     the raw text. Shared by POST /complete and the métier endpoints.
 
@@ -198,7 +196,11 @@ async def call_llm(db: AsyncSession, system: str, user_msg: str,
     if provider != "custom" and not provider_conf:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    # follow_redirects=False is httpx's default, but it is stated here because
+    # the custom-provider branch below connects to a pinned IP: a redirect is a
+    # brand-new URL that never went through the guard, so silently enabling
+    # redirects later would undo the pin.
+    async with httpx.AsyncClient(timeout=170.0, follow_redirects=False) as client:
         try:
             if provider == "anthropic":
                 resp = await client.post(
@@ -220,24 +222,24 @@ async def call_llm(db: AsyncSession, system: str, user_msg: str,
                 if not custom.get("endpoint"):
                     raise HTTPException(status_code=503, detail="Custom LLM not configured")
                 url = custom["endpoint"].rstrip("/")
-                # SSRF guard: endpoint is admin/Pilot-configured — refuse a
-                # non-HTTPS scheme or a host resolving to a private/metadata IP.
-                from urllib.parse import urlparse as _urlparse
-                from src.ssrf_guard import resolve_safe_target as _rst
-                _pc = _urlparse(url)
-                if _pc.scheme != "https" or not _pc.hostname:
-                    raise HTTPException(status_code=400, detail="Custom LLM endpoint must be https://")
-                try:
-                    _rst(_pc.hostname)
-                except ValueError as _e:
-                    raise HTTPException(status_code=400, detail=f"Custom LLM endpoint blocked: {_e}")
                 if not url.endswith("/chat/completions"):
                     url += "/chat/completions"
-                hdrs = {"Content-Type": "application/json"}
+                # SSRF guard: the endpoint is admin/Pilot-configured and this
+                # POST carries the API key. Validating the hostname and then
+                # handing the *name* to httpx left a rebinding window — httpx
+                # re-resolves, so the IP that was vetted need not be the one
+                # connected to. Connect to the pinned IP instead, keeping the
+                # Host header and SNI so TLS still verifies the real name.
+                from src.ssrf_guard import resolve_safe_url as _rsu
+                try:
+                    url, _host_headers, _ext = _rsu(url, require_https=True)
+                except ValueError as _e:
+                    raise HTTPException(status_code=400, detail=f"Custom LLM endpoint blocked: {_e}")
+                hdrs = {"Content-Type": "application/json", **_host_headers}
                 if custom.get("key"):
                     hdrs["Authorization"] = f"Bearer {custom['key']}"
                 resp = await client.post(
-                    url, headers=hdrs,
+                    url, headers=hdrs, extensions=_ext,
                     json={
                         "model": custom.get("model") or model,
                         "max_tokens": max_tokens,
@@ -245,6 +247,21 @@ async def call_llm(db: AsyncSession, system: str, user_msg: str,
                             {"role": "system", "content": system},
                             {"role": "user", "content": user_msg},
                         ],
+                    },
+                )
+            elif provider == "gemini":
+                from urllib.parse import quote
+                g_url = provider_conf["endpoint"].format(model=quote(model, safe=""))
+                resp = await client.post(
+                    g_url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": api_key,
+                    },
+                    json={
+                        "systemInstruction": {"parts": [{"text": system}]},
+                        "contents": [{"role": "user", "parts": [{"text": user_msg}]}],
+                        "generationConfig": {"maxOutputTokens": max_tokens},
                     },
                 )
             elif provider == "bedrock":
@@ -290,8 +307,20 @@ async def call_llm(db: AsyncSession, system: str, user_msg: str,
         raise HTTPException(status_code=502, detail=f"AI provider returned error {resp.status_code}")
 
     data = resp.json()
+    if _hit_output_cap(provider, data):
+        # 200 with a reply cut mid-sentence. Returning it as-is turned a cap
+        # WE set into "the AI returned invalid JSON", blaming the model and
+        # sending the operator hunting in the wrong place.
+        raise HTTPException(
+            status_code=502,
+            detail=(f"AI reply truncated at the {max_tokens}-token output cap. "
+                    "Narrow the request (fewer items at once) or raise "
+                    "AI_MAX_TOKENS."))
     if provider in ("anthropic", "bedrock"):
         return data.get("content", [{}])[0].get("text", "")
+    if provider == "gemini":
+        parts = (data.get("candidates", [{}])[0].get("content", {}) or {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts)
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
@@ -314,7 +343,15 @@ def _parse_json_lax(text: str):
     s = (text or "").strip()
     m = re.search(r"[\[{][\s\S]*[\]}]", s)
     if not m:
-        raise HTTPException(status_code=502, detail="AI did not return JSON")
+        # Quote what actually came back. "AI did not return JSON" alone is
+        # undiagnosable: the reply is usually the model SAYING what is wrong
+        # (wrong model id, quota exhausted, prose refusal), and that sentence
+        # is the whole diagnosis. Bounded — a full reply in an error detail
+        # would end up in logs and in the UI.
+        excerpt = " ".join(s.split())[:200] or "(empty reply)"
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI did not return JSON. Model replied: {excerpt}")
     try:
         return json.loads(m.group(0))
     except json.JSONDecodeError as exc:
@@ -376,6 +413,7 @@ def make_ai_router() -> APIRouter:
             model=model,
             anthropic_configured=bool(await _get_api_key("anthropic", db)),
             openai_configured=bool(await _get_api_key("openai", db)),
+            gemini_configured=bool(await _get_api_key("gemini", db)),
             custom_configured=custom_configured,
         )
 
@@ -393,6 +431,7 @@ def make_ai_router() -> APIRouter:
         return AIConfigResponse(
             anthropic_configured=bool(await _get_api_key("anthropic", db)),
             openai_configured=bool(await _get_api_key("openai", db)),
+            gemini_configured=bool(await _get_api_key("gemini", db)),
             providers=providers,
         )
 
@@ -411,13 +450,19 @@ def make_ai_router() -> APIRouter:
             require_admin(user)
 
         async def _upsert(key: str, value: str) -> None:
+            # A stolen pg_dump used to yield live provider keys in cleartext —
+            # and shared/db-snapshot.sh makes dumps routine. Encrypt at rest
+            # for the keys that are credentials; provider/model/region stay
+            # readable, they are configuration.
+            if is_secret_key(key):
+                value = encrypt_setting(value)
             r = await db.execute(select(AppSettings).where(AppSettings.key == key))
             s = r.scalar_one_or_none()
             if s:
                 s.value = value
             else:
                 db.add(AppSettings(key=key, value=value))
-        for provider in ("anthropic", "openai", "bedrock"):
+        for provider in ("anthropic", "openai", "bedrock", "gemini"):
             if provider in body:
                 await _upsert(f"ai_key_{provider}", body.get(provider, ""))
         # Bedrock secret/region + custom-LLM config (standalone deployments)
@@ -429,6 +474,20 @@ def make_ai_router() -> APIRouter:
             await _upsert("ai_provider", body.get("provider", ""))
         if "model" in body:
             await _upsert("ai_model", body.get("model", ""))
+        # LLM credential/config change — journaled with key-set FLAGS only,
+        # never values (FEAT-30 review: 5/5 modules were blind here).
+        try:
+            try:
+                from src.audit import log_write
+            except ImportError:
+                from src.audit_common import log_write
+            await log_write(db, None, request, "ai.keys_updated",
+                            actor="pilot" if service_token else "",
+                            entity_type="settings", entity_id="ai",
+                            details={k: bool(body.get(k)) for k in body.keys()
+                                     if k != "model"})
+        except ImportError:
+            pass  # module without a write journal yet
         await db.commit()
         return {"ok": True}
 
@@ -436,7 +495,7 @@ def make_ai_router() -> APIRouter:
     async def get_ai_keys(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         result = {}
-        for provider in ("anthropic", "openai"):
+        for provider in ("anthropic", "openai", "gemini"):
             key = await _get_api_key(provider, db)
             result[provider] = "configured" if key else ""
         return result
@@ -464,6 +523,20 @@ def make_ai_router() -> APIRouter:
                             "model": provider_conf["defaultModel"],
                             "max_tokens": 1,
                             "messages": [{"role": "user", "content": "hi"}],
+                        },
+                    )
+                elif provider == "gemini":
+                    from urllib.parse import quote
+                    resp = await client.post(
+                        provider_conf["endpoint"].format(
+                            model=quote(provider_conf["defaultModel"], safe="")),
+                        headers={
+                            "Content-Type": "application/json",
+                            "x-goog-api-key": api_key,
+                        },
+                        json={
+                            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                            "generationConfig": {"maxOutputTokens": 1},
                         },
                     )
                 else:

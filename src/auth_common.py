@@ -1,3 +1,8 @@
+# -----------------------------------------------------------------------------
+# REPLICATED from the private shared repository (shared/python/auth_common.py).
+# DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+# Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+# -----------------------------------------------------------------------------
 """Shared auth module for CISO Toolbox backend modules.
 
 This file is COPIED into each module's src/ directory by the deploy/sync
@@ -72,8 +77,29 @@ from src.models import User
 
 # ── Configuration (read once at import) ──────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET", "")
+# Minimum length for the root session secret, checked in
+# assert_auth_posture(). Mirrors crypto.py's _MIN_KEY_LEN so the two
+# credentials cannot drift apart in strength.
+_MIN_JWT_SECRET_LEN = 32
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24
+
+
+def _session_ttl_hours() -> int:
+    """Session lifetime in hours, from JWT_EXPIRY_HOURS (default 24).
+
+    A stateless JWT cannot be revoked before it expires, so this is the upper
+    bound on how long a deleted or downgraded account keeps module access.
+    Tighten it (e.g. 4–8h) to shrink that window at the cost of more frequent
+    re-authentication; the default preserves the historical 24h. Clamped to a
+    sane 1h–7d range, and falls back to 24 on a non-numeric value rather than
+    refusing to boot over a typo."""
+    try:
+        return min(168, max(1, int(os.getenv("JWT_EXPIRY_HOURS", "24"))))
+    except ValueError:
+        return 24
+
+
+JWT_EXPIRY_HOURS = _session_ttl_hours()
 AUTH_MODE = os.getenv("AUTH_MODE", "pilot")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
 MODULE_COOKIE = os.getenv("MODULE_COOKIE", "module_token")
@@ -198,6 +224,18 @@ def assert_auth_posture() -> None:
             "AUTH_MODE=none to run without authentication (test only). "
             "Refusing to start."
         )
+    # Non-empty was the only bar, so "admin123" booted happily. HS256 module
+    # cookies are offline-crackable against a weak secret — and the HKDF `info`
+    # strings that derive each module's key are public in this very file, so
+    # recovering the root secret forges admin tokens for all nine modules at
+    # once. Same floor crypto.py already enforces on ENCRYPTION_KEY.
+    if JWT_SECRET and len(JWT_SECRET) < _MIN_JWT_SECRET_LEN:
+        raise RuntimeError(
+            f"JWT_SECRET is too short ({len(JWT_SECRET)} chars): minimum "
+            f"{_MIN_JWT_SECRET_LEN}. It is the root secret every module's "
+            "session key is derived from — generate one with "
+            "`openssl rand -hex 32`. Refusing to start."
+        )
     if AUTH_MODE == "pilot" and not MODULE_NAME:
         # Without MODULE_NAME the module cannot know which derived key and
         # which cookie Pilot minted for it: every request would 401 with no
@@ -238,6 +276,77 @@ def decode_jwt(token: str) -> dict:
         audience=TOKEN_AUDIENCE,
         issuer=TOKEN_ISSUER,
     )
+
+
+
+# ── Upstream revocation check (pilot mode) ───────────────────────
+#
+# Module sessions are stateless JWTs good for 24h, and nothing used to consult
+# Pilot about them: _sync_user_from_jwt below rebuilt the local row from the
+# token's claims alone. Deleting or demoting an account in Pilot therefore
+# changed nothing until the cookie expired — up to a day of retained access,
+# with the permissions frozen at mint time. Pilot's own _resolve_user has
+# always refused a token whose user row is gone; this gives the modules the
+# same check, over the service-token channel that already exists for the
+# other direction.
+#
+# Cached, because this sits on the request path: one lookup per identity per
+# _REVOCATION_TTL, not one per request.
+#
+# Failure policy is deliberately fail-OPEN, and that is a trade-off worth
+# stating. Failing closed would make every module unusable whenever Pilot is
+# briefly unavailable — turning a Pilot restart into a suite-wide outage. An
+# unreachable Pilot leaves us exactly where we were before this check existed,
+# so the transient degradation is "as bad as yesterday", never worse. The
+# negative answer, the one that matters, is only ever produced by Pilot itself.
+_PILOT_URL = os.getenv("PILOT_URL", "")
+_SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "")
+_REVOCATION_TTL = int(os.getenv("REVOCATION_CHECK_TTL_SECONDS", "300"))
+_revocation_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _revocation_check_enabled() -> bool:
+    """Only in pilot mode, and only when the channel is actually configured.
+
+    In standalone mode the module owns its user table — there is no upstream to
+    ask. With AUTH_MODE=none there is no identity at all.
+    """
+    return AUTH_MODE == "pilot" and bool(_PILOT_URL) and bool(_SERVICE_TOKEN)
+
+
+async def _is_active_upstream(email: str) -> bool:
+    """Does Pilot still consider `email` an active account?"""
+    if not _revocation_check_enabled() or not email:
+        return True
+
+    import time
+
+    now = time.time()
+    hit = _revocation_cache.get(email)
+    if hit and now - hit[0] < _REVOCATION_TTL:
+        return hit[1]
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=False) as client:
+            resp = await client.get(
+                f"{_PILOT_URL.rstrip('/')}/api/internal/users/status",
+                params={"email": email},
+                headers={"X-Service-Token": _SERVICE_TOKEN},
+            )
+        if resp.status_code != 200:
+            # Pilot answered, but not with a verdict (misconfigured token,
+            # endpoint absent on an older Pilot). Not a revocation.
+            return True
+        allowed = bool(resp.json().get("active"))
+    except Exception:
+        # Unreachable: keep serving, and retry on the next request rather than
+        # caching a verdict we did not actually get.
+        return True
+
+    _revocation_cache[email] = (now, allowed)
+    return allowed
 
 
 # ── User sync ────────────────────────────────────────────────────
@@ -319,6 +428,11 @@ async def _resolve_user_from_cookie(
     module_role = _get_module_role(payload)
     if not module_role and payload.get("role") == "admin":
         module_role = "admin"
+    if not await _is_active_upstream(payload.get("email", "")):
+        raise HTTPException(
+            status_code=401,
+            detail="Account no longer active. Sign in again.",
+        )
     user = await _sync_user_from_jwt(db, payload)
     user._module_role = module_role or ""  # type: ignore
     return user, module_role or ""
@@ -389,7 +503,11 @@ def get_module_role(user: Optional[User]) -> str:
     None`). Safe to call with the sentinel — that is the point."""
     if user is None:
         return "admin"  # no auth = full access
-    return getattr(user, "_module_role", "") or "admin"
+    # A real user with no role for THIS module has no role — not admin.
+    # Business routes never reach this branch (get_current_user 403s on an
+    # empty module role first), but the permissive dependencies do, and
+    # GET /auth/role was answering "admin" for a role-less account.
+    return getattr(user, "_module_role", "") or ""
 
 
 # Canonical module-role vocabulary for the owner-model modules. Centralised so

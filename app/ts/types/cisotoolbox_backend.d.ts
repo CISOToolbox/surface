@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/gen/backend/cisotoolbox_backend.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Backend persistence layer
  *
@@ -6,23 +11,15 @@
  * Snapshots disabled (use database backups instead).
  * Load AFTER cisotoolbox.js. Used by backend apps only.
  *
- * MASTER FACTORISÉ (migration TS) — remplace les 5 variantes historiques
- * (risk=vendor=asset=access ; appsec=watch=shared/js ; pilot ; surface ;
- * compliance) par un seul fichier paramétré par deux flags runtime, lus
- * au moment de l'action (jamais au chargement) :
+ * MASTER FACTORISÉ (migration TS) — remplace les variantes historiques
+ * par un seul fichier paramétré par un flag runtime, lu au moment de
+ * l'action (jamais au chargement) :
  *
  *   window._CT_IMPORT_NO_UNWRAP = true
  *       → désactive la détection/dépliage du format de backup Pilot
  *         {"module":...,"data":[{"id":...,"data":{...}}]} à l'import.
  *         À poser par le front du module PILOT (il ne doit pas déplier
  *         ses propres backups). Défaut : unwrap actif (8/9 modules).
- *
- *   window._BACKEND_BACKUPS_VIA_PILOT = true
- *       → les 6 stubs snapshots affichent la notice "snapshots gérés
- *         dans Pilot" (t("snap.backend.notice")) au lieu du message
- *         "Snapshots not available in backend mode" (et les stubs
- *         non-create deviennent parlants au lieu de muets).
- *         À poser par le front du module COMPLIANCE (suite mode).
  *
  * La délégation newAnalysis → window.catalogCreate reste gardée par un
  * typeof à l'exécution : les modules sans catalogue (pilot, appsec,
@@ -43,7 +40,6 @@ declare function quickSaveJSON(): Promise<void>;
 declare function saveJSON(): Promise<void>;
 declare function enableFileEncryption(): Promise<void>;
 declare function disableFileEncryption(): void;
-declare function _snapBackendNotice(): void;
 declare function createSnapshot(): void;
 declare function restoreSnapshot(): void;
 declare function deleteSnapshot(): void;

@@ -32,9 +32,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.mailer_common import smtp_deliver
+from src.settings_crypto import decrypt_setting, encrypt_setting_or_plain
 from src.models import AppSettings, Finding, Measure, MonitoredAsset, ScanJob, User
 from src.scanners import _resolve_safe_target
 
@@ -248,11 +249,26 @@ class SmtpConfig(BaseModel):
 
 
 async def _load_smtp(db: AsyncSession) -> dict[str, str]:
+    """Read the ``smtp.*`` rows into a plain dict keyed by field name.
+
+    Fields follow the suite-wide contract (host, port, user, password,
+    from_addr, tls) — see ``routes/internal.py::_SMTP_FIELDS`` — plus
+    ``recipients``, which is Surface's own and is never pushed by Pilot.
+    """
     rows = await db.execute(select(AppSettings).where(AppSettings.key.like("smtp.%")))
     cfg: dict[str, str] = {}
     for r in rows.scalars():
-        cfg[r.key[len("smtp."):]] = r.value or ""
+        short = r.key[len("smtp."):]
+        v = r.value or ""
+        cfg[short] = decrypt_setting(v) if short == "password" else v
     return cfg
+
+
+def _smtp_tls_on(cfg: dict[str, str]) -> bool:
+    """TLS flag, tolerant of both writers: Surface's own UI stores "1"/"0",
+    Pilot pushes "true"/"false". Absent means on (STARTTLS is the default)."""
+    raw = str(cfg.get("tls", "1")).strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _render_digest_html(data: dict[str, Any]) -> str:
@@ -340,7 +356,7 @@ def _build_digest_message(cfg: dict[str, str], data: dict[str, Any]) -> tuple[MI
     """Validate sender/recipients/host, build the MIME message. Raises
     ValueError / HTTPException-worthy errors that the caller translates."""
     _validate_smtp_host(cfg["host"])  # SSRF guard
-    sender = _validate_email(cfg["sender"])
+    sender = _validate_email(cfg["from_addr"])
     recipients = _parse_recipients(cfg.get("recipients", ""))
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "Surface — digest hebdomadaire"
@@ -354,13 +370,17 @@ def _build_digest_message(cfg: dict[str, str], data: dict[str, Any]) -> tuple[MI
 async def smtp_get_config(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cfg = await _load_smtp(db)
     return {
+        # The HTTP field names are the UI's, unchanged; only the storage
+        # keys were aligned on the suite contract.
         "host": cfg.get("host", ""),
         "port": int(cfg.get("port") or 587),
-        "username": cfg.get("username", ""),
-        "sender": cfg.get("sender", ""),
+        "username": cfg.get("user", ""),
+        "sender": cfg.get("from_addr", ""),
         "recipients": cfg.get("recipients", ""),
-        "use_tls": (cfg.get("use_tls", "1") != "0"),
+        "use_tls": _smtp_tls_on(cfg),
         "password_set": bool(cfg.get("password")),
+        # Suite mode: the server config is Pilot-managed; the UI hides it.
+        "managed": __import__("os").getenv("AUTH_MODE", "pilot") == "pilot",
     }
 
 
@@ -371,6 +391,34 @@ async def smtp_set_config(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_admin(user)
+    # Suite design rule: the SMTP SERVER config is centralized in Pilot and
+    # pushed via /internal/smtp. In suite mode this route only accepts the
+    # module-owned part (report recipients); server fields are refused.
+    from src.auth_common import AUTH_MODE
+    if AUTH_MODE == "pilot":
+        cur = await _load_smtp(db)
+        server_touched = (
+            (body.host and body.host != cur.get("host", ""))
+            or (body.username and body.username != cur.get("user", ""))
+            or bool(body.password)
+            or (body.sender and body.sender != cur.get("from_addr", ""))
+        )
+        if server_touched:
+            raise HTTPException(
+                status_code=409,
+                detail="Config SMTP gérée dans Pilot (Paramètres) en mode suite — "
+                       "seuls les destinataires se règlent ici.")
+        row = (await db.execute(
+            select(AppSettings).where(AppSettings.key == "smtp.recipients")
+        )).scalar_one_or_none()
+        recips = ",".join(_parse_recipients(body.recipients))
+        if row is None:
+            db.add(AppSettings(key="smtp.recipients", value=recips))
+        else:
+            row.value = recips
+        await db.commit()
+        return {"ok": True, "managed": True}
     # Pre-persist validation: reject unsafe host + malformed addresses so
     # the scheduler can trust whatever is in AppSettings.
     if body.host:
@@ -392,14 +440,14 @@ async def smtp_set_config(
     entries = {
         "host": body.host,
         "port": str(body.port),
-        "username": body.username,
-        "sender": body.sender,
+        "user": body.username,
+        "from_addr": body.sender,
         "recipients": body.recipients,
-        "use_tls": "1" if body.use_tls else "0",
+        "tls": "1" if body.use_tls else "0",
     }
     # Only persist password if non-empty (UI shows placeholder for existing)
     if body.password:
-        entries["password"] = body.password
+        entries["password"] = encrypt_setting_or_plain(body.password)
     for short, value in entries.items():
         key = f"smtp.{short}"
         existing = (await db.execute(select(AppSettings).where(AppSettings.key == key))).scalar_one_or_none()
@@ -419,8 +467,9 @@ async def email_digest_send(
 ):
     """Manual trigger: aggregate a fresh report and email it now.
     Also scheduled weekly via the scheduler (if SMTP is configured)."""
+    require_min_role(user, "editor", SURFACE_ROLES)
     cfg = await _load_smtp(db)
-    if not cfg.get("host") or not cfg.get("sender") or not cfg.get("recipients"):
+    if not cfg.get("host") or not cfg.get("from_addr") or not cfg.get("recipients"):
         raise HTTPException(status_code=400, detail="SMTP non configuré (host/sender/recipients manquants)")
 
     data = await _aggregate_report(db)
@@ -432,11 +481,10 @@ async def email_digest_send(
     try:
         port = int(cfg.get("port") or 587)
         host = cfg["host"]
-        use_tls = cfg.get("use_tls", "1") != "0"
         await asyncio.to_thread(
             _smtp_send_blocking,
-            host, port, use_tls,
-            cfg.get("username", ""), cfg.get("password", ""),
+            host, port, _smtp_tls_on(cfg),
+            cfg.get("user", ""), cfg.get("password", ""),
             sender, recipients, msg.as_string(),
         )
     except Exception as e:

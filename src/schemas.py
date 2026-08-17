@@ -116,6 +116,7 @@ class AICompleteResponse(BaseModel):
 class AIConfigResponse(BaseModel):
     anthropic_configured: bool
     openai_configured: bool
+    gemini_configured: bool = False
     providers: dict[str, dict[str, Any]]
 
 
@@ -126,4 +127,5 @@ class AIRuntimeResponse(BaseModel):
     model: str
     anthropic_configured: bool
     openai_configured: bool
+    gemini_configured: bool = False
     custom_configured: bool = False

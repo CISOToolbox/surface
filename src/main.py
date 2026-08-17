@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.database import engine
+from src.database import async_session, engine
 from src.models import Base
 from src.routes.ai import router as ai_router
 from src.routes.auth import router as auth_router
@@ -22,6 +22,7 @@ from src.routes.reports import router as reports_router
 from src.routes.scans import router as scans_router
 from src.routes.users import router as users_router
 from src.routes.audit import router as audit_router
+from src.version_common import version_payload
 
 # Suite-integration routers — only present in the full suite build;
 # silently absent in standalone deployments.
@@ -62,6 +63,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+# Generic write journal (FEAT-30 P1.6): every mutating /api request is
+# journaled; routes already covered by in-handler log_action are excluded.
+from src.audit_common import install_write_journal_middleware
+install_write_journal_middleware(app, exclude=[
+    ("DELETE", r"/api/findings/[^/]+"),
+    ("POST", r"/api/findings/bulk-(triage|delete)"),
+    ("POST", r"/api/monitored-assets"),
+    ("DELETE", r"/api/monitored-assets/[^/]+"),
+    ("POST", r"/api/monitored-assets/exclusions"),
+    ("DELETE", r"/api/monitored-assets/exclusions/[^/]+"),
+    ("PATCH", r"/api/measures/[^/]+"),
+    ("DELETE", r"/api/measures/[^/]+"),
+    ("POST", r"/api/scans/jobs"),
+])
 
 APP_URL = os.environ.get("APP_URL", "http://localhost:8086")
 app.add_middleware(
@@ -82,6 +97,8 @@ app.include_router(ai_router)
 app.include_router(reports_router)
 app.include_router(users_router)
 app.include_router(audit_router)
+from src.routes.notifications import router as notifications_router
+app.include_router(notifications_router)
 if internal_router is not None:
     app.include_router(internal_router)
 if directory_proxy_router is not None:
@@ -92,6 +109,14 @@ if directory_proxy_router is not None:
 async def health():
     return {"status": "ok"}
 
+
+
+@app.get("/api/version")
+async def version():
+    """Version identity (FEAT-29): public, used for backup
+    compatibility checks before restore."""
+    async with async_session() as db:
+        return await version_payload("surface", Base.metadata, db)
 
 @app.on_event("startup")
 async def on_startup():
@@ -108,6 +133,30 @@ async def on_startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
+
+    # Reconcile orphaned scan jobs. Scans run in-process (FastAPI
+    # BackgroundTasks + the scheduler), so any job still marked running/pending
+    # at startup was killed by the restart and can never finish. Mark them
+    # failed so they stop showing as "in progress" forever — otherwise every
+    # redeploy leaks a stuck job into the Scans view.
+    from datetime import datetime, timezone
+    from sqlalchemy import update as _sa_update
+    from src.models import ScanJob
+    async with async_session() as db:
+        res = await db.execute(
+            _sa_update(ScanJob)
+            .where(ScanJob.status.in_(["running", "pending"]))
+            .values(
+                # Stored as a translation KEY (not prose): the frontend localizes
+                # job.error.* keys, so this message follows the UI language.
+                status="failed",
+                error="job.error.interrupted_by_restart",
+                completed_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+        if res.rowcount:
+            logger.info("Reconciled %d orphaned scan job(s) -> failed", res.rowcount)
 
     # Hydrate in-memory caches from AppSettings so scanners have the
     # right tuning + API keys before the first scheduler tick fires.

@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ct_measure_modal.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_measure_modal — Unified add/edit measure modal for every module.
  *

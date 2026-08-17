@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/gen/ct_bulkbar.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_bulkbar — Fixed bottom bulk-action bar for CISO Toolbox tables.
  *

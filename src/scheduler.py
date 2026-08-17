@@ -25,7 +25,7 @@ from sqlalchemy import select
 
 from src.database import async_session
 from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
-from src.models import MonitoredAsset, ScanJob
+from src.models import MonitoredAsset, ScanExclusion, ScanJob, is_excluded
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, resolve_first_ip, run_enabled_scanners
 
 logger = logging.getLogger("surface.scheduler")
@@ -43,11 +43,22 @@ _SCANNER_BY_KIND = {
 }
 
 
+async def _load_scheduler_exclusions(db) -> list[str]:
+    """All scan-blocklist values (see models.is_excluded)."""
+    res = await db.execute(select(ScanExclusion.value))
+    return [v for (v,) in res.all()]
+
+
 async def _scan_one(asset_id) -> None:
     """Execute the scanners for a single asset and record the run as a ScanJob."""
     async with async_session() as db:
         asset = await db.get(MonitoredAsset, asset_id)
         if not asset or not asset.enabled:
+            return
+        # Honour the scan blocklist (value or resolved IP) — an exclusion added
+        # after enrollment must silence future scheduled runs too.
+        _excl = await _load_scheduler_exclusions(db)
+        if is_excluded([asset.value, asset.resolved_ip or ""], _excl):
             return
         kind = asset.kind
         value = asset.value
@@ -117,6 +128,7 @@ async def _scan_one(asset_id) -> None:
                 select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
             )
             existing_values = {v for (v,) in existing_q.all()}
+            exclusions = await _load_scheduler_exclusions(db)
 
             # v0.2 — newly discovered hosts always get the full host
             # default profile (nmap_quick, tls, nuclei, takeover, techstack,
@@ -142,6 +154,10 @@ async def _scan_one(asset_id) -> None:
                     )
                     break
                 if value in existing_values:
+                    continue
+                # Never auto-enrol a blocklisted value — keeps an exclusion
+                # effective even when the name/IP is rediscovered on a later run.
+                if is_excluded([value], exclusions):
                     continue
                 existing_values.add(value)
                 db.add(MonitoredAsset(
@@ -177,6 +193,19 @@ async def _scan_one(asset_id) -> None:
         else:
             job.status = "completed"
         await db.commit()
+
+        # FEAT-35 — email subscribers about findings first seen by this run.
+        # Never raises (guarded inside).
+        if job.status == "completed" and effective > 0:
+            from src.surface_notify import notify_scan_new_findings
+            await notify_scan_new_findings(db, job_id, value, job.started_at)
+        # New attack surface auto-enrolled — journaled (routine scans are not).
+        if new_hosts_added:
+            from src.audit_common import log_write
+            await log_write(db, None, None, "asset.auto_enroll", actor="scheduler",
+                            entity_type="monitored_asset", target=value,
+                            details={"new_hosts": new_hosts_added, "parent": value},
+                            commit=True)
     logger.info("scheduler: %s/%s -> job=%s, dedup=%s, %d new hosts", kind, value, job_id, dedup_counts, len(discovered) if discovered else 0)
 
 
@@ -271,7 +300,7 @@ async def _maybe_send_weekly_digest() -> None:
     try:
         from src.routes.reports import (
             _aggregate_report, _build_digest_message, _load_smtp,
-            _smtp_send_blocking,
+            _smtp_send_blocking, _smtp_tls_on,
         )
     except Exception:
         return
@@ -279,7 +308,7 @@ async def _maybe_send_weekly_digest() -> None:
         from src.models import AppSettings
         from sqlalchemy import select as _sel
         cfg = await _load_smtp(db)
-        if not cfg.get("host") or not cfg.get("sender") or not cfg.get("recipients"):
+        if not cfg.get("host") or not cfg.get("from_addr") or not cfg.get("recipients"):
             return
         last_row = (await db.execute(
             _sel(AppSettings).where(AppSettings.key == "digest.last_sent_at")
@@ -301,11 +330,10 @@ async def _maybe_send_weekly_digest() -> None:
         try:
             port = int(cfg.get("port") or 587)
             host = cfg["host"]
-            use_tls = cfg.get("use_tls", "1") != "0"
             await asyncio.to_thread(
                 _smtp_send_blocking,
-                host, port, use_tls,
-                cfg.get("username", ""), cfg.get("password", ""),
+                host, port, _smtp_tls_on(cfg),
+                cfg.get("user", ""), cfg.get("password", ""),
                 sender, recipients, msg.as_string(),
             )
             if last_row is None:

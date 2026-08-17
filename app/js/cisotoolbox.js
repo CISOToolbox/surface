@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/cisotoolbox.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Bibliothèque JS commune
  *
@@ -41,7 +42,7 @@ function _da(...args) {
 function badge(text, color) {
     if (!text)
         return "";
-    return '<span class="badge" style="background:' + color + '">' + esc(text) + '</span>';
+    return '<span class="ct-badge" style="background:' + color + '">' + esc(text) + '</span>';
 }
 // Semantic tone badge (spec v2). tone: critical|high|medium|low|info|neutral|accent.
 // opts.fill (solid, when the badge IS the value) · opts.size "sm".
@@ -80,6 +81,7 @@ var CT_ICONS = {
     "code": '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
     "settings": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     "alert": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "bell": '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
     "folder": '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
     // UI v2 chrome (SPEC §5)
     "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
@@ -172,7 +174,7 @@ function ctBadge(text, colorName) {
     if (!text)
         return "";
     var c = CT_COLORS[colorName] || CT_COLORS.gray;
-    return '<span class="badge" style="background:' + c.bg + ';color:' + c.txt + '">' + esc(text) + '</span>';
+    return '<span class="ct-badge" style="background:' + c.bg + ';color:' + c.txt + '">' + esc(text) + '</span>';
 }
 /**
  * Render a styled badge by numeric level.
@@ -464,6 +466,39 @@ function _postureLabel(score) {
         return t("ct.posture.good");
     return t("ct.posture.excellent");
 }
+function _kpiTone(value, opts) {
+    if (value == null || !opts)
+        return "";
+    var v = value;
+    // Count model: higher = worse.
+    if (opts.bad != null || opts.warn != null) {
+        if (opts.bad != null && v >= opts.bad)
+            return "critical";
+        if (opts.warn != null && v >= opts.warn)
+            return "high";
+        return "low";
+    }
+    var tgt = opts.target, a = opts.amber, r = opts.red;
+    if (tgt == null && a == null && r == null)
+        return "";
+    if (opts.dir === "up") { // higher is better
+        if (r != null && v < r)
+            return "critical";
+        if (a != null && v < a)
+            return "high";
+        if (tgt != null && v < tgt)
+            return "high";
+        return "low";
+    }
+    // "down" (default): higher is worse
+    if (r != null && v > r)
+        return "critical";
+    if (a != null && v > a)
+        return "high";
+    if (tgt != null && v > tgt)
+        return "high";
+    return "low";
+}
 // ── Dispatcher: render a breakdown by its type ───────────────────
 // Used by Pilot to turn the module stats.breakdown into SVG.
 function _svgBreakdown(breakdown, opts) {
@@ -591,7 +626,7 @@ function _applySliderStyle(el) {
     var invert = el.hasAttribute("data-invert");
     var color = _sliderColor(invert ? (max - val) : val, max);
     var pct = max > 0 ? (val / max * 100) : 0;
-    el.style.background = "linear-gradient(to right, " + color + " " + pct + "%, var(--border) " + pct + "%)";
+    el.style.background = "linear-gradient(to right, " + color + " " + pct + "%, var(--ct-line) " + pct + "%)";
     var styleId = "slider-style-" + el.id;
     var existing = document.getElementById(styleId);
     if (!existing) {
@@ -609,8 +644,17 @@ function _initSliders() {
 // ═══════════════════════════════════════════════════════════════════════
 function _toggleSidebarMobile() {
     var nav = document.querySelector(".ct-rail, .sidebar");
-    if (nav)
+    if (!nav)
+        return;
+    // Le même bouton sert les deux mises en page : sous 768px le rail est un
+    // tiroir qui se déplie (.open), au-dessus il se replie en largeur
+    // (.collapsed). Sans cette distinction le bouton bascule une classe que le
+    // média courant ignore — c'est ce qui rendait le menu impossible à masquer
+    // sur bureau, où le bouton était de toute façon caché par le CSS.
+    if (window.matchMedia("(max-width: 768px)").matches)
         nav.classList.toggle("open");
+    else
+        nav.classList.toggle("collapsed");
 }
 function _menuAction(fnName) {
     if (_BLOCKED_DISPATCH[fnName])
@@ -899,7 +943,12 @@ function _stopResize() {
 function _loadAsset(filename, cb) {
     var existing = document.querySelector('script[data-asset="' + filename + '"]');
     if (existing) {
-        if (existing.dataset.loaded === "1")
+        // "1" = chargé, "err" = échec définitif (404…) : dans les deux cas le
+        // script a FINI — on rappelle cb() tout de suite. Réattacher load/error
+        // à un script déjà terminé ne redéclenche jamais rien : le callback
+        // serait perdu et tout flux qui l'attend (import → _ensureFramework →
+        // _initDataAndRender) resterait bloqué sans erreur.
+        if (existing.dataset.loaded)
             cb();
         else {
             existing.addEventListener("load", cb);
@@ -1021,6 +1070,16 @@ function _ensureFramework(fwId, cb) {
     });
 }
 function _initDataAndRender(afterFn) {
+    // FEAT-36 — normalize + replay schema migrations on EVERY load path
+    // (file, snapshot, session, API): idempotent, refuses future revs.
+    if (typeof ctSchemaMigrate === "function") {
+        try {
+            ctSchemaMigrate(D);
+        }
+        catch (e) {
+            alert(e && e.message ? e.message : String(e));
+        }
+    }
     var finish = function () { ensureKeys(); renderAll(); if (afterFn)
         afterFn(); };
     var active = (D.referentiels_actifs || []).filter(function (id) { return id; });
@@ -1104,7 +1163,17 @@ function toggleSidebar() {
 // ═══════════════════════════════════════════════════════════════════════
 var _undoStack = [];
 var _redoStack = [];
+// Undo/redo is a browser-local editing feature: it replaces the whole D and
+// re-saves. In suite/standalone the save writes to the database (a full
+// delete-all + re-insert), so undoing to a stale/empty state would DESTROY
+// server data — it is therefore disabled outside the opensource (browser,
+// localStorage) edition. Guarded at every entry point below.
+function _undoEnabled() {
+    return (((window.CT_CONFIG || {}).edition) || "opensource") === "opensource";
+}
 function _saveState() {
+    if (!_undoEnabled())
+        return;
     _undoStack.push(JSON.stringify(D));
     if (_undoStack.length > 50)
         _undoStack.shift();
@@ -1133,7 +1202,7 @@ function _replaceD(json) {
     Object.assign(D, parsed);
 }
 function undo() {
-    if (_undoStack.length === 0)
+    if (!_undoEnabled() || _undoStack.length === 0)
         return;
     _redoStack.push(JSON.stringify(D));
     _replaceD(_undoStack.pop());
@@ -1144,7 +1213,7 @@ function undo() {
     _updateUndoButtons();
 }
 function redo() {
-    if (_redoStack.length === 0)
+    if (!_undoEnabled() || _redoStack.length === 0)
         return;
     _undoStack.push(JSON.stringify(D));
     _replaceD(_redoStack.pop());
@@ -1158,7 +1227,7 @@ function redo() {
 // CONFIRM DIALOG
 // ═══════════════════════════════════════════════════════════════════════
 // Custom confirm dialog using the confirm-overlay (Oui/Non buttons, i18n)
-function _confirmDialog(title, body) {
+function _confirmDialog(title, body, opts) {
     var overlay = document.getElementById("confirm-overlay");
     if (!overlay)
         return Promise.resolve(confirm(title));
@@ -1167,18 +1236,27 @@ function _confirmDialog(title, body) {
         var bodyEl = document.getElementById("confirm-body");
         if (bodyEl)
             bodyEl.textContent = body || "";
+        var yesBtn = document.getElementById("confirm-oui");
+        var noBtn = document.getElementById("confirm-non");
+        // Labels are set on every open (default Oui/Non) so a stale or
+        // mislabelled markup can't leak wrong wording into a generic prompt,
+        // and callers can request custom choices (e.g. "Toutes"/"En cours").
+        yesBtn.textContent = (opts && opts.yes) || t("btn_yes");
+        noBtn.textContent = (opts && opts.no) || t("btn_no");
         overlay.classList.add("open");
         function cleanup() {
             overlay.classList.remove("open");
-            document.getElementById("confirm-oui").onclick = null;
-            document.getElementById("confirm-non").onclick = null;
+            yesBtn.onclick = null;
+            noBtn.onclick = null;
         }
-        document.getElementById("confirm-oui").onclick = function () { cleanup(); resolve(true); };
-        document.getElementById("confirm-non").onclick = function () { cleanup(); resolve(false); };
+        yesBtn.onclick = function () { cleanup(); resolve(true); };
+        noBtn.onclick = function () { cleanup(); resolve(false); };
     });
 }
-// Ctrl+Z / Ctrl+Y
+// Ctrl+Z / Ctrl+Y (opensource edition only — see _undoEnabled)
 document.addEventListener("keydown", function (e) {
+    if (!_undoEnabled())
+        return;
     if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
         if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")
             return;
@@ -1354,7 +1432,7 @@ function ctRenderMatrix(opts) {
             var x = ML + col * cellW;
             var y = MT + (NY - 1 - row) * cellH;
             var fill = colorFn ? colorFn(col + 1, row + 1) : ((colors[row] && colors[row][col]) || "#f1f5f9");
-            svg += '<rect x="' + x + '" y="' + y + '" width="' + cellW + '" height="' + cellH + '" fill="' + fill + '" stroke="white" stroke-width="1"/>';
+            svg += '<rect x="' + x + '" y="' + y + '" width="' + cellW + '" height="' + cellH + '" fill="' + fill + '" class="ct-matrix-cell" stroke-width="1"/>';
         }
     }
     // Dots
@@ -1370,7 +1448,7 @@ function ctRenderMatrix(opts) {
         var cy = MT + (NY - cy_val) * cellH + cellH / 2;
         var dotId = matrixId + "-" + cx_val + "-" + cy_val;
         var r = Math.min(14, 8 + items.length * 2);
-        svg += '<circle id="' + dotId + '" cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="var(--ct-accent)" stroke="white" stroke-width="1.5" style="cursor:pointer"/>';
+        svg += '<circle id="' + dotId + '" cx="' + cx + '" cy="' + cy + '" r="' + r + '" class="ct-matrix-dot" stroke-width="1.5" style="cursor:pointer"/>';
         svg += '<text x="' + cx + '" y="' + (cy + 4) + '" text-anchor="middle" fill="white" font-size="10" font-weight="700" style="pointer-events:none">' + items.length + '</text>';
         dots.push({ id: dotId, items: items });
     }
@@ -1378,25 +1456,25 @@ function ctRenderMatrix(opts) {
     // accessibility (ink-1/ink-2 light values, baked as hex so PNG exports keep
     // working); dark mode re-themes them via module CSS attribute selectors.
     // X axis label (bottom center)
-    svg += '<text x="' + (ML + gridW / 2) + '" y="' + (H - 2) + '" text-anchor="middle" font-size="10" fill="#3c4453">' + esc(xLabel) + '</text>';
+    svg += '<text x="' + (ML + gridW / 2) + '" y="' + (H - 2) + '" text-anchor="middle" font-size="10" class="ct-matrix-axis">' + esc(xLabel) + '</text>';
     // Y axis label (left, rotated)
     var yCenter = MT + gridH / 2;
-    svg += '<text x="6" y="' + yCenter + '" text-anchor="middle" font-size="9" fill="#3c4453" transform="rotate(-90,6,' + yCenter + ')">' + esc(yLabel) + '</text>';
+    svg += '<text x="6" y="' + yCenter + '" text-anchor="middle" font-size="9" class="ct-matrix-axis" transform="rotate(-90,6,' + yCenter + ')">' + esc(yLabel) + '</text>';
     // Tick labels — X axis
     for (var nx = 1; nx <= NX; nx++) {
         var xLbl = xLabels ? (xLabels[nx - 1] || nx) : nx;
-        svg += '<text x="' + (ML + (nx - 1) * cellW + cellW / 2) + '" y="' + (MT + gridH + 14) + '" text-anchor="middle" font-size="9" fill="#6b7488">' + esc(String(xLbl)) + '</text>';
+        svg += '<text x="' + (ML + (nx - 1) * cellW + cellW / 2) + '" y="' + (MT + gridH + 14) + '" text-anchor="middle" font-size="9" class="ct-matrix-tick">' + esc(String(xLbl)) + '</text>';
     }
     // Tick labels — Y axis
     for (var ny = 1; ny <= NY; ny++) {
         var yLbl = yLabels ? (yLabels[ny - 1] || ny) : ny;
-        svg += '<text x="' + (ML - 5) + '" y="' + (MT + (NY - ny) * cellH + cellH / 2 + 3) + '" text-anchor="end" font-size="8" fill="#6b7488">' + esc(String(yLbl)) + '</text>';
+        svg += '<text x="' + (ML - 5) + '" y="' + (MT + (NY - ny) * cellH + cellH / 2 + 3) + '" text-anchor="end" font-size="8" class="ct-matrix-tick">' + esc(String(yLbl)) + '</text>';
     }
     svg += '</svg>';
     // Legend
     svg += '<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:4px;font-size:0.7em">';
     legend.forEach(function (l) {
-        svg += '<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;border-radius:2px;background:' + l.color + ';border:1px solid #e5e7eb"></span>' + esc(l.label) + '</span>';
+        svg += '<span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;border-radius:2px;background:' + l.color + ';border:1px solid var(--ct-line)"></span>' + esc(l.label) + '</span>';
     });
     svg += '</div>';
     // Tooltip div
@@ -1486,10 +1564,50 @@ function _ctSyncThemeIcon() {
     });
 }
 // ── Language toggle (FR ⇄ EN) — reuses i18n switchLang ──
+// Ouvre (ou referme) un menu déroulant listant les langues disponibles.
+// Le bouton déclencheur porte data-click="ct_toggleLang" ; il est masqué au
+// démarrage s'il n'y a qu'une seule langue déployée (cf. i18n.ts).
 function ct_toggleLang() {
-    var next = localStorage.getItem("ct_lang") === "en" ? "fr" : "en";
-    if (typeof switchLang === "function")
-        switchLang(next, window.renderAll);
+    var langs = (typeof _availableLangs === "function") ? _availableLangs() : ["en"];
+    if (langs.length <= 1)
+        return;
+    var existing = document.getElementById("ct-lang-menu");
+    if (existing) {
+        existing.remove();
+        return;
+    }
+    var btn = document.querySelector('[data-click="ct_toggleLang"]');
+    var menu = document.createElement("div");
+    menu.id = "ct-lang-menu";
+    menu.className = "ct-lang-menu";
+    menu.innerHTML = langs.map(function (l) {
+        return '<button type="button" class="ct-lang-item' + (l === _locale ? " active" : "")
+            + '" data-click="ct_setLang" data-args=\'["' + l + '"]\'>' + esc(_langName(l))
+            + (l === _locale ? ' <span class="ct-lang-check">✓</span>' : '') + '</button>';
+    }).join("");
+    document.body.appendChild(menu);
+    if (btn) {
+        var r = btn.getBoundingClientRect();
+        menu.style.top = (r.bottom + 4) + "px";
+        menu.style.right = Math.max(4, window.innerWidth - r.right) + "px";
+    }
+    setTimeout(function () {
+        var close = function (e) {
+            if (!menu.contains(e.target) && e.target !== btn) {
+                menu.remove();
+                document.removeEventListener("mousedown", close);
+            }
+        };
+        document.addEventListener("mousedown", close);
+    }, 0);
+}
+function ct_setLang(lang) {
+    var menu = document.getElementById("ct-lang-menu");
+    if (menu)
+        menu.remove();
+    if (lang !== _locale && typeof switchLang === "function") {
+        switchLang(lang, window.renderAll);
+    }
 }
 // ── Navigation — the shell only routes; the app renders the view ──
 function ct_go(view) {
@@ -1510,6 +1628,26 @@ function ct_toggleRailGroup(el) {
     el.setAttribute("aria-expanded", open ? "false" : "true");
 }
 // ── Module selector (suite: browse list; else: no-op — SPEC §0) ──
+function _ctCloseModuleMenu() {
+    var picker = document.querySelector(".ct-modulepicker");
+    var menu = document.querySelector(".ct-modulemenu");
+    if (picker)
+        picker.setAttribute("aria-expanded", "false");
+    if (menu)
+        menu.remove();
+    document.removeEventListener("click", _ctModuleMenuOutside, true);
+    document.removeEventListener("keydown", _ctModuleMenuEsc, true);
+}
+function _ctModuleMenuOutside(e) {
+    var el = e.target;
+    if (el && (el.closest(".ct-modulemenu") || el.closest(".ct-modulepicker")))
+        return;
+    _ctCloseModuleMenu();
+}
+function _ctModuleMenuEsc(e) {
+    if (e.key === "Escape")
+        _ctCloseModuleMenu();
+}
 function ct_toggleModuleMenu() {
     if (CT_EDITION !== "suite")
         return; // degraded: the picker is a static label
@@ -1519,9 +1657,7 @@ function ct_toggleModuleMenu() {
         return;
     var expanded = picker.getAttribute("aria-expanded") === "true";
     if (expanded) {
-        picker.setAttribute("aria-expanded", "false");
-        if (menu)
-            menu.remove();
+        _ctCloseModuleMenu();
         return;
     }
     picker.setAttribute("aria-expanded", "true");
@@ -1539,6 +1675,10 @@ function ct_toggleModuleMenu() {
     }).join("");
     box.innerHTML = '<div class="ct-modulemenu-list">' + items + "</div>";
     appbar.appendChild(box);
+    // Click-outside / Escape dismiss. Capture phase: the opening click is in
+    // its bubble phase, so these fire only from the NEXT interaction on.
+    document.addEventListener("click", _ctModuleMenuOutside, true);
+    document.addEventListener("keydown", _ctModuleMenuEsc, true);
 }
 /** Build the appbar markup for the current edition (SPEC §0/§10). Returns an
  *  HTML string; the caller injects it and then calls ct_hydrateIcons(). */
@@ -1600,12 +1740,77 @@ _w.ct_hydrateIcons = ct_hydrateIcons;
 _w.ct_initTheme = ct_initTheme;
 _w.ct_toggleTheme = ct_toggleTheme;
 _w.ct_toggleLang = ct_toggleLang;
+_w.ct_setLang = ct_setLang;
 _w.ct_go = ct_go;
 _w.ct_toggleRailGroup = ct_toggleRailGroup;
 _w.ct_toggleModuleMenu = ct_toggleModuleMenu;
 _w.ct_renderAppbar = ct_renderAppbar;
+_w.ct_handleMeasureDeepLink = ct_handleMeasureDeepLink;
+_w.ct_highlightMeasureRow = ct_highlightMeasureRow;
 _w.ct_renderRail = ct_renderRail;
 _w.ct_initTheme = ct_initTheme;
+// ── FEAT-13 — measure deep-link reception ───────────────────────────────
+// Pilot links to {module_url}?entity=<entity_id>&measure=<source_id>#measures.
+// An app calls ct_handleMeasureDeepLink once at boot: `open` runs the app's
+// native editor and returns true, or false while data is still loading /
+// the measure is absent. After the retries, best-effort row highlight, then
+// a toast. Params are only used as lookup keys — never injected as HTML.
+function ct_handleMeasureDeepLink(opts) {
+    var params;
+    try {
+        params = new URLSearchParams(window.location.search);
+    }
+    catch (e) {
+        return;
+    }
+    var measure = params.get("measure") || "";
+    var entity = params.get("entity") || "";
+    if (!measure)
+        return;
+    var max = opts.tries || 25, interval = opts.interval || 400, n = 0;
+    function attempt() {
+        n++;
+        var ok = false;
+        try {
+            ok = !!opts.open(measure, entity);
+        }
+        catch (e) {
+            ok = false;
+        }
+        if (ok)
+            return;
+        if (n < max) {
+            setTimeout(attempt, interval);
+            return;
+        }
+        if (!ct_highlightMeasureRow(measure) && typeof _w.showStatus === "function") {
+            _w.showStatus(t("chrome.deeplink_not_found"), true);
+        }
+    }
+    attempt();
+}
+// Best-effort fallback (and the native "edit mode" for inline-table apps):
+// scroll to the row/card whose id cell matches, outline it, focus its first
+// input. Composite ids ("analysisid:m-001") match on their local tail.
+function ct_highlightMeasureRow(measureId) {
+    var local = measureId.indexOf(":") >= 0 ? (measureId.split(":").pop() || measureId) : measureId;
+    var cells = document.querySelectorAll("td, .measure-card");
+    for (var i = 0; i < cells.length; i++) {
+        var el = cells[i];
+        if ((el.textContent || "").trim() !== local)
+            continue;
+        var row = (el.closest("tr") || el.closest(".measure-card") || el);
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        row.style.outline = "2px solid var(--ct-accent)";
+        row.style.outlineOffset = "2px";
+        setTimeout(function () { row.style.outline = ""; row.style.outlineOffset = ""; }, 4000);
+        var inp = row.querySelector("input, textarea");
+        if (inp)
+            inp.focus();
+        return true;
+    }
+    return false;
+}
 // Upgrade the static .ct-modulepicker into the coloured mark + name (all
 // editions) and, in the suite, the clickable module switcher. No-op when the
 // app has no CT_CONFIG.module (opensource default keeps its static label).
@@ -1640,6 +1845,10 @@ function _ctChromeBoot() {
     ct_initTheme();
     ct_hydrateIcons();
     ct_initModulePicker();
+    // FEAT-31 — suite: refresh the module-switcher list from the Pilot
+    // registry (async, non-blocking; menu popups are built at open time).
+    if (typeof (_w.ct_fetchModulesMenu) === "function")
+        _w.ct_fetchModulesMenu();
 }
 if (typeof document !== "undefined") {
     if (document.readyState === "loading") {

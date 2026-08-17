@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/types/gen/ct_modules.d.ts).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_modules — edition awareness + module catalogue (SPEC §0 / §5).
  *
@@ -27,4 +32,10 @@ declare var _CT_MODULE_CATALOG: CtModuleEntry[];
 declare function _ctCurrentModuleId(): string;
 declare function ct_currentModule(): CtModuleEntry | null;
 declare function ct_modules(): CtModuleEntry[];
+declare function _ctMenuFromRegistry(list: Array<{
+    id: string;
+    name: string;
+    url: string;
+}>): CtModuleEntry[];
+declare function ct_fetchModulesMenu(): void;
 declare function _ctSyncEdition(): void;

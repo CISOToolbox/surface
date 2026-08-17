@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ct_audit.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Audit Log Panel (shared)
  *
@@ -15,7 +16,7 @@ function _renderAuditLog(c) {
     h += '<h2 style="margin:0">' + t("audit.title") + '</h2><span style="flex:1"></span>';
     h += '<input type="search" class="ct-input" placeholder="' + t("audit.search") + '" value="' + esc(_auditFilter.q || "") + '" data-input="_setAuditSearch" data-pass-value style="min-width:200px;max-width:300px">';
     h += '</div>';
-    h += '<div id="audit-body"><p style="color:var(--text-muted)">' + t("audit.loading") + '</p></div>';
+    h += '<div id="audit-body"><p style="color:var(--ct-ink-2)">' + t("audit.loading") + '</p></div>';
     c.innerHTML = h;
     _refreshAuditBody();
 }
@@ -32,7 +33,7 @@ async function _refreshAuditBody() {
         var items = data.items || [];
         var h = '';
         if (items.length === 0) {
-            h = '<p style="color:var(--text-muted)">' + t("audit.empty") + '</p>';
+            h = '<p style="color:var(--ct-ink-2)">' + t("audit.empty") + '</p>';
         }
         else {
             h = '<table class="ct-table" style="font-size:0.85em"><thead><tr>';
@@ -50,21 +51,21 @@ async function _refreshAuditBody() {
                 if (actionLabel === "audit.action." + e.action)
                     actionLabel = e.action;
                 h += '<tr>';
-                h += '<td style="white-space:nowrap;color:var(--text-muted)">' + esc(dateStr) + '</td>';
+                h += '<td style="white-space:nowrap;color:var(--ct-ink-2)">' + esc(dateStr) + '</td>';
                 h += '<td>' + esc(e.user_email || "") + '</td>';
                 h += '<td><code style="font-size:0.85em">' + esc(actionLabel) + '</code></td>';
                 h += '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">' + esc(e.target || "") + '</td>';
-                h += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)" title="' + esc(e.details || "") + '">' + esc(e.details || "") + '</td>';
-                h += '<td style="color:var(--text-muted)">' + esc(e.ip_address || "") + '</td>';
+                h += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;color:var(--ct-ink-2)" title="' + esc(e.details || "") + '">' + esc(e.details || "") + '</td>';
+                h += '<td style="color:var(--ct-ink-2)">' + esc(e.ip_address || "") + '</td>';
                 h += '</tr>';
             }
             h += '</tbody></table>';
-            h += '<p style="font-size:0.78em;color:var(--text-muted)">' + data.total + ' ' + t("audit.entries") + '</p>';
+            h += '<p style="font-size:0.78em;color:var(--ct-ink-2)">' + data.total + ' ' + t("audit.entries") + '</p>';
         }
         el.innerHTML = h;
     }
     catch (e) {
-        el.innerHTML = '<p style="color:var(--red)">' + esc(e.message || String(e)) + '</p>';
+        el.innerHTML = '<p style="color:var(--ct-critical)">' + esc(e.message || String(e)) + '</p>';
     }
 }
 window._setAuditSearch = function (v) { _auditFilter.q = v; _refreshAuditBody(); };

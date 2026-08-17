@@ -1,3 +1,8 @@
+# -----------------------------------------------------------------------------
+# REPLICATED from the private shared repository (shared/python/directory_common.py).
+# DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+# Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+# -----------------------------------------------------------------------------
 """Local personnel directory — standalone fallback for the user picker.
 
 When a module runs WITHOUT Pilot (standalone), `directory_source == 'local'`

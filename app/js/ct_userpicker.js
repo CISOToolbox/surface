@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ct_userpicker.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_userpicker — Shared user assignment widget for CISO Toolbox.
  *
@@ -113,7 +114,7 @@
             h += '<div class="ct-userpicker-item" data-click="_ctUpPick" data-args=\''
                 + _da(id, lbl, u.email || "") + '\' data-stop>'
                 + '<div style="font-weight:600">' + esc(lbl) + '</div>'
-                + (u.email ? '<div style="font-size:0.75em;color:var(--text-muted)">' + esc(u.email) + '</div>' : '')
+                + (u.email ? '<div style="font-size:0.75em;color:var(--ct-ink-2)">' + esc(u.email) + '</div>' : '')
                 + '</div>';
         });
         // "+ Créer" only when onCreate is wired AND the query doesn't
@@ -125,7 +126,7 @@
             var tmpl = _i18n("ct.userpicker.create", 'Créer "{q}"');
             h += '<div class="ct-userpicker-create" data-click="_ctUpCreate" data-args=\''
                 + _da(id, query) + '\' data-stop>'
-                + '<span style="font-size:1.1em;color:var(--blue,#2563eb);font-weight:700">+</span> '
+                + '<span style="font-size:1.1em;color:var(--ct-ink);font-weight:700">+</span> '
                 + esc(tmpl.replace("{q}", query))
                 + '</div>';
         }
@@ -157,10 +158,15 @@
         var spaceBelow = window.innerHeight - rect.bottom - 16;
         var spaceAbove = rect.top - 16;
         if (spaceBelow < 200 && spaceAbove > spaceBelow) {
-            dd.style.top = (rect.top - Math.min(400, spaceAbove) - 2) + "px";
+            // Flip above: anchor the dropdown's BOTTOM to the input top so a
+            // short list hugs the input — anchoring the top at (rect.top -
+            // maxHeight) left short lists floating at the top of the window.
+            dd.style.top = "auto";
+            dd.style.bottom = (window.innerHeight - rect.top + 2) + "px";
             dd.style.maxHeight = Math.min(400, spaceAbove) + "px";
         }
         else {
+            dd.style.bottom = "auto";
             dd.style.maxHeight = Math.min(400, spaceBelow) + "px";
         }
     }

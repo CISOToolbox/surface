@@ -1,0 +1,30 @@
+[package]
+name = "ciso-smb-scan"
+version = "0.1.0"
+edition = "2021"
+description = "Fast SMB/CIFS file-share content scanner for CISO Toolbox Surface (Rust worker)."
+license = "MIT"
+
+[[bin]]
+name = "ciso-smb-scan"
+path = "src/main.rs"
+
+[dependencies]
+pavao = "0.2"                       # SMB/CIFS via libsmbclient
+regex = "1"                        # secret ruleset
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"                   # findings IPC + config
+zip = "2"                          # docx/pptx/xlsx are ZIP containers
+# NOTE (security, not yet actionable here): quick-xml >=0.41 is required to fix
+# RUSTSEC-2026-0194 (quadratic duplicate-attribute check) and RUSTSEC-2026-0195
+# (unbounded namespace-declaration allocation in NsReader). Bumping to 0.41 does
+# NOT compile as-is: `BytesText::unescape()` was removed, so `src/main.rs:158`
+# must switch to `e.xml_content(quick_xml::events::XmlVersion::V1_0)`.
+# calamine must move to 0.36 in the same change (0.26 pulls quick-xml 0.31).
+quick-xml = "0.36"                 # extract text from office XML parts
+calamine = "0.26"                  # xlsx cell values
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

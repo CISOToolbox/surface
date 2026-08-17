@@ -366,17 +366,104 @@ force-reinit.
 
 ---
 
+## Languages
+
+**English (default)** and **French** both ship in the image; the UI opens in
+the browser's language when available and users can switch at runtime (globe
+icon, per-browser persistence). Missing translations fall back to English.
+
+## Tests
+
+End-to-end tests live in [`tests/e2e/`](./tests/e2e/). They drive a real
+running stack over HTTP — standard library plus `pytest`, no browser:
+
+```bash
+bash tests/e2e/run-e2e.sh          # up -> test -> down
+```
+
+See [`tests/e2e/README.md`](./tests/e2e/README.md) for the options.
+Dependency pins are checked with `bash tests/check-deps-drift.sh`.
+
+---
+
 ## Contributing
 
-This repository is synchronized from the [CISO Toolbox] monorepo via
-`shared/sync-backend-modules.sh`. Contributions that touch code should
-be proposed against the monorepo — they will be propagated here on the
-next release cut.
+Part of this repository is **replicated** from a private shared repository and
+must not be edited here: `src/*_common.py`, `src/ssrf_guard.py`, and every
+`app/js` / `app/css` file carrying a `GENERATED` header. Changes to those files
+are overwritten on the next propagation, so they have to be made on the shared
+master — open an issue describing what should change. Everything else
+(`src/scanners.py`, `addons/`, `app/ts/`, migrations, packaging) is editable
+here. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
+
+---
+
+## Security
+
+Report vulnerabilities privately — see [`SECURITY.md`](./SECURITY.md). Do not
+open a public issue for a security problem.
 
 ---
 
 ## License
 
-See `LICENSE` at the repo root once published.
+See [`LICENSE`](./LICENSE).
+
+> **Not settled yet.** The sources this repository was assembled from
+> contradict each other (an MIT `LICENSE` file, READMEs announcing MIT).
+> [`LICENSE.TODO`](./LICENSE.TODO) states the conflict; it must be resolved
+> before this repository is published.
 
 [CISO Toolbox]: https://cisotoolbox.org
+
+## Backup & restore
+
+Standalone deployments use a **system-level** backup: a scheduled logical
+dump of the PostgreSQL database plus a documented restore procedure. No
+extra container, no daemon.
+
+```bash
+# Manual backup (compressed dump + rotation, default keep=14)
+./backup.sh                      # → backups/surface_<date>.sql.gz
+./backup.sh --dir /srv/backups --keep 30
+
+# Scheduled (cron) — daily at 02:00
+0 2 * * *  cd /path/to/surface && ./backup.sh >> backups/backup.log 2>&1
+
+# Restore (typed confirmation; takes a safety dump of the CURRENT state
+# first, stops the app during the reload, checks /api/health after)
+./restore.sh backups/surface_2026-08-13_0200.sql.gz
+```
+
+Notes:
+
+- **RPO = your backup frequency** (daily by default). If you need
+  point-in-time restore (to the second), automatic restore-tests and a
+  restore UI, that is what the CISO Toolbox **suite** provides (pgBackRest
+  + Pilot) — see the suite repository.
+- A dump taken on an **older** application version restores fine (Alembic
+  migrations replay at app start). Never restore a dump from a **newer**
+  version than the running code — upgrade the app first (check
+  `/api/version`).
+- Volume snapshots of `surface-db-data` (VM/SAN level) also work as a
+  coarse alternative, but prefer the logical dump: it is portable across
+  PostgreSQL major versions and easy to verify.
+- The application's own JSON export/import remains a second, portable
+  safety net — those files also import into the suite.
+
+Systemd timer alternative to cron:
+
+```ini
+# /etc/systemd/system/surface-backup.service
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/surface
+ExecStart=/path/to/surface/backup.sh
+
+# /etc/systemd/system/surface-backup.timer
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+```

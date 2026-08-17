@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -196,6 +196,61 @@ class MonitoredAsset(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
 
 
+# ── Scan blocklist ────────────────────────────────────────────────
+class ScanExclusion(Base):
+    """Blocklist of values that must NEVER be scanned or auto-enrolled.
+
+    A value is a hostname, an IP, a CIDR (``a.b.c.d/n``) or a domain. It is
+    matched — via :func:`is_excluded` — against a candidate asset's own value
+    AND its resolved IP, so excluding a discovered IP stops it being rescanned
+    even if it is later rediscovered under a different name.
+    """
+
+    __tablename__ = "scan_exclusions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    value = Column(String(500), nullable=False, unique=True)
+    note = Column(String(255), nullable=True, default="")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
+
+
+def _ip_in_cidr(ip: str, cidr: str) -> bool:
+    """True if ``ip`` falls inside ``cidr`` (IPv4/IPv6). False on any parse error."""
+    import ipaddress
+
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+        return ipaddress.ip_address(ip) in net
+    except ValueError:
+        return False
+
+
+def is_excluded(candidates: list[str], exclusions: list[str]) -> bool:
+    """Does any candidate string (a value and/or a resolved IP) hit the blocklist?
+
+    Matching rules, all case-insensitive:
+      * exact equality (host == host, ip == ip, domain == domain);
+      * subdomain: candidate ``x.example.com`` is excluded by ``example.com``;
+      * CIDR containment: candidate IP inside an excluded ``a.b.c.d/n``.
+    """
+    cands = [c.strip().lower() for c in candidates if c and c.strip()]
+    if not cands:
+        return False
+    for raw in exclusions:
+        ex = (raw or "").strip().lower()
+        if not ex:
+            continue
+        for c in cands:
+            if c == ex:
+                return True
+            if "/" in ex and _ip_in_cidr(c, ex):
+                return True
+            # subdomain of an excluded domain
+            if len(c) > len(ex) + 1 and c.endswith("." + ex):
+                return True
+    return False
+
+
 # ── Audit Log ─────────────────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_log"
@@ -213,3 +268,33 @@ class AuditLog(Base):
         Index("ix_audit_log_user", "user_email"),
         Index("ix_audit_log_action", "action"),
     )
+
+
+class DigestRun(Base):
+    """FEAT-35 — notification send journal (shared suite pattern). Unique
+    (recipient, kind, period_key) makes the per-scan alert idempotent."""
+    __tablename__ = "digest_runs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    recipient = Column(String(320), nullable=False)
+    kind = Column(String(10), nullable=False)
+    period_key = Column(String(64), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    status = Column(String(20), nullable=False)
+    items_count = Column(Integer, default=0, server_default=text("0"))
+    error_message = Column(Text, default="", server_default=text("''"))
+    body_html = Column(Text, default="", server_default=text("''"))
+
+    __table_args__ = (
+        UniqueConstraint("recipient", "kind", "period_key", name="uq_surface_digest_runs"),
+    )
+
+
+class NotificationPrefs(Base):
+    """FEAT-35 — LOCAL per-user prefs (standalone); suite proxies Pilot."""
+    __tablename__ = "notification_prefs"
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    lang = Column(String(5), nullable=False, default="fr", server_default=text("'fr'"))
+    module_prefs = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))

@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ai_common.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — AI Common Module
  *
@@ -28,37 +29,50 @@
         anthropic: {
             label: "Anthropic (Claude)",
             models: [
-                { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
-                { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+                { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+                { id: "claude-opus-5", label: "Claude Opus 5" },
+                { id: "claude-fable-5", label: "Claude Fable 5" },
                 { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-                { id: "claude-opus-4-6", label: "Claude Opus 4.6" }
+                { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+                { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }
             ],
-            defaultModel: "claude-sonnet-4-6",
+            defaultModel: "claude-sonnet-5",
             placeholder: "sk-ant-...",
             endpoint: "https://api.anthropic.com/v1/messages"
         },
         openai: {
             label: "OpenAI (GPT)",
             models: [
+                { id: "gpt-5.6", label: "GPT-5.6" },
+                { id: "gpt-5.6-terra", label: "GPT-5.6 terra" },
                 { id: "gpt-5.5", label: "GPT-5.5" },
-                { id: "gpt-5.5-pro", label: "GPT-5.5 Pro" },
                 { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
-                { id: "gpt-4o", label: "GPT-4o" },
-                { id: "gpt-4o-mini", label: "GPT-4o mini" }
+                { id: "gpt-4o", label: "GPT-4o" }
             ],
-            defaultModel: "gpt-5.5",
+            defaultModel: "gpt-5.6",
             placeholder: "sk-...",
             endpoint: "https://api.openai.com/v1/chat/completions"
+        },
+        gemini: {
+            label: "Google (Gemini)",
+            models: [
+                { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
+                { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite" }
+            ],
+            defaultModel: "gemini-3.6-flash",
+            placeholder: "AIza...",
+            // {model} interpolated (URL-encoded) at call time.
+            endpoint: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         },
         bedrock: {
             label: "AWS Bedrock",
             models: [
-                { id: "anthropic.claude-opus-4-8", label: "Claude Opus 4.8 (Bedrock)" },
+                { id: "anthropic.claude-sonnet-5", label: "Claude Sonnet 5 (Bedrock)" },
+                { id: "anthropic.claude-opus-5", label: "Claude Opus 5 (Bedrock)" },
                 { id: "anthropic.claude-sonnet-4-6-20250514-v1:0", label: "Claude Sonnet 4.6 (Bedrock)" },
-                { id: "anthropic.claude-haiku-4-5-20251001-v1:0", label: "Claude Haiku 4.5 (Bedrock)" },
-                { id: "anthropic.claude-opus-4-6-20250515-v1:0", label: "Claude Opus 4.6 (Bedrock)" }
+                { id: "anthropic.claude-haiku-4-5-20251001-v1:0", label: "Claude Haiku 4.5 (Bedrock)" }
             ],
-            defaultModel: "anthropic.claude-sonnet-4-6-20250514-v1:0",
+            defaultModel: "anthropic.claude-sonnet-5",
             placeholder: "AKIAIOSFODNN7EXAMPLE",
             endpoint: "https://bedrock-runtime.eu-west-3.amazonaws.com"
         }
@@ -170,7 +184,17 @@
             if (provider === "bedrock")
                 return true;
             var resp;
-            if (provider === "anthropic") {
+            if (provider === "gemini") {
+                resp = await fetch(_resolveEndpoint(provider).replace("{model}", encodeURIComponent(model)), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+                    body: JSON.stringify({
+                        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+                        generationConfig: { maxOutputTokens: 1 }
+                    })
+                });
+            }
+            else if (provider === "anthropic") {
                 resp = await fetch(_resolveEndpoint(provider), {
                     method: "POST",
                     headers: {
@@ -265,6 +289,17 @@
                     })
                 });
             }
+            else if (provider === "gemini") {
+                resp = await fetch(_resolveEndpoint(provider).replace("{model}", encodeURIComponent(model)), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+                    body: JSON.stringify({
+                        systemInstruction: { parts: [{ text: systemPrompt }] },
+                        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+                        generationConfig: { maxOutputTokens: 4096 }
+                    })
+                });
+            }
             else {
                 // OpenAI-compatible providers (openai, mistral)
                 resp = await fetch(_resolveEndpoint(provider), {
@@ -300,6 +335,10 @@
         data = await resp.json();
         if (provider === "anthropic" || provider === "bedrock") {
             text = data.content && data.content[0] ? data.content[0].text : "";
+        }
+        else if (provider === "gemini") {
+            var _gc = data.candidates && data.candidates[0] && data.candidates[0].content;
+            text = _gc && _gc.parts ? _gc.parts.map(function (pp) { return pp.text || ""; }).join("") : "";
         }
         else {
             // OpenAI-compatible (openai, mistral)
@@ -359,7 +398,7 @@
     window._aiShowLoading = function (title) {
         var p = _aiEnsurePanel();
         p.title.textContent = title;
-        p.body.innerHTML = '<div style="text-align:center;padding:40px"><div class="ai-spinner"></div><p style="margin-top:16px;color:var(--text-muted)">' + t("ai.loading") + '</p></div>';
+        p.body.innerHTML = '<div style="text-align:center;padding:40px"><div class="ai-spinner"></div><p style="margin-top:16px;color:var(--ct-ink-2)">' + t("ai.loading") + '</p></div>';
         p.footer.innerHTML = "";
         _aiOpenPanel();
     };
@@ -484,21 +523,21 @@
         ".ai-panel-close { background:none; border:none; color:var(--ct-ink-2); font-size:1.4em; cursor:pointer; padding:0 4px; }",
         ".ai-panel-body { padding:16px; }",
         ".ai-panel-footer { padding:0 16px 16px; }",
-        ".ai-card { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }",
-        ".ai-card-title { font-weight:600; font-size:0.9em; margin-bottom:6px; color:var(--blue); }",
-        ".ai-card-details { font-size:0.82em; color:var(--text); line-height:1.5; margin-bottom:6px; }",
-        ".ai-card-meta { font-size:0.75em; color:var(--text-muted); margin-bottom:8px; }",
+        ".ai-card { background:var(--ct-canvas); border:1px solid var(--ct-line); border-radius:8px; padding:12px; margin-bottom:12px; }",
+        ".ai-card-title { font-weight:600; font-size:0.9em; margin-bottom:6px; color:var(--ct-ink); }",
+        ".ai-card-details { font-size:0.82em; color:var(--ct-ink); line-height:1.5; margin-bottom:6px; }",
+        ".ai-card-meta { font-size:0.75em; color:var(--ct-ink-2); margin-bottom:8px; }",
         ".ai-card-actions { display:flex; gap:6px; }",
         ".ai-btn-accept { padding:4px 12px; border:none; border-radius:4px; background:var(--ct-accent); color:var(--ai-on-accent,white); font-size:0.8em; font-weight:600; cursor:pointer; }",
         ".ai-btn-accept:hover { opacity:0.85; }",
         ".ai-btn-accept:disabled { opacity:0.5; cursor:default; }",
-        ".ai-btn-ignore { padding:4px 12px; border:1px solid var(--border); border-radius:4px; background:var(--ct-surface); color:var(--text-muted); font-size:0.8em; cursor:pointer; }",
-        ".ai-btn-ignore:hover { background:var(--bg); }",
+        ".ai-btn-ignore { padding:4px 12px; border:1px solid var(--ct-line); border-radius:4px; background:var(--ct-surface); color:var(--ct-ink-2); font-size:0.8em; cursor:pointer; }",
+        ".ai-btn-ignore:hover { background:var(--ct-canvas); }",
         ".ai-btn-accept-all, .ai-btn-all { padding:6px 16px; border:none; border-radius:4px; background:var(--ct-accent); color:var(--ai-on-accent,white); font-weight:600; font-size:0.85em; cursor:pointer; }",
         ".ai-btn-accept-all:hover, .ai-btn-all:hover { opacity:0.85; }",
-        ".ai-btn-close { padding:6px 16px; border:1px solid var(--border); border-radius:4px; background:var(--ct-surface); color:var(--text); font-size:0.85em; cursor:pointer; }",
-        ".ai-btn-close:hover { background:var(--bg); }",
-        ".ai-spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--light-blue); border-radius:50%; animation:ai-spin 0.8s linear infinite; margin:0 auto; }",
+        ".ai-btn-close { padding:6px 16px; border:1px solid var(--ct-line); border-radius:4px; background:var(--ct-surface); color:var(--ct-ink); font-size:0.85em; cursor:pointer; }",
+        ".ai-btn-close:hover { background:var(--ct-canvas); }",
+        ".ai-spinner { width:32px; height:32px; border:3px solid var(--ct-line); border-top-color:var(--ct-accent); border-radius:50%; animation:ai-spin 0.8s linear infinite; margin:0 auto; }",
         "@keyframes ai-spin { to { transform:rotate(360deg); } }",
         ".ai-error { padding:16px; color:var(--ct-critical-ink); background:var(--ct-critical-tint); border-radius:6px; font-size:0.85em; }",
         ".btn-ai { display:inline-flex; align-items:center; gap:4px; vertical-align:middle; background:linear-gradient(135deg,#6366f1 0%,#7c3aed 100%); color:#fff; border:none; padding:6px 14px; border-radius:6px; cursor:pointer; font-size:0.85em; font-weight:600; margin-left:auto; white-space:nowrap; }",

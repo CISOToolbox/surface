@@ -83,18 +83,18 @@ if (typeof _registerTranslations === "function") {
             '</tbody></table>' +
             '<p><em>Info</em> findings are excluded from alert counters and from the risk score: they document, they do not alert. The <strong>per-host risk score (0-100)</strong> weights active findings by severity (critical ×10, high ×5, medium ×2, low ×0.5) then multiplies by the <strong>business criticality</strong> declared on the asset (factor 1 to 4): a critical asset surfaces before a secondary asset with the same findings.</p>' +
             '<h2>Finding lifecycle</h2>' +
-            '<p>Four statuses: <strong>New</strong> (untriaged), <strong>To fix</strong> (real issue, measure created), <strong>False positive</strong> (justified, silenced), <strong>Fixed</strong>. Deduplication relies on the <code>scanner|type|target</code> key — the same logical issue is never duplicated across rescans:</p>' +
+            '<p>Four statuses: <strong>New</strong> (untriaged), <strong>To fix</strong> (real issue, remediation created), <strong>False positive</strong> (justified, silenced), <strong>Fixed</strong>. Deduplication relies on the <code>scanner|type|target</code> key — the same logical issue is never duplicated across rescans:</p>' +
             '<ul>' +
                 '<li><strong>New</strong> re-detected → content and severity refreshed, no duplicate.</li>' +
                 '<li><strong>False positive</strong> re-detected → silenced: never re-raised, the justification stays available for audit.</li>' +
-                '<li><strong>To fix</strong> with an unfinished measure → silenced (the work is already planned). Measure done but issue re-detected → <strong>reopened</strong> as New: the remediation did not hold.</li>' +
+                '<li><strong>To fix</strong> with an unfinished remediation → silenced (the work is already planned). Remediation done but issue re-detected → <strong>reopened</strong> as New: the remediation did not hold.</li>' +
                 '<li><strong>Fixed</strong> re-detected → reopened as New.</li>' +
             '</ul>' +
             '<h2>Triage doctrine</h2>' +
             '<p>Every actionable finding must receive an explicit decision — that discipline is what separates a useful ASM from an ignored alert list:</p>' +
             '<ul>' +
                 '<li><strong>Prioritize by severity then business criticality</strong> — handle critical/high findings on critical assets first.</li>' +
-                '<li><strong>To fix</strong> is a commitment: the decision creates a <strong>corrective measure</strong> (title, owner, deadline) that feeds the action plan. No "to fix" triage without a measure.</li>' +
+                '<li><strong>To fix</strong> is a commitment: the decision creates a <strong>remediation</strong> (title, owner, deadline) that feeds the action plan. No "to fix" triage without a remediation.</li>' +
                 '<li><strong>False positive</strong> requires a <strong>mandatory justification</strong>, timestamped and kept for audit — an unjustified FP is a traceability debt.</li>' +
                 '<li><strong>Fixed</strong> is a verifiable assertion: the next scan contradicts it by reopening the finding if the issue persists.</li>' +
                 '<li><strong>AI-assisted triage</strong>: the AI analysis provides a structured opinion (false-positive probability, confidence, recommended severity, remediation, references) enriched with NVD data. It is decision support — AI proposes, the human decides and remains accountable for the final status.</li>' +
@@ -102,6 +102,8 @@ if (typeof _registerTranslations === "function") {
             '<h2>"Continuous discovery" philosophy</h2>' +
             '<p>ASM is not a point-in-time scan but <strong>continuous monitoring</strong>. Surface runs scanners via a scheduler that re-executes checks at a configurable frequency per asset (24h by default). Auto-discovered hosts are enrolled as <code>MonitoredAsset</code> and scanned in turn — a snowball effect controlled by the scope.</p>' +
             '<div class="help-tip"><strong>Scope:</strong> All scanners that discover hostnames filter results to the parent monitored domain. A DNS brute-force on <code>example.com</code> only keeps <code>*.example.com</code>, not external domains that might appear in a CT log.</div>' +
+            '<h2>CISO Toolbox suite integration</h2>' +
+            '<p>In a suite deployment, this module\'s <strong>remediations</strong> flow up automatically into <strong>Pilot\'s action plan</strong> (the governance hub), where they are consolidated with the items from the other modules under the shared term <strong>Action</strong>, and can be grouped into <strong>projects</strong> to drive cross-cutting progress. The module remains the authority for its own domain — Pilot only consolidates.</p>' +
             '<h2>Known limitations</h2>' +
             '<ul>' +
                 '<li><strong>CT logs are public</strong> — an asset certified by a private cert (internal PKI) will not appear there</li>' +
@@ -121,7 +123,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>30-day trend</strong> — one curve per severity (cumulative existing findings) plus the dashed cumulative-triage curve.</li>' +
                 '<li><strong>Recurring finding types</strong> and <strong>Noisiest scanners</strong>.</li>' +
                 '<li><strong>Monitoring inventory</strong> — breakdown by asset type and auto vs manual hosts.</li>' +
-                '<li><strong>Action plan</strong> — To do / In progress / Done progress bar, 7-day delta, overdue measures.</li>' +
+                '<li><strong>Action plan</strong> — To do / In progress / Done progress bar, 7-day delta, overdue remediations.</li>' +
                 '<li><strong>Scanner health</strong> — 24h jobs, success rate, failures, running scans, next scheduled scan.</li>' +
             '</ul>' +
             '<p>Header buttons: <strong>Scan all</strong>, <strong>Add a target</strong>, <strong>Import JSON</strong>.</p>' +
@@ -167,16 +169,16 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Scanner type</strong>: by scanner that raised the finding (multi-select)</li>' +
             '</ul>' +
             '<h3>Single triage</h3>' +
-            '<p>Each row offers two quick buttons: <strong>To fix</strong> and <strong>False positive</strong>. Clicking the row opens the <strong>detail view</strong> (description, evidence, optional screenshot, linked measure) with the <strong>To fix</strong>, <strong>False positive</strong>, <strong>Fixed</strong>, <strong>Reset</strong> (back to New), <strong>AI analysis</strong> and <strong>Delete</strong> buttons. The triage modal asks for:</p>' +
+            '<p>Each row offers two quick buttons: <strong>To fix</strong> and <strong>False positive</strong>. Clicking the row opens the <strong>detail view</strong> (description, evidence, optional screenshot, linked remediation) with the <strong>To fix</strong>, <strong>False positive</strong>, <strong>Fixed</strong>, <strong>Reset</strong> (back to New), <strong>AI analysis</strong> and <strong>Delete</strong> buttons. The triage modal asks for:</p>' +
             '<ul>' +
-                '<li><strong>To fix</strong>: a measure name, a remediation description, an owner (directory picker, optional), a deadline (optional). The measure is created and appears in the Action Plan.</li>' +
+                '<li><strong>To fix</strong>: a remediation name, a description, an owner (directory picker, optional), a deadline (optional). The remediation is created and appears in the Action Plan.</li>' +
                 '<li><strong>False positive</strong>: a <strong>mandatory</strong> justification kept for audit. The finding is silenced and will not be re-raised by subsequent scans.</li>' +
                 '<li><strong>Fixed</strong>: a simple confirmation — the finding will reappear if re-detected on the next scan.</li>' +
             '</ul>' +
             '<h3>Bulk triage</h3>' +
             '<p>Ticking one or more rows via the left checkbox pops up a <strong>sticky action bar at the bottom of the page</strong>. You can:</p>' +
             '<ul>' +
-                '<li><strong>Create a corrective measure</strong> — ONE single measure, linked to the N selected findings (useful for "upgrade nginx on 30 hosts")</li>' +
+                '<li><strong>Create a remediation</strong> — ONE single remediation, linked to the N selected findings (useful for "upgrade nginx on 30 hosts")</li>' +
                 '<li>Mark <strong>N findings Fixed</strong> after confirmation</li>' +
                 '<li>Declare <strong>N findings False positive</strong> with the same justification</li>' +
                 '<li><strong>Permanently delete</strong> N findings (irreversible)</li>' +
@@ -184,9 +186,9 @@ if (typeof _registerTranslations === "function") {
             '<h3>Run a scan / JSON import</h3>' +
             '<p>The <strong>Run a scan</strong> button triggers a quick ports + TLS scan on any host typed on the fly, even outside the monitored perimeter. The <strong>Import JSON</strong> button opens a full modal: inline format specification, downloadable / copyable template, file upload or paste, and validation before submit. Expected format: an array of objects <code>{scanner, type, severity, title, description, target, evidence}</code> (only <code>title</code> is required). Standard deduplication applies.</p>' +
             '<h2>Action Plan</h2>' +
-            '<p>Corrective measures created from findings marked "to fix". Each measure has a short ID (<code>SRF-XXXXXXXX</code>), a title, the number of covered findings, a status (To do / In progress / Done), an owner, a deadline (highlighted when overdue). Clicking a row opens the edit modal, including a <strong>progress log</strong> to timestamp updates. Checkboxes enable bulk <strong>Done</strong> and bulk <strong>Delete</strong>.</p>' +
+            '<p>Remediations created from findings marked "to fix". Each remediation has a short ID (<code>SRF-XXXXXXXX</code>), a title, the number of covered findings, a status (To do / In progress / Done), an owner, a deadline (highlighted when overdue). Clicking a row opens the edit modal, including a <strong>progress log</strong> to timestamp updates. Checkboxes enable bulk <strong>Done</strong> and bulk <strong>Delete</strong>.</p>' +
             '<h2>Weekly email digest</h2>' +
-            '<p>Once SMTP is configured (see Settings), Surface <strong>automatically</strong> sends a weekly HTML digest: aggregated counters, top 10 findings to triage, top 10 exposed hosts, scan and measure stats. The scheduler checks hourly whether 7 days have elapsed since the last send (<code>digest.last_sent_at</code> in DB). A <strong>Send now</strong> button in the SMTP section lets you push an ad-hoc digest manually without waiting for the weekly tick.</p>' +
+            '<p>Once SMTP is configured (see Settings), Surface <strong>automatically</strong> sends a weekly HTML digest: aggregated counters, top 10 findings to triage, top 10 exposed hosts, scan and remediation stats. The scheduler checks hourly whether 7 days have elapsed since the last send (<code>digest.last_sent_at</code> in DB). A <strong>Send now</strong> button in the SMTP section lets you push an ad-hoc digest manually without waiting for the weekly tick.</p>' +
             '<div class="help-tip"><strong>Security:</strong> the SMTP host is validated against the same anti-SSRF blocklist as scanners (no <code>localhost</code>, no <code>surface-db</code>). Sender / recipient addresses are filtered against header injection (CRLF). The SMTP password is stored server-side and never returned in GET responses.</div>' +
             '<h2>AI analysis</h2>' +
             '<p>In a finding\'s detail view, the <strong>AI analysis</strong> button (lightning icon) sends the finding to the backend, which builds the methodology prompt, enriches it with NVD data and queries the configured LLM provider. The result is displayed below the finding:</p>' +
@@ -205,28 +207,34 @@ if (typeof _registerTranslations === "function") {
             '<ol>' +
                 '<li><strong>Language</strong> — instant FR/EN toggle for the whole UI</li>' +
                 '<li><strong>AI assistant</strong> — enables the AI analysis; depending on the deployment, access is managed by the suite (backend proxy) or configured with your own provider / key</li>' +
-                '<li><strong>Timezone</strong> — picker of 30 IANA zones. The default follows the browser-detected timezone. Every date (findings, scans, measures) renders in the chosen zone.</li>' +
+                '<li><strong>Timezone</strong> — picker of 30 IANA zones. The default follows the browser-detected timezone. Every date (findings, scans, remediations) renders in the chosen zone.</li>' +
                 '<li><strong>Nuclei</strong> — version, template count, last update date, <strong>editable tuning</strong> (rate-limit, concurrency, bulk-size, timeout, retries). "Update templates" button.</li>' +
                 '<li><strong>Shodan API</strong> — API key stored server-side (masked on display). Enables <code>shodan_domain</code> and <code>shodan_host</code>.</li>' +
                 '<li><strong>Email digest (SMTP)</strong> — full SMTP configuration: host, port, username/password, sender, recipients, STARTTLS toggle, "Send now" button.</li>' +
             '</ol>' +
             '<div class="help-tip"><strong>Nuclei tuning tip:</strong> on client targets or WAF-protected environments, lower the rate-limit to 5-10 req/s to avoid blacklisting. For your own assets, 20-50 req/s is comfortable.</div>' +
             '<h2>Typical workflow</h2>' +
-            '<ol style="font-size:0.9em;line-height:1.8">' +
+            '<ol style="font-size:var(--ct-text-data);line-height:1.8">' +
                 '<li>Add the root domain in <strong>Monitoring</strong> with all scanners ticked</li>' +
                 '<li>Wait for the first scheduler tick or run a manual scan → subdomains are discovered and enrolled as hosts</li>' +
                 '<li>Auto-discovered hosts are scanned on subsequent ticks (nmap, TLS, nuclei, takeover)</li>' +
                 '<li>Open <strong>Findings</strong> filtered on "Open" → triage critical/high findings first</li>' +
-                '<li>False positives are documented and silenced, real issues become measures</li>' +
-                '<li>Measures are tracked with their owner and deadline in the <strong>Action Plan</strong> tab</li>' +
+                '<li>False positives are documented and silenced, real issues become remediations</li>' +
+                '<li>Remediations are tracked with their owner and deadline in the <strong>Action Plan</strong> tab</li>' +
                 '<li>Scans keep running in the background → new findings appear automatically</li>' +
-            '</ol>',
+            '</ol>' +
+            '<h2>Features requiring AI</h2>' +
+            '<p>These features call a language model and are only available once AI is configured. They are <strong>optional</strong>: without configuration they are hidden or inactive and the rest of the module works normally.</p>' +
+            '<ul>' +
+            '<li><strong>AI analysis of a finding</strong>: qualification, exploitation context and probable false-positive detection</li>' +
+            '</ul>' +
+            '<p class="help-tip">Where to configure: in a standalone install, through the module\'s <strong>Settings &rarr; AI</strong> (your own API key). In the suite, keys are centralised by <strong>Pilot</strong> and pushed to the modules &mdash; nothing to enter here, and AI access is granted per user in the permissions matrix.</p>',
 
         // ── Dashboard ──────────────────────────────────────
         "dash.title":          "Dashboard",
         "dash.findings_total": "Total findings",
         "dash.false_positive": "False positives",
-        "dash.measures_done":  "Measures done",
+        "dash.measures_done":  "Remediations done",
         "dash.headline_critical":    "{n} critical finding(s) to triage — immediate attention required",
         "dash.headline_high":        "{n} high-severity finding(s) to triage",
         "dash.headline_ok":          "Situation under control — no critical or high findings pending triage",
@@ -246,7 +254,7 @@ if (typeof _registerTranslations === "function") {
         "dash.measures_created_7d":  "created 7d",
         "dash.measures_done_7d":     "done 7d",
         "dash.measures_delta":       "net delta",
-        "dash.measures_overdue":     "{n} measure(s) overdue",
+        "dash.measures_overdue":     "{n} remediation(s) overdue",
         "dash.health_title":         "Scanner health",
         "dash.health_jobs_24h":      "Jobs 24 h",
         "dash.health_success_rate":  "Success rate",
@@ -305,7 +313,18 @@ if (typeof _registerTranslations === "function") {
         "monitored.next.imminent":    "imminent",
         "monitored.next.disabled":    "disabled",
         "monitored.last.never":       "never",
+        "monitored.open_detail":      "Open detail",
         "monitored.delete_confirm":   "Delete this target?",
+        "exclude.panel_title":        "Scan exclusions",
+        "exclude.panel_hint":         "These values (host, IP, CIDR or domain) are never scanned nor auto-enrolled, even if rediscovered.",
+        "exclude.placeholder_value":  "host, IP, CIDR or domain",
+        "exclude.placeholder_note":   "note (optional)",
+        "exclude.add_btn":            "Exclude",
+        "exclude.empty":              "No exclusions.",
+        "exclude.remove":             "Remove exclusion",
+        "exclude.removed":            "Exclusion removed",
+        "exclude.added":              "{value} excluded from scanning",
+        "exclude.value_required":     "Enter a value to exclude",
         "monitored.bulk_delete":      "Delete",
         "monitored.bulk_delete_confirm": "Delete {count} monitored target(s)? This action cannot be undone.",
         "monitored.bulk_delete_done": "{count} target(s) deleted",
@@ -333,6 +352,7 @@ if (typeof _registerTranslations === "function") {
 
         // ── Host detail ────────────────────────────────────
         "host.back":               "Hosts",
+        "host.back_monitored":     "Monitoring",
         "host.back_to_host":       "Back to host",
         "host.col.value":          "Value",
         "host.col.label":          "Label",
@@ -340,12 +360,17 @@ if (typeof _registerTranslations === "function") {
         "host.col.frequency":      "Frequency",
         "host.col.last_scan":      "Last scan",
         "host.col.scanners":       "Active scanners",
+        "host.col.subdomains":     "Subdomains",
         "host.col.notes":          "Notes",
         "host.frequency_hours":    "{n} hours",
         "host.scan_now":           "Scan now",
         "host.scan_all_shares":    "Scan all shares",
         "host.shares":             "Shares",
         "host.edit":               "Edit",
+        "host.disable_scan":       "Disable scanning",
+        "host.enable_scan":        "Enable scanning",
+        "host.enabled_ok":         "Scanning enabled",
+        "host.disabled_ok":        "Scanning disabled",
         "host.delete":             "Delete",
         "host.findings_title":     "Associated findings",
         "host.findings_empty":     "No finding associated with this host. Run a scan to generate some.",
@@ -354,7 +379,140 @@ if (typeof _registerTranslations === "function") {
 
         // ── Findings panel ─────────────────────────────────
         "findings.title":             "Findings",
-        "findings.quick_scan":        "Run a scan",
+        // Finding labels rebuilt from type + evidence (see ct_findings.js)
+        "finding.open_port.title":        "Port {port}/{protocol} ({service}) open on {address}",
+        "finding.open_port.desc":         "Service {service} is listening on {address}:{port}/{protocol}.",
+        "finding.open_port.sev.critical": "Obsolete or highly exposed service. Close it immediately.",
+        "finding.open_port.sev.high":     "Sensitive service. Verify intended exposure, authentication and patch level.",
+        "finding.host_summary.title":     "nmap summary: {address}",
+        "finding.host_summary.desc":      "{open_ports_count} open port(s) on {address}.",
+        "finding.host_down.title":        "Host {address} unreachable",
+        "finding.host_down.desc":         "The host did not respond during the scan.",
+        // Wave 1 — actionable findings (core add-ons)
+        "finding.tls_grade.title":              "TLS grade {grade} on {target}",
+        "finding.tls_grade.desc":               "TLS grade {grade}. Supported protocols: {supported_versions_list}.",
+        "finding.sensitive_file_exposed.title": "Sensitive file exposed: {url}",
+        "finding.sensitive_file_exposed.desc":  "This path is publicly accessible (HTTP {http_status}). Remove or protect it immediately — it may expose credentials, source code or infrastructure configuration.",
+        "finding.security_headers_grade.title": "Security headers: grade {grade} on {target}",
+        "finding.security_headers_grade.desc":  "Grade {grade}. Issues to fix: {weaknesses_list}.",
+        "finding.subdomain_takeover.title":     "Possible subdomain takeover on {target} (via {service})",
+        "finding.subdomain_takeover.desc":      "The subdomain points (CNAME) to {matched_cname} ({service}), but the target resource is unclaimed. An attacker could register it and serve content under your domain. Remove or fix the CNAME record.",
+        "finding.js_secret_leak.title":         "'{pattern}' found in a JS bundle of {target}",
+        "finding.js_secret_leak.desc":          "A '{pattern}' pattern was found in the JS bundle {js_url}. Excerpt: {match}",
+        "finding.mx_missing.title":             "No MX configured for {target}",
+        "finding.mx_missing.desc":              "The domain has no MX record. No mail can be received (may be intentional).",
+        "finding.spf_missing.title":            "SPF missing on {target}",
+        "finding.spf_missing.desc":             "No SPF record. Anyone can send mail on behalf of this domain. Recommended: 'v=spf1 -all' at minimum.",
+        "finding.spf_weak.title":               "SPF too permissive on {target}",
+        "finding.spf_weak.desc":                "The SPF record accepts all senders (+all). SPF: {spf}",
+        "finding.spf_neutral.title":            "SPF in neutral mode (?all) on {target}",
+        "finding.spf_neutral.desc":             "The SPF record is in neutral mode, with no reject policy. SPF: {spf}",
+        "finding.dmarc_missing.title":          "DMARC missing on {target}",
+        "finding.dmarc_missing.desc":           "No DMARC record. Recommended at least 'v=DMARC1; p=none; rua=mailto:…' for monitoring, then harden to p=quarantine or p=reject.",
+        "finding.dmarc_weak.title":             "DMARC in monitoring mode (p=none) on {target}",
+        "finding.dmarc_weak.desc":              "DMARC is in monitoring mode, not enforcing. After an observation period, harden to quarantine or reject. DMARC: {dmarc}",
+        "finding.dkim_missing.title":           "DKIM not detected on {target}",
+        "finding.dkim_missing.desc":            "No common DKIM selector was found. Check your DKIM configuration with your mail provider.",
+        // smb_scan (add-on) — dynamic type (rule name) → per-scanner template
+        "finding.smb_scan.title":               "Sensitive data ({rule}): {file}",
+        "finding.smb_scan.desc":                "A '{rule}' secret was detected in a shared file. Excerpt: {match}",
+        "finding.interesting_name.title":       "Sensitive file by name: {file}",
+        "finding.interesting_name.desc":        "The filename or extension suggests sensitive data.",
+        // Wave 2 — TLS certificates (tls scanner)
+        "finding.tls_expiring.title":           "TLS certificate expiring soon on {target}",
+        "finding.tls_expiring.desc":            "The certificate for {target} is approaching expiry — plan its renewal.",
+        "finding.tls_expiring.sev.critical":    "The certificate has already expired.",
+        "finding.tls_valid.title":              "Valid TLS certificate for {target}",
+        "finding.tls_valid.desc":               "The certificate for {target} is valid until {notAfter}.",
+        "finding.tls_san_discovery.title":      "TLS SAN: {discovered_hosts_count} hostname(s) discovered via {target}",
+        "finding.tls_san_discovery.desc":       "The certificate for {target} declares other hostnames in the same scope. They are added to the monitored assets.",
+        "finding.tls_reverse_cert.title":       "Reverse cert: {siblings_count} hostname(s) share the certificate of {target}",
+        "finding.tls_reverse_cert.desc":        "crt.sh identified other hostnames issued with the same certificate. They are added to the monitored assets.",
+        "finding.tls_error.title":              "TLS unreachable on {target}:443",
+        "finding.tls_error.desc":               "Could not retrieve the certificate for {target}.",
+        "finding.tls_expired.title":            "Expired TLS certificate on {target}:443",
+        "finding.tls_expired.desc":             "The certificate for {target} has expired. Renew it.",
+        "finding.tls_not_yet_valid.title":      "TLS certificate not yet valid on {target}:443",
+        "finding.tls_not_yet_valid.desc":       "The certificate for {target} is not valid yet.",
+        "finding.tls_hostname_mismatch.title":  "TLS certificate does not cover {target}",
+        "finding.tls_hostname_mismatch.desc":   "The certificate presented by {target}:443 does not contain this hostname. Declared SAN: {san_dns_names_list}.",
+        "finding.tls_self_signed.title":        "Self-signed TLS certificate on {target}:443",
+        "finding.tls_self_signed.desc":         "The certificate for {target} is self-signed. Acceptable internally, but not for a publicly exposed service.",
+        "finding.tls_unverifiable.title":       "Unverifiable TLS certificate on {target}:443 (limited CA store)",
+        "finding.tls_unverifiable.desc":        "System verification failed, but direct analysis of the certificate shows no issue — likely an incomplete trust chain on the scanner side. No risk to the target.",
+        // Wave 3 — discovery & summaries (dns_brute, typosquat, ct_logs, discovery)
+        "finding.dns_brute_discovery.title":    "DNS brute-force: {count} subdomain(s) discovered for {target}",
+        "finding.dns_brute_discovery.desc":     "The DNS brute-force scan identified {count} hostnames resolving under {target}.",
+        "finding.typosquat_domain.title":       "Active lookalike domain: {lookalike}",
+        "finding.typosquat_domain.desc":        "Variant resembling {original} (class: {class}). Risk: phishing, brand impersonation, malicious redirection.",
+        "finding.typosquat_summary.title":      "Typosquatting: analysis of {original}",
+        "finding.typosquat_summary.desc":       "{permutations} permutations generated, {ct_checked} checked in Certificate Transparency.",
+        "finding.ct_discovery.title":           "CT logs: {count} subdomain(s) discovered for {target}",
+        "finding.ct_discovery.desc":            "Certificate Transparency logs (crt.sh) identified {count} hostnames for {target}. They are added to the monitored assets.",
+        "finding.ct_error.title":               "CT logs: crt.sh unreachable for {target}",
+        "finding.ct_error.desc":                "The crt.sh request failed. crt.sh is sometimes slow or intermittently unavailable — try again later.",
+        "finding.host_discovered.title":        "New host discovered on {cidr}: {address}",
+        "finding.host_discovered.desc":         "A host is reachable at {address}. It has been added to the monitored hosts.",
+        "finding.discovery_summary.title":      "Discovery on {cidr}: {discovered_count} active host(s)",
+        "finding.discovery_summary.desc":       "{discovered_count} hosts respond to the ping sweep on {cidr}.",
+        // Wave 4 — scan errors (generic translated title; technical detail left raw)
+        "finding.scanner_error.title":          "Scanner failed",
+        "finding.scanner_timeout.title":        "Scan timed out",
+        "finding.parse_error.title":            "Scan parsing error",
+        "finding.exception.title":              "Scanner error",
+        "finding.error.title":                  "Scanner error",
+        // Wave 5 — generic add-ons (shodan, nuclei, cve_lookup, cloud_buckets, screenshot)
+        "finding.shodan_no_key.title":          "Shodan: API key not configured",
+        "finding.shodan_no_key.desc":           "The Shodan scanner is enabled but no API key is configured. Set it in Settings → Shodan.",
+        "finding.shodan_auth_error.title":      "Shodan: invalid API key (401)",
+        "finding.shodan_auth_error.desc":       "The configured Shodan API key is not valid. Check it in Settings.",
+        "finding.shodan_no_data.title":         "Shodan: no data for {target}",
+        "finding.shodan_no_data.desc":          "Shodan has no data for this target (never scanned or results not indexed).",
+        "finding.shodan_error.title":           "Shodan: network error for {target}",
+        "finding.shodan_domain_discovery.title":"Shodan: {count} subdomain(s) identified for {target}",
+        "finding.shodan_domain_discovery.desc": "Shodan's DNS API returned {count} known subdomain(s) for {target}, from its passive banner grabbing.",
+        "finding.shodan_vuln.title":            "Shodan: {cve} detected on {target}",
+        "finding.shodan_vuln.desc":             "Shodan reports that {target} is potentially exposed to {cve}. Verify the exact service version and patch.",
+        "finding.shodan_host_summary.title":    "Shodan: {ports_count} port(s) observed on {target}",
+        "finding.shodan_host_summary.desc":     "Shodan observed {ports_count} open port(s) on this target via its passive Internet scan.",
+        "finding.scanner_blocked.title":        "Scanner blocked on {target} ({error_rate_pct}% error rate)",
+        "finding.scanner_blocked.desc":         "Many requests were rejected (WAF / anti-bot). Results may be partial.",
+        "finding.nuclei.title":                 "nuclei detection: {template_id}",
+        "finding.nuclei.desc":                  "The nuclei template {template_id} produced a match.",
+        "finding.cve_no_version.title":         "CVE lookup: {product} detected without version on {target}",
+        "finding.cve_no_version.desc":          "Product {product} was identified on {target} but its version is not exposed. Check the version manually then re-run.",
+        "finding.cve_no_tech.title":            "CVE lookup: no technology detected on {target}",
+        "finding.cve_no_tech.desc":             "No versioned product identified for {target}. The nuclei scanner (auto mode) must run before cve_lookup.",
+        "finding.cve_match.title":              "{cve_id} — {product} on {target}",
+        "finding.cve_match.desc":               "CVSS: {cvss_score} ({cvss_severity}).\n\n{original}",
+        "finding.cloud_bucket_exposed.title":   "Cloud bucket {provider}: {bucket_name} for {target}",
+        "finding.cloud_bucket_exposed.desc":    "Bucket {bucket_name} exists on {provider}. URL: {url}.",
+        "finding.screenshot_disabled.title":    "Screenshots disabled on {target}",
+        "finding.screenshot_disabled.desc":     "The screenshot scanner requires playwright + chromium. Install them then re-run the scan.",
+        "finding.screenshot.title":             "Screenshot of {target}",
+        "finding.screenshot.desc":              "Visual capture of {url}.",
+        // Scanner labels (localized; backend is English pivot)
+        "scanner.nmap_quick.label":       "Nmap (top 100 ports)",
+        "scanner.nmap_standard.label":    "Nmap (top 1000 + service detection)",
+        "scanner.nmap_deep.label":        "Nmap (all ports + service detection)",
+        "scanner.tls.label":              "TLS certificate (+ SAN discovery)",
+        "scanner.tls_grade.label":        "TLS protocol/cipher grade",
+        "scanner.security_headers.label": "Security headers grade",
+        "scanner.takeover.label":         "Subdomain takeover (CNAME fingerprint)",
+        "scanner.js_analysis.label":      "JavaScript bundle analysis (secrets & endpoints)",
+        "scanner.sensitive_files.label":  "Sensitive files exposure",
+        "scanner.dns_brute.label":        "Subdomain brute-force",
+        "scanner.typosquatting.label":    "Typosquatting",
+        "scanner.email_security.label":   "Email security (SPF/DMARC/DKIM/MX)",
+        "scanner.discovery.label":        "Host discovery (ping sweep)",
+        "scanner.ct_logs.label":          "Subdomain discovery (CT logs)",
+        "scanner.shodan_domain.label":    "Shodan DNS (subdomains, passive, 0 credit)",
+        "scanner.shodan_host.label":      "Shodan host lookup (ports/CVE, 1 credit/req)",
+        "scanner.nuclei.label":           "Nuclei (templates DAST)",
+        "scanner.cve_lookup.label":       "CVE matching (NVD + EPSS + KEV)",
+        "scanner.cloud_buckets.label":    "Cloud bucket enumeration (S3/Azure/GCS)",
+        "scanner.screenshot.label":       "HTTP screenshot capture (optional)",
+        "scanner.smb_scan_rs.label":      "SMB file-share content — Rust worker (secrets & sensitive data)",
         "findings.bulk_import":       "Import JSON",
         "findings.search.placeholder": "Search title, target, description, scanner...",
         "findings.filter.status":     "Status:",
@@ -375,7 +533,7 @@ if (typeof _registerTranslations === "function") {
         // ── Bulk action bar ────────────────────────────────
         "bulk.selected":           "finding(s) selected",
         "bulk.false_positive":     "False positive",
-        "bulk.to_fix":             "Create corrective measure",
+        "bulk.to_fix":             "Create remediation",
         "bulk.fixed":              "Fixed",
         "bulk.fixed_confirm":      "{n} finding(s) will be marked as fixed. They will reappear if detected on the next scan.",
         "bulk.delete":             "Delete",
@@ -385,10 +543,10 @@ if (typeof _registerTranslations === "function") {
         "bulk.fp_confirm":         "Confirm false positive ({n})",
         "bulk.fp_justification":   "Justification *",
         "bulk.fp_placeholder":     "Explain why these findings are false positives (context, documented exception, intentional configuration...)",
-        "bulk.measure_title":      "Create a corrective measure for {n} finding(s)",
-        "bulk.measure_help":       "One corrective measure will be created for each selected finding, all sharing the same title/description/owner/deadline. They'll appear grouped in the Measures tab.",
-        "bulk.measure_confirm":    "Create {n} measure(s)",
-        "bulk.delete_confirm":     "Permanently delete {n} finding(s)? Linked measures will also be deleted (cascade).",
+        "bulk.measure_title":      "Create a remediation for {n} finding(s)",
+        "bulk.measure_help":       "One remediation will be created for each selected finding, all sharing the same title/description/owner/deadline. They'll appear grouped in the Remediations tab.",
+        "bulk.measure_confirm":    "Create {n} remediation(s)",
+        "bulk.delete_confirm":     "Permanently delete {n} finding(s)? Linked remediations will also be deleted (cascade).",
 
         // ── Common actions ─────────────────────────────────
         "action.cancel":  "Cancel",
@@ -398,7 +556,7 @@ if (typeof _registerTranslations === "function") {
         "action.delete":  "Delete",
 
         // ── Kind help texts ────────────────────────────────
-        "kind.help.domain":   "Root domain — e.g. example.com, medsecure.fr",
+        "kind.help.domain":   "Root domain — e.g. example.com, medsecure.example",
         "kind.help.host":     "Single host — IP (1.2.3.4, ::1) or DNS name (api.example.com)",
         "kind.help.ip_range": "CIDR range for external scanners — e.g. 192.168.1.0/24",
         "kind.help.file_share": "Windows SMB/CIFS share — e.g. \\\\server\\share or //server/share",
@@ -432,6 +590,7 @@ if (typeof _registerTranslations === "function") {
         "jobs.status.completed":"Completed",
         "jobs.status.partial":  "Partial",
         "jobs.status.failed":   "Failed",
+        "job.error.interrupted_by_restart": "Interrupted by a service restart",
         "jobs.partial.stopped": "Stopped after {n} files —",
         "jobs.partial.files":   "max cap reached, resumes next scan",
         "jobs.partial.time":    "time budget reached, resumes next scan",
@@ -502,6 +661,8 @@ if (typeof _registerTranslations === "function") {
         "hosts.scanners":            "scans",
         "hosts.configure":           "Configure",
         "hosts.configure_scans":     "Configure scans",
+        "hosts.disabled_section":    "Scanning disabled",
+        "hosts.reactivate":          "Re-enable",
         "hosts.scanners_updated":    "Scans updated on {n} asset(s)",
         "hosts.bulk_configure_scans":"Apply scans",
         "hosts.bulk_scanners_subtitle":"{n} selected assets",
@@ -577,35 +738,35 @@ if (typeof _registerTranslations === "function") {
         "fd.notes":                  "Notes",
         "fd.triage":                 "Triage",
         "fd.triage_notes_ph":        "Notes (optional)...",
-        "fd.triage_to_fix":          "To fix (creates a measure)",
+        "fd.triage_to_fix":          "To fix (creates a remediation)",
         "fd.triage_fp":              "False positive",
         "fd.triage_fixed":           "Fixed",
         "fd.triage_reset":           "Reset (untriaged)",
         "fd.delete":                 "Delete",
         "fd.delete_confirm":         "Delete this finding?",
         "fd.deleted":                "Finding deleted",
-        "fd.measure_linked":         "Linked measure",
+        "fd.measure_linked":         "Linked remediation",
         "fd.measure_status":         "Status",
         "fd.measure_owner":          "Owner",
         "fd.measure_due":            "Deadline",
         "fd.triage_ok":              "Triage saved",
 
         // ── Triage modal (single) ─────────────────────────
-        "tm.title_to_fix":           "Create a corrective measure",
+        "tm.title_to_fix":           "Create a remediation",
         "tm.title_fp":               "Mark as false positive",
         "tm.title_reset":            "Reset triage",
-        "tm.confirm_to_fix":         "Create measure",
+        "tm.confirm_to_fix":         "Create remediation",
         "tm.confirm_fp":             "Confirm false positive",
         "tm.finding":                "Finding:",
         "tm.fp_justif":              "Justification *",
         "tm.fp_justif_ph":           "Explain why this finding is a false positive (context, documented exception, intentional configuration...)",
-        "tm.reset_help":             "Reset this finding to 'New'? The linked measure (if any) will be deleted.",
+        "tm.reset_help":             "Reset this finding to 'New'? The linked remediation (if any) will be deleted.",
         "tm.justif_required":        "Justification is required",
 
         // ── Measures panel ────────────────────────────────
         "measures.title":            "Action Plan",
-        "measures.help":             "Action plan from triaged findings. Each measure is linked to the finding that created it.",
-        "measures.empty":            "No measure created. Measures appear automatically when you triage a finding to 'To fix'.",
+        "measures.help":             "Action plan from triaged findings. Each remediation is linked to the finding that created it.",
+        "measures.empty":            "No remediation created. Remediations appear automatically when you triage a finding to 'To fix'.",
         "measures.col.id":           "ID",
         "measures.col.title":        "Title",
         "measures.col.status":       "Status",
@@ -615,13 +776,11 @@ if (typeof _registerTranslations === "function") {
         "measures.status.en_cours":  "In progress",
         "measures.status.termine":   "Done",
         "measures.col.severity":     "Severity",
-        "measures.updated":          "Measure updated",
+        "measures.updated":          "Remediation updated",
 
         // ── Quick prompts (utility actions) ───────────────
-        "prompt.quick_scan_host":    "Target host (e.g. example.com):",
         "prompt.findings_imported":  "findings imported",
         "prompt.findings_skipped":   "skipped",
-        "prompt.findings_on":        "finding(s) created on",
         "prompt.job_delete_confirm": "Delete this job? (findings already created will not be affected)",
 
         // ── Generic & host/nuclei inline strings ──────────
@@ -716,7 +875,7 @@ if (typeof _registerTranslations === "function") {
         "bulk.delete_confirm_msg": "This action cannot be undone.",
         "bulk.fixed_confirm_title": "Mark {n} finding(s) as fixed?",
         "bulk.fixed_confirm_msg": "Findings will be marked as fixed. They will reappear if detected on the next scan.",
-        "bulk.measure_default_title": "Corrective measure",
+        "bulk.measure_default_title": "Remediation",
         "bulk.deleted": "deleted",
         "settings.ai_privacy_warning": "By enabling the AI assistant:\n\n1. DATA SHARING — Your analysis data (context, requirements, controls) will be sent to the selected AI provider. Make sure your privacy policy and contractual obligations allow this.\n\n2. API KEY EXPOSURE — The API key is transmitted directly from your browser. It is visible in browser DevTools and can be captured by browser extensions. Use a browser without extensions or a dedicated profile.\n\n3. NETWORK — Communications are encrypted (HTTPS) but may be logged by corporate proxies.\n\nDo you want to continue?",
         "settings.ai_enable": "Enable AI assistant",
@@ -728,13 +887,17 @@ if (typeof _registerTranslations === "function") {
         "settings.ai_section": "AI Assistant",
         "matrix.low": "Low",
         "matrix.moderate": "Moderate",
-        "measures.marked_done": "Measure marked as fixed",
+        "measures.marked_done": "Remediation marked as fixed",
         "matrix.y": "Likelihood",
-        "measures.deleted": "Measure deleted",
+        "measures.deleted": "Remediation deleted",
         "matrix.extreme": "Extreme",
         "measures.col.findings": "Findings",
         "settings.title": "Settings",
         "matrix.x": "Impact",
         "matrix.critical": "Critical",
-    });
+        "smtp.managed_notice": "The SMTP server (host, auth, sender) is configured in Pilot → Settings and pushed to this module automatically. Only the report recipients are set here.",
+    "smtp.not_configured": "not configured — see Pilot → Settings",
+    "smtp.sent_confirm": "Report sent ✔\\n\\nRecipients: {recipients}\\n\\nCheck the inbox (and spam on first send).",
+    "smtp.send_failed": "Send failed:\\n{msg}",
+});
 }

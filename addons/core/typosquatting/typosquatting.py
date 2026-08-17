@@ -79,8 +79,8 @@ def _builtin_permutations(domain: str) -> list[tuple[str, str]]:
 def _seeds_for(domain: str) -> list[str]:
     """Seeds fed to dnstwist. dnstwist applies ONE transform per seed, so a
     hyphenated domain also gets a de-hyphenated seed — otherwise double
-    mutations (drop the hyphen AND swap TLD/typo, e.g. ``bdf-gestion.com`` →
-    ``bdfgestion.fr``) are never generated."""
+    mutations (drop the hyphen AND swap TLD/typo, e.g. ``acme-corp.example`` →
+    ``acmecorp.example``) are never generated."""
     seeds = [domain]
     parts = domain.split(".")
     sld, tld = parts[0], ".".join(parts[1:])
@@ -115,7 +115,7 @@ def _dnstwist_permutations(domain: str, max_variants: int) -> list[tuple[str, st
                 got = fuzz.permutations()
             raw.extend(got or [])
         # Bucket by permutation class. Only the monitored domain itself is
-        # excluded; the de-hyphenated seed (e.g. bdfgestion.com) IS a
+        # excluded; the de-hyphenated seed (e.g. acmecorp.example) IS a
         # legitimate lookalike we want to keep.
         by_class: dict[str, list[str]] = {}
         for d in raw:
@@ -134,7 +134,7 @@ def _dnstwist_permutations(domain: str, max_variants: int) -> list[tuple[str, st
             out.append((dom, klass))
             return len(out) >= max_variants
 
-        # The de-hyphenated exact name (extra seed, e.g. bdfgestion.com) is a
+        # The de-hyphenated exact name (extra seed, e.g. acmecorp.example) is a
         # top-value lookalike but sits deep in the omission bucket — guarantee
         # it, else the cap drops the exact brand-without-hyphen.
         for seed in seeds[1:]:

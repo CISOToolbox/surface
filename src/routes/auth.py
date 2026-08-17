@@ -17,7 +17,9 @@
 """
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from datetime import datetime, timezone
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -39,6 +41,8 @@ from src.auth import (
 from src.database import get_db
 from src.models import User
 from src.schemas import UserResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -69,7 +73,25 @@ _oidc_endpoints: dict | None = None
 
 
 def _entra_configured() -> bool:
-    return AUTH_MODE == "standalone" and bool(ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET)
+    """Entra is usable only with an EXPLICIT tenant id.
+
+    The default was "common", which builds an issuer of .../common/v2.0 — a
+    value no real token ever carries, since Entra stamps the tenant GUID.
+    Verification therefore failed for everyone, and the obvious way out of a
+    login that "just doesn't work" is to switch verify_iss off, which is
+    precisely the check that keeps another tenant's token from being accepted.
+    """
+    if AUTH_MODE != "standalone" or not (ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET):
+        return False
+    if ENTRA_TENANT_ID in ("", "common", "organizations", "consumers"):
+        logger.warning(
+            "Entra ID is configured but ENTRA_TENANT_ID is %r: set it to your "
+            "tenant GUID. Issuer verification cannot succeed against a "
+            "multi-tenant placeholder, so the provider is disabled.",
+            ENTRA_TENANT_ID or "(empty)",
+        )
+        return False
+    return True
 
 
 def _google_configured() -> bool:
@@ -173,6 +195,56 @@ async def login_token(body: dict, db: AsyncSession = Depends(get_db)):
 
 
 # ── Microsoft Entra / M365 ─────────────────────────────────────────────
+
+# ── OIDC nonce + PKCE ────────────────────────────────────────────
+#
+# `state` was the only per-flow secret: it stops login CSRF, but says nothing
+# about the token that comes back. Two gaps followed, both required by OIDC
+# Core §3.1.2.1 / RFC 7636:
+#
+#  * no `nonce` — an id_token obtained elsewhere for the same client could be
+#    replayed into our callback; the nonce binds a token to the exact browser
+#    flow that asked for it;
+#  * no PKCE — an authorization code intercepted before the exchange is
+#    redeemable on its own; with PKCE it is worthless without the verifier,
+#    which never leaves this server.
+
+def _new_pkce() -> tuple[str, str]:
+    """Return `(code_verifier, code_challenge)` for the S256 method."""
+    import hashlib
+    from base64 import urlsafe_b64encode
+
+    verifier = secrets.token_urlsafe(64)[:128]
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return verifier, urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _begin_oauth(response, redirect_after: str, state: str,
+                 verifier: str, nonce: str = "") -> None:
+    """Attach the per-flow cookies to the redirect that starts the flow."""
+    common = dict(httponly=True, samesite="lax", max_age=600,
+                  secure=_cookie_secure())
+    response.set_cookie("oauth_state", state, **common)
+    response.set_cookie("oauth_redirect", redirect_after, **common)
+    response.set_cookie("oauth_pkce", verifier, **common)
+    if nonce:
+        response.set_cookie("oauth_nonce", nonce, **common)
+
+
+def _verify_nonce(request: Request, claims: dict) -> None:
+    """The id_token must echo the nonce minted for THIS browser flow."""
+    expected = request.cookies.get("oauth_nonce", "")
+    returned = str(claims.get("nonce") or "")
+    if not expected or not returned or not secrets.compare_digest(returned, expected):
+        raise HTTPException(status_code=400, detail="Invalid OAuth nonce")
+
+
+def _clear_oauth_cookies(response):
+    for name in ("oauth_state", "oauth_redirect", "oauth_pkce", "oauth_nonce"):
+        response.delete_cookie(name)
+    return response
+
+
 @router.get("/login/entra")
 async def login_entra(request: Request):
     if not _entra_configured():
@@ -180,10 +252,14 @@ async def login_entra(request: Request):
     redirect_uri = APP_URL + "/auth/callback/entra"
     redirect_after = _sanitize_redirect(request.query_params.get("redirect", "/"))
     client = AsyncOAuth2Client(client_id=ENTRA_CLIENT_ID, client_secret=ENTRA_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
-    uri, state = client.create_authorization_url(ENTRA_AUTH_URL)
+    verifier, challenge = _new_pkce()
+    nonce = secrets.token_urlsafe(32)
+    uri, state = client.create_authorization_url(
+        ENTRA_AUTH_URL, code_challenge=challenge,
+        code_challenge_method="S256", nonce=nonce,
+    )
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    _begin_oauth(response, redirect_after, state, verifier, nonce)
     return response
 
 
@@ -194,7 +270,12 @@ def _verify_oauth_state(request: Request) -> None:
     the attacker's account (login CSRF)."""
     expected = request.cookies.get("oauth_state")
     returned = request.query_params.get("state")
-    if not expected or not returned or returned != expected:
+    # compare_digest, not !=: exploitability is nil here (the state is a
+    # short-lived random value and an attacker cannot replay guesses
+    # against the same one), but every other secret comparison in the
+    # suite is constant-time, and an inconsistent habit is what ends up
+    # copied into a place where it does matter.
+    if not expected or not returned or not secrets.compare_digest(returned, expected):
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
 
@@ -206,7 +287,10 @@ async def callback_entra(request: Request, db: AsyncSession = Depends(get_db)):
     _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=ENTRA_CLIENT_ID, client_secret=ENTRA_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
-        token = await client.fetch_token(ENTRA_TOKEN_URL, authorization_response=str(request.url))
+        token = await client.fetch_token(
+            ENTRA_TOKEN_URL, authorization_response=str(request.url),
+            code_verifier=request.cookies.get("oauth_pkce", ""),
+        )
     except Exception:
         return RedirectResponse(url="/login.html?error=auth_failed")
     id_token = token.get("id_token", "")
@@ -218,6 +302,9 @@ async def callback_entra(request: Request, db: AsyncSession = Depends(get_db)):
         claims = await _verify_id_token_jwks(id_token, jwks_url, audience=ENTRA_CLIENT_ID, issuer=issuer)
     except Exception:
         return RedirectResponse(url="/login.html?error=token_verify_failed")
+    # Signature and audience hold for ANY id_token minted for this client;
+    # the nonce is what ties this one to this browser flow.
+    _verify_nonce(request, claims)
     email = claims.get("email") or claims.get("preferred_username", "")
     name = claims.get("name", "")
     provider_id = claims.get("oid") or claims.get("sub", "")
@@ -236,10 +323,14 @@ async def login_google(request: Request):
     redirect_uri = APP_URL + "/auth/callback/google"
     redirect_after = _sanitize_redirect(request.query_params.get("redirect", "/"))
     client = AsyncOAuth2Client(client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
-    uri, state = client.create_authorization_url(GOOGLE_AUTH_URL)
+    # Google is read through userinfo, not the id_token: no nonce to
+    # bind, but PKCE still protects the code exchange.
+    verifier, challenge = _new_pkce()
+    uri, state = client.create_authorization_url(
+        GOOGLE_AUTH_URL, code_challenge=challenge, code_challenge_method="S256",
+    )
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    _begin_oauth(response, redirect_after, state, verifier)
     return response
 
 
@@ -251,7 +342,10 @@ async def callback_google(request: Request, db: AsyncSession = Depends(get_db)):
     _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
-        token = await client.fetch_token(GOOGLE_TOKEN_URL, authorization_response=str(request.url))
+        token = await client.fetch_token(
+            GOOGLE_TOKEN_URL, authorization_response=str(request.url),
+            code_verifier=request.cookies.get("oauth_pkce", ""),
+        )
     except Exception:
         return RedirectResponse(url="/login.html?error=auth_failed")
     client.token = token
@@ -280,10 +374,14 @@ async def login_oidc(request: Request):
     redirect_uri = APP_URL + "/auth/callback/oidc"
     redirect_after = _sanitize_redirect(request.query_params.get("redirect", "/"))
     client = AsyncOAuth2Client(client_id=OIDC_CLIENT_ID, client_secret=OIDC_CLIENT_SECRET, redirect_uri=redirect_uri, scope=SCOPES)
-    uri, state = client.create_authorization_url(endpoints["authorization_endpoint"])
+    verifier, challenge = _new_pkce()
+    nonce = secrets.token_urlsafe(32)
+    uri, state = client.create_authorization_url(
+        endpoints["authorization_endpoint"], code_challenge=challenge,
+        code_challenge_method="S256", nonce=nonce,
+    )
     response = RedirectResponse(url=uri)
-    response.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
-    response.set_cookie("oauth_redirect", redirect_after, httponly=True, samesite="lax", max_age=600, secure=_cookie_secure())
+    _begin_oauth(response, redirect_after, state, verifier, nonce)
     return response
 
 
@@ -296,7 +394,10 @@ async def callback_oidc(request: Request, db: AsyncSession = Depends(get_db)):
     _verify_oauth_state(request)
     client = AsyncOAuth2Client(client_id=OIDC_CLIENT_ID, client_secret=OIDC_CLIENT_SECRET, redirect_uri=redirect_uri)
     try:
-        token = await client.fetch_token(endpoints["token_endpoint"], authorization_response=str(request.url))
+        token = await client.fetch_token(
+            endpoints["token_endpoint"], authorization_response=str(request.url),
+            code_verifier=request.cookies.get("oauth_pkce", ""),
+        )
     except Exception:
         return RedirectResponse(url="/login.html?error=auth_failed")
     client.token = token
@@ -319,6 +420,10 @@ async def callback_oidc(request: Request, db: AsyncSession = Depends(get_db)):
             )
         except Exception:
             return RedirectResponse(url="/login.html?error=token_verify_failed")
+        # Only on this branch: here the id_token IS the identity assertion, so
+        # it must be bound to this flow. The userinfo branch above fetches the
+        # identity server-side with a token just obtained — nothing to replay.
+        _verify_nonce(request, userinfo)
     email = userinfo.get("email", "")
     if not email:
         return RedirectResponse(url="/login.html?error=userinfo_failed")
@@ -335,6 +440,21 @@ async def callback_oidc(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
+# Standalone provisioning used to accept anyone the IdP would authenticate:
+# a new account was created with role "user" and handed a working session on
+# the spot. With an "external" Google OAuth client that means any Gmail address
+# walks in. Pilot never did this — it parks new accounts as "pending" until an
+# admin promotes them. Two gates now, mirroring that:
+#   ALLOWED_EMAIL_DOMAINS  optional comma-separated allow-list, checked first;
+#   role "pending"         every account past the first, until approved via
+#                          PATCH /api/users/{id} (users.py already accepts it).
+_ALLOWED_EMAIL_DOMAINS = tuple(
+    d.strip().lower().lstrip("@")
+    for d in os.getenv("ALLOWED_EMAIL_DOMAINS", "").split(",")
+    if d.strip()
+)
+
+
 async def _upsert_user(
     db: AsyncSession,
     email: str,
@@ -343,8 +463,17 @@ async def _upsert_user(
     provider: str,
     provider_id: str,
 ) -> User:
-    """Find or create a standalone user. First user gets admin role."""
+    """Find or create a standalone user. First user gets admin role.
+
+    Raises 403 rather than returning a user when the address is outside the
+    allow-list, or when the account still awaits approval — the caller issues
+    a session immediately after, so refusing here is what keeps it shut.
+    """
     email = (email or "").strip().lower()
+    if _ALLOWED_EMAIL_DOMAINS:
+        domain = email.rpartition("@")[2]
+        if domain not in _ALLOWED_EMAIL_DOMAINS:
+            raise HTTPException(status_code=403, detail="Email domain not allowed")
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
@@ -356,7 +485,7 @@ async def _upsert_user(
         user.last_login = now
     else:
         count_result = await db.execute(select(func.count()).select_from(User))
-        role = "admin" if count_result.scalar() == 0 else "user"
+        role = "admin" if count_result.scalar() == 0 else "pending"
         user = User(
             email=email,
             name=name or email.split("@")[0],
@@ -369,6 +498,11 @@ async def _upsert_user(
         db.add(user)
     await db.commit()
     await db.refresh(user)
+    if user.role == "pending":
+        raise HTTPException(
+            status_code=403,
+            detail="Account created and awaiting administrator approval",
+        )
     return user
 
 
@@ -390,8 +524,9 @@ def _login_response(user: User, redirect_to: str = "/") -> RedirectResponse:
         httponly=True, samesite="lax",
         max_age=86400, secure=_cookie_secure(), path="/",
     )
-    response.delete_cookie("oauth_state")
-    response.delete_cookie("oauth_redirect")
+    # Clears the PKCE verifier and the nonce too — a redeemed verifier must
+    # not survive into a later flow.
+    _clear_oauth_cookies(response)
     return response
 
 

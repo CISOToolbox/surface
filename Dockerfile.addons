@@ -1,0 +1,35 @@
+# Client add-on overlay for Surface — layers selected add-on scanners on top
+# of a core Surface image. Built by shared/build-client-image.sh, which stages
+# the chosen addons into .client-addons/. NOT used by the suite/public image.
+#
+#   BASE = a core Surface image (e.g. ciso-surface:local, or a pinned
+#          ghcr.io/cisotoolbox/ciso-surface-suite:vX.Y.Z for releases).
+ARG BASE=ciso-surface:local
+FROM ${BASE}
+
+# Space-separated core scanner add-ons to drop for a slim client build
+# (e.g. "shodan cloud_buckets"). Empty = keep all core scanners.
+ARG EXCLUDE_CORE=""
+
+USER root
+COPY .client-addons/ /app/addons/
+# 1) drop excluded core scanners; 2) install each add-on's system packages
+#    (apt-packages.txt, e.g. libsmbclient, or the Chromium runtime libs for the
+#    screenshot add-on); 3) install each add-on's Python deps (requirements.txt);
+# 4) run each add-on's install.sh — heavy/optional binaries that are NOT in the
+#    lean base ship WITH their add-on (e.g. the nuclei binary+templates, the
+#    Playwright Chromium download), so they exist only when the add-on is
+#    included; 5) make bundled binaries executable; 6) fix ownership of /app.
+RUN for d in ${EXCLUDE_CORE}; do rm -rf "/app/addons/core/$d"; done \
+    && APT_PKGS="$(cat $(find /app/addons -name apt-packages.txt) 2>/dev/null | grep -vE '^\s*#|^\s*$' | sort -u | tr '\n' ' ')" \
+    && if [ -n "$APT_PKGS" ]; then \
+         apt-get update && apt-get install -y --no-install-recommends $APT_PKGS \
+         && rm -rf /var/lib/apt/lists/*; \
+       fi \
+    && find /app/addons -name requirements.txt -exec pip install --no-cache-dir -r {} \; \
+    && for s in $(find /app/addons -name install.sh | sort); do echo "── add-on install: $s ──"; sh "$s"; done \
+    && find /app/addons -type d -name bin -exec sh -c 'chmod +x "$1"/* 2>/dev/null || true' _ {} \; \
+    && chown -R surface:surface /app/addons
+USER surface
+
+ENV SURFACE_ADDON_PATHS=/app/addons

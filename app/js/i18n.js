@@ -1,15 +1,19 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/i18n.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * CISO Toolbox — Système i18n (FR/EN)
  *
  * Charger AVANT cisotoolbox.js et les fichiers app.
  * Chaque app ajoute ses traductions via _registerTranslations().
  */
-var _locale = "fr";
-var _translations = { fr: {}, en: {} };
+// Langue de base (fallback de t() ET défaut au 1er chargement). Toujours
+// embarquée. Surchargeable par le packaging via window._CT_BASE_LANG.
+var _baseLang = (typeof window !== "undefined" && window._CT_BASE_LANG) || "en";
+var _locale = _baseLang;
+var _translations = { en: {}, fr: {} };
 function _registerTranslations(lang, dict) {
     var existing = _translations[lang] || {};
     for (var k in dict)
@@ -18,7 +22,7 @@ function _registerTranslations(lang, dict) {
 }
 function t(key, params) {
     var s = (_translations[_locale] && _translations[_locale][key])
-        || (_translations.fr && _translations.fr[key])
+        || (_translations[_baseLang] && _translations[_baseLang][key])
         || key;
     if (params) {
         for (var k in params) {
@@ -41,15 +45,32 @@ function tEsc(key, params) {
     return esc(t(key, params));
 }
 function _initLocale() {
+    // Priorité : préférence explicite stockée > langue du navigateur (si elle
+    // fait partie des langues disponibles) > langue de base (anglais) en repli.
     var stored = localStorage.getItem("ct_lang");
     if (stored && _translations[stored]) {
         _locale = stored;
     }
     else {
-        var nav = (navigator.language || "fr").slice(0, 2);
-        _locale = _translations[nav] ? nav : "fr";
+        var nav = (navigator.language || _baseLang).slice(0, 2);
+        _locale = _translations[nav] ? nav : _baseLang;
     }
 }
+// Langues disponibles pour ce déploiement : injectées au packaging via
+// window._CT_LANGS (ex. ["en","fr"]), sinon déduites des dictionnaires chargés.
+// Les noms s'affichent dans leur propre langue.
+var _LANG_NAMES = {
+    en: "English", fr: "Français", de: "Deutsch", es: "Español",
+    it: "Italiano", pt: "Português", nl: "Nederlands"
+};
+function _availableLangs() {
+    var w = (typeof window !== "undefined") ? window._CT_LANGS : null;
+    if (w && w.length)
+        return w;
+    var k = Object.keys(_translations);
+    return k.length ? k : [_baseLang];
+}
+function _langName(lang) { return _LANG_NAMES[lang] || lang.toUpperCase(); }
 // Track loaded i18n files to avoid double-loading
 var _i18nLoaded = {};
 function _loadI18nFile(lang, cb) {
@@ -58,16 +79,28 @@ function _loadI18nFile(lang, cb) {
             cb();
         return;
     }
-    // App-specific i18n file naming convention: _ASSET_BASE + "_i18n_" + lang + ".js"
+    // Une langue chargée à la demande = le socle (i18n_core_<lang>.js) + le
+    // dictionnaire du module (_ASSET_BASE + "_i18n_" + lang + ".js"). Le socle
+    // vit dans le même dossier js/ que le module.
     var base = (typeof _ASSET_BASE !== "undefined") ? _ASSET_BASE : "";
-    var file = base + "_i18n_" + lang + ".js";
-    var s = document.createElement("script");
-    s.src = file;
-    s.onload = function () { _i18nLoaded[lang] = true; if (cb)
-        cb(); };
-    s.onerror = function () { if (cb)
-        cb(); }; // proceed even if file not found
-    document.head.appendChild(s);
+    var dir = base.replace(/[^/]*$/, ""); // "js/Surface" -> "js/"
+    var files = [dir + "i18n_core_" + lang + ".js"];
+    if (base)
+        files.push(base + "_i18n_" + lang + ".js");
+    var pending = files.length;
+    files.forEach(function (f) {
+        var s = document.createElement("script");
+        s.src = f;
+        // On avance même si un fichier manque (langue partiellement absente).
+        s.onload = s.onerror = function () {
+            if (--pending === 0) {
+                _i18nLoaded[lang] = true;
+                if (cb)
+                    cb();
+            }
+        };
+        document.head.appendChild(s);
+    });
 }
 function switchLang(lang, cb) {
     if (!lang)
@@ -133,289 +166,22 @@ function _rt(obj, field) {
     }
     return obj[field] || "";
 }
-// ═══════════════════════════════════════════════════════════════════════
-// TRADUCTIONS PARTAGÉES (cisotoolbox.js)
-// ═══════════════════════════════════════════════════════════════════════
-_registerTranslations("fr", {
-    "matrix.critical": "Critique", // pilot
-    "matrix.extreme": "Extrême", // pilot
-    "matrix.high": "Élevé", // pilot
-    "matrix.low": "Faible", // pilot
-    "matrix.moderate": "Moyen", // pilot
-    "matrix.significant": "Significatif", // pilot
-    "matrix.x": "Impact", // pilot
-    "matrix.y": "Vraisemblance", // pilot
-    "settings.title": "Réglages", // pilot
-    // Menu fichier
-    "menu_file": "Fichier",
-    "menu_open": "Ouvrir",
-    "menu_save": "Enregistrer",
-    "menu_save_as": "Enregistrer sous",
-    "menu_new": "Nouvelle {label}",
-    "save_encrypt_prompt": "Voulez-vous chiffrer le fichier avec un mot de passe ?",
-    // Status
-    "status_session_restored": "Session restaurée",
-    "status_new": "Nouvelle {label}",
-    "status_file_opened": "Fichier ouvert : {name}",
-    "status_saved": "Enregistré",
-    "status_saved_name": "Enregistré : {name}",
-    "status_saved_encrypted": " (chiffré)",
-    "status_downloaded": "Fichier téléchargé",
-    "status_encryption_on": "Chiffrement activé — le prochain enregistrement sera chiffré",
-    "status_encryption_off": "Chiffrement désactivé",
-    "status_snap_created": "Snapshot créé : {name}",
-    "status_snap_deleted": "Snapshot supprimé",
-    "status_snap_encrypted": "Snapshots chiffrés",
-    // Confirm / Alert
-    "confirm_new": "Créer une nouvelle {label} ? Les données non sauvegardées seront perdues.",
-    "confirm_restore_snap": "Restaurer le snapshot \"{name}\" ?\nLes modifications non sauvegardées seront perdues.",
-    "confirm_delete_snap": "Supprimer le snapshot \"{name}\" ?",
-    "confirm_decrypt_snaps": "Déchiffrer tous les snapshots ?",
-    "alert_wrong_password": "Mot de passe incorrect ou fichier corrompu.",
-    "alert_wrong_snap_password": "Mot de passe incorrect ou données corrompues.",
-    "alert_load_error": "Erreur de chargement : {msg}",
-    "alert_open_error": "Erreur ouverture : {msg}",
-    "alert_save_error": "Erreur sauvegarde : {msg}",
-    "alert_storage_full": "Espace de stockage insuffisant. Supprimez des snapshots anciens.",
-    // Password dialog
-    "pwd_title_encrypted_file": "Fichier chiffré — entrez le mot de passe",
-    "pwd_title_choose_file": "Choisissez un mot de passe pour chiffrer le fichier",
-    "pwd_title_choose_snap": "Choisissez un mot de passe pour chiffrer les snapshots",
-    "pwd_title_snap_encrypted": "Les snapshots sont chiffrés. Entrez le mot de passe",
-    "pwd_placeholder": "Mot de passe",
-    "pwd_confirm_placeholder": "Confirmer le mot de passe",
-    "pwd_err_empty": "Veuillez saisir un mot de passe.",
-    "pwd_err_mismatch": "Les mots de passe ne correspondent pas.",
-    "btn_cancel": "Annuler",
-    "btn_ok": "OK",
-    "btn_validate": "Valider",
-    "btn_save": "Enregistrer",
-    "btn_close": "Fermer",
-    "btn_delete": "Supprimer",
-    "btn_edit": "Editer",
-    "btn_add": "Ajouter",
-    "btn_confirm": "Confirmer",
-    "btn_yes": "Oui",
-    "misc.search": "Rechercher...",
-    "misc.loading": "Chargement...",
-    "misc.error": "Erreur",
-    "misc.confirm_delete": "Confirmer la suppression ?",
-    "misc.no_data": "Aucune donnee",
-    "misc.low": "Faible",
-    "misc.medium": "Moyen",
-    "misc.high": "Élevé",
-    "misc.critical": "Critique",
-    "misc.info": "Info",
-    "nav.dashboard": "Tableau de bord",
-    "ct.search.placeholder": "Rechercher...",
-    "ct.search.clear": "Effacer",
-    "ct.pills.clear_all": "Tout effacer",
-    "ct.bulk.selected": "{n} sélectionné(s)",
-    "ct.bulk.clear": "Désélectionner",
-    "ct.empty.title": "Aucun élément",
-    "measure.status.planifie": "Planifiée",
-    "measure.status.en_cours": "En cours",
-    "measure.status.termine": "Terminée",
-    "measure.status.backlog": "Backlog",
-    "measure.status.annule": "Annulée",
-    "measure.field.title": "Intitulé",
-    "measure.field.description": "Détails",
-    "measure.field.type": "Type",
-    "measure.field.statut": "Statut",
-    "measure.field.responsable": "Responsable",
-    "measure.field.echeance": "Échéance",
-    "measure.field.progress_log": "Journal d'avancement",
-    "measure.field.progress_log_ph": "Ajouter une note d'avancement…",
-    "measure.field.progress_log_empty": "Aucune note pour l'instant.",
-    "measure.field.progress_log_add": "Ajouter",
-    "measure.field.progress_log_history": "Voir l'historique",
-    "measure.field.progress_log_add_err": "Échec de l'ajout de la note",
-    "measure.type.contractuelle": "Contractuelle",
-    "measure.type.technique": "Technique",
-    "measure.type.organisationnelle": "Organisationnelle",
-    "measure.type.surveillance": "Surveillance",
-    "measure.type.prevention": "Prévention",
-    "measure.overdue": "En retard de {n} j",
-    "btn_no": "Non",
-    // Session banner
-    "session_found": "Session précédente trouvée : <strong>{label}</strong>",
-    "session_no_name": "Sans nom",
-    "btn_restore": "Restaurer",
-    "btn_discard": "Ignorer",
-    // Columns
-    "col_hide_title": "Masquer cette colonne",
-    "cols_all_visible": "Toutes les colonnes sont affichées",
-    "cols_hidden_btn": "+ Colonnes masquées",
-    // Sidebar
-    "sidebar_hide": "Masquer le menu",
-    "sidebar_show": "Afficher le menu",
-    "btn_undo_title": "Annuler (Ctrl+Z)",
-    "btn_redo_title": "Rétablir (Ctrl+Y)",
-    // Snapshots
-    "snap_prompt_name": "Nom du point de sauvegarde :",
-    // Error
-    "err_not_encrypted": "Fichier non chiffré",
-    // Chrome UI v2 (SPEC §11)
-    "chrome.modules": "Modules",
-    "chrome.switch_module": "Changer de module",
-    "chrome.search_all": "Aller à un module, une analyse, une mesure…",
-    "chrome.theme_dark": "Thème sombre",
-    "chrome.theme_light": "Thème clair",
-    "chrome.lang": "Langue",
-    "chrome.saved_at": "Enregistré {time}",
-    "chrome.saved_local": "Enregistré localement {time}",
-    "chrome.export_json": "Exporter (JSON)",
-    "chrome.import_json": "Importer (JSON)",
-    "chrome.settings": "Paramètres",
-    "chrome.columns": "Colonnes",
-    "chrome.empty.title": "Rien à afficher",
-    "module.risk": "Risk", "module.compliance": "Compliance", "module.audit": "Audit",
-    "module.vendor": "Vendor", "module.asset": "Asset", "module.access": "Access",
-    "module.surface": "Surface", "module.appsec": "AppSec", "module.pilot": "Pilot"
-});
-_registerTranslations("en", {
-    "matrix.critical": "Critical", // pilot
-    "matrix.extreme": "Extreme", // pilot
-    "matrix.high": "High", // pilot
-    "matrix.low": "Low", // pilot
-    "matrix.moderate": "Medium", // pilot
-    "matrix.significant": "Significant", // pilot
-    "matrix.x": "Impact", // pilot
-    "matrix.y": "Likelihood", // pilot
-    "settings.title": "Settings", // pilot
-    // File menu
-    "menu_file": "File",
-    "menu_open": "Open",
-    "menu_save": "Save",
-    "menu_save_as": "Save as",
-    "menu_new": "New {label}",
-    "save_encrypt_prompt": "Do you want to encrypt the file with a password?",
-    // Status
-    "status_session_restored": "Session restored",
-    "status_new": "New {label}",
-    "status_file_opened": "File opened: {name}",
-    "status_saved": "Saved",
-    "status_saved_name": "Saved: {name}",
-    "status_saved_encrypted": " (encrypted)",
-    "status_downloaded": "File downloaded",
-    "status_encryption_on": "Encryption enabled — next save will be encrypted",
-    "status_encryption_off": "Encryption disabled",
-    "status_snap_created": "Snapshot created: {name}",
-    "status_snap_deleted": "Snapshot deleted",
-    "status_snap_encrypted": "Snapshots encrypted",
-    // Confirm / Alert
-    "confirm_new": "Create a new {label}? Unsaved data will be lost.",
-    "confirm_restore_snap": "Restore snapshot \"{name}\"?\nUnsaved changes will be lost.",
-    "confirm_delete_snap": "Delete snapshot \"{name}\"?",
-    "confirm_decrypt_snaps": "Decrypt all snapshots?",
-    "alert_wrong_password": "Incorrect password or corrupted file.",
-    "alert_wrong_snap_password": "Incorrect password or corrupted data.",
-    "alert_load_error": "Loading error: {msg}",
-    "alert_open_error": "Open error: {msg}",
-    "alert_save_error": "Save error: {msg}",
-    "alert_storage_full": "Insufficient storage space. Delete old snapshots.",
-    // Password dialog
-    "pwd_title_encrypted_file": "Encrypted file — enter password",
-    "pwd_title_choose_file": "Choose a password to encrypt the file",
-    "pwd_title_choose_snap": "Choose a password to encrypt snapshots",
-    "pwd_title_snap_encrypted": "Snapshots are encrypted. Enter password",
-    "pwd_placeholder": "Password",
-    "pwd_confirm_placeholder": "Confirm password",
-    "pwd_err_empty": "Please enter a password.",
-    "pwd_err_mismatch": "Passwords do not match.",
-    "btn_cancel": "Cancel",
-    "btn_ok": "OK",
-    "btn_validate": "Validate",
-    "btn_save": "Save",
-    "btn_close": "Close",
-    "btn_delete": "Delete",
-    "btn_edit": "Edit",
-    "btn_add": "Add",
-    "btn_confirm": "Confirm",
-    "btn_yes": "Yes",
-    "btn_no": "No",
-    "misc.search": "Search...",
-    "misc.loading": "Loading...",
-    "misc.error": "Error",
-    "misc.confirm_delete": "Confirm deletion?",
-    "misc.no_data": "No data",
-    "misc.low": "Low",
-    "misc.medium": "Medium",
-    "misc.high": "High",
-    "misc.critical": "Critical",
-    "misc.info": "Info",
-    "nav.dashboard": "Dashboard",
-    "ct.search.placeholder": "Search...",
-    "ct.search.clear": "Clear",
-    "ct.pills.clear_all": "Clear all",
-    "ct.bulk.selected": "{n} selected",
-    "ct.bulk.clear": "Deselect",
-    "ct.empty.title": "No items",
-    "measure.status.planifie": "Planned",
-    "measure.status.en_cours": "In progress",
-    "measure.status.termine": "Completed",
-    "measure.status.backlog": "Backlog",
-    "measure.status.annule": "Cancelled",
-    "measure.field.title": "Title",
-    "measure.field.description": "Details",
-    "measure.field.type": "Type",
-    "measure.field.statut": "Status",
-    "measure.field.responsable": "Owner",
-    "measure.field.echeance": "Due date",
-    "measure.field.progress_log": "Progress log",
-    "measure.field.progress_log_ph": "Add a progress note…",
-    "measure.field.progress_log_empty": "No notes yet.",
-    "measure.field.progress_log_add": "Add",
-    "measure.field.progress_log_history": "View history",
-    "measure.field.progress_log_add_err": "Failed to add the note",
-    "measure.type.contractuelle": "Contractual",
-    "measure.type.technique": "Technical",
-    "measure.type.organisationnelle": "Organisational",
-    "measure.type.surveillance": "Monitoring",
-    "measure.type.prevention": "Prevention",
-    "measure.overdue": "{n} days overdue",
-    // Session banner
-    "session_found": "Previous session found: <strong>{label}</strong>",
-    "session_no_name": "Unnamed",
-    "btn_restore": "Restore",
-    "btn_discard": "Discard",
-    // Columns
-    "col_hide_title": "Hide this column",
-    "cols_all_visible": "All columns are visible",
-    "cols_hidden_btn": "+ Hidden columns",
-    // Sidebar
-    "sidebar_hide": "Hide menu",
-    "sidebar_show": "Show menu",
-    "btn_undo_title": "Undo (Ctrl+Z)",
-    "btn_redo_title": "Redo (Ctrl+Y)",
-    // Snapshots
-    "snap_prompt_name": "Snapshot name:",
-    // Error
-    "err_not_encrypted": "File not encrypted",
-    // Chrome UI v2 (SPEC §11)
-    "chrome.modules": "Modules",
-    "chrome.switch_module": "Switch module",
-    "chrome.search_all": "Go to a module, an analysis, a measure…",
-    "chrome.theme_dark": "Dark theme",
-    "chrome.theme_light": "Light theme",
-    "chrome.lang": "Language",
-    "chrome.saved_at": "Saved {time}",
-    "chrome.saved_local": "Saved locally {time}",
-    "chrome.export_json": "Export (JSON)",
-    "chrome.import_json": "Import (JSON)",
-    "chrome.settings": "Settings",
-    "chrome.columns": "Columns",
-    "chrome.empty.title": "Nothing to show",
-    "module.risk": "Risk", "module.compliance": "Compliance", "module.audit": "Audit",
-    "module.vendor": "Vendor", "module.asset": "Asset", "module.access": "Access",
-    "module.surface": "Surface", "module.appsec": "AppSec", "module.pilot": "Pilot"
-});
-// Init locale on load — FR is loaded synchronously via <script> tag
+// Les traductions socle partagées vivent désormais dans i18n_core_<lang>.js
+// (un fichier par langue, chargés juste après i18n.js). Le découpage permet de
+// n'embarquer que les langues retenues au packaging.
+// Init locale on load. Aujourd'hui les deux langues sont chargées via <script>
+// statique (Phase 3 restreindra au seul socle de base, les autres en lazy).
 _i18nLoaded["fr"] = true;
+_i18nLoaded["en"] = true;
 _initLocale();
-// If saved locale is EN, lazy-load EN translations at startup
-if (_locale === "en") {
-    _loadI18nFile("en", function () {
+// Sélecteur de langue : masqué s'il n'y a qu'une langue déployée.
+if (typeof document !== "undefined" && _availableLangs().length <= 1) {
+    document.querySelectorAll('[data-click="ct_toggleLang"]').forEach(function (b) { b.style.display = "none"; });
+}
+// Si la locale retenue n'est pas la base (préférence stockée / navigateur) et
+// n'est pas encore chargée, la charger puis rafraîchir.
+if (_locale !== _baseLang && !_i18nLoaded[_locale]) {
+    _loadI18nFile(_locale, function () {
         _applyStaticTranslations();
         if (typeof renderAll === "function")
             renderAll();

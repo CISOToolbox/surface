@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.findings_dedup import insert_many
 from src.models import User
@@ -228,6 +228,7 @@ async def quick_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """TCP port scan + TLS cert check on the target host. Synchronous, ~10s."""
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     try:
         finding_dicts = await asyncio.to_thread(_quick_scan_sync, body.target_host)
@@ -263,6 +264,7 @@ async def bulk_import(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     valid_severities = {"info", "low", "medium", "high", "critical"}
     finding_dicts = []
@@ -400,6 +402,7 @@ async def nuclei_config_update(
     db: AsyncSession = Depends(get_db),
 ):
     """Persist nuclei tuning to AppSettings and refresh the in-memory cache."""
+    require_admin(user)
     from sqlalchemy import select
     from src.models import AppSettings
     from src.scanners import set_nuclei_tuning_cache
@@ -429,6 +432,7 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
     count. This is a privileged operation (rate-limited via scan quota) —
     the call is CPU/IO heavy and should not be spammed.
     """
+    require_admin(user)
     import shutil
     import subprocess
 
@@ -482,10 +486,14 @@ async def _load_shodan_key_from_db(db: AsyncSession) -> None:
     from src.models import AppSettings
     from src.scanners import set_shodan_api_key_cache
 
+    from src.settings_crypto import decrypt_setting
+
     row = (await db.execute(
         select(AppSettings).where(AppSettings.key == "shodan.api_key")
     )).scalar_one_or_none()
-    set_shodan_api_key_cache(row.value if row else None)
+    # Rows written before encryption carry no marker and are returned as-is,
+    # then re-encrypted the next time the key is saved.
+    set_shodan_api_key_cache(decrypt_setting(row.value) if row and row.value else None)
 
 
 @router.get("/shodan/config")
@@ -514,6 +522,7 @@ async def shodan_set_config(
     """Save a new Shodan API key. The call tests the key against
     /api/account/profile before persisting. Returns only the masked
     version plus the Shodan profile metadata."""
+    require_admin(user)
     import httpx
     from sqlalchemy import select
     from src.models import AppSettings
@@ -546,13 +555,18 @@ async def shodan_set_config(
         profile = {}
 
     # Persist and update cache
+    # The key was stored in cleartext even though surface ships crypto.py —
+    # a read of the DB volume or a pg_dump handed over a live Shodan key.
+    from src.settings_crypto import encrypt_setting
+
+    stored = encrypt_setting(key)
     existing = (await db.execute(
         select(AppSettings).where(AppSettings.key == "shodan.api_key")
     )).scalar_one_or_none()
     if existing is None:
-        db.add(AppSettings(key="shodan.api_key", value=key))
+        db.add(AppSettings(key="shodan.api_key", value=stored))
     else:
-        existing.value = key
+        existing.value = stored
 
     # Also record when the key was last verified
     last_check_row = (await db.execute(
@@ -586,6 +600,7 @@ async def shodan_delete_config(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove the Shodan key from AppSettings and clear the cache."""
+    require_admin(user)
     from sqlalchemy import select
     from src.models import AppSettings
     from src.scanners import set_shodan_api_key_cache

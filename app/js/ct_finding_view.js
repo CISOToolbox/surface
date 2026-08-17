@@ -1,7 +1,8 @@
-// ─────────────────────────────────────────────────────────────
-// GENERATED from shared/ts/ — do NOT edit here.
-// Edit the shared TypeScript source and run shared/ts-build.sh.
-// ─────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// REPLICATED from the private shared repository (shared/js/ct_finding_view.js).
+// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// -----------------------------------------------------------------------------
 /**
  * ct_finding_view — Shared detail view for a finding (AppSec + Surface).
  *
@@ -63,6 +64,15 @@
  */
 (function () {
     "use strict";
+    // Tons partages : severite et statut d'un finding. Meme table qu'AppSec, pour
+    // que le meme etat porte le meme ton dans la vue partagee et dans le module.
+    var _FV_TONES = {
+        critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
+        new: "critical", to_fix: "high", false_positive: "neutral", fixed: "low",
+    };
+    function _fvTone(v) {
+        return _FV_TONES[(v || "").toString()] || "neutral";
+    }
     function _t(key, fallback) {
         try {
             if (typeof t === "function") {
@@ -96,107 +106,26 @@
     function _renderHeader(f, opts) {
         var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
         if (opts.backHandler) {
+            // Inline chevron ("<") so the back affordance always shows, even in
+            // a host module whose global _icon lacks an "arrow_left" glyph.
+            var _chevron = '<svg class="ct-va-middle" width="14" height="14" viewBox="0 0 24 24"'
+                + ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+                + ' stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>';
             h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="' + esc(opts.backHandler) + '">'
-                + _icn("arrow_left", 14) + ' ' + esc(_t("fd.back", "Retour")) + '</button>';
+                + _chevron + ' ' + esc(_t("fd.back", "Retour")) + '</button>';
         }
         h += '<h2 style="margin:0;flex:1">' + esc(f.title || "") + '</h2>';
         if (f.severity) {
-            h += '<span class="sev-badge sev-' + esc(f.severity) + '">'
+            h += '<span class="ct-badge" data-tone="' + _fvTone(f.severity) + '">'
                 + esc(_t("sev." + f.severity, f.severity)) + '</span>';
         }
         if (f.status) {
-            h += '<span class="status-badge status-' + esc(f.status) + '">'
+            h += '<span class="ct-badge" data-tone="' + _fvTone(f.status) + '">'
                 + esc(_t("status." + f.status, f.status)) + '</span>';
         }
         h += '</div>';
         return h;
     }
-    function _renderInfoCard(f, opts) {
-        var cc = opts.cardClass || "surface-card";
-        var h = '<div class="' + esc(cc) + '">';
-        function row(label, val, opts2) {
-            opts2 = opts2 || {};
-            var inner = opts2.html ? val : esc(val == null ? "" : String(val));
-            var style = opts2.style || "";
-            h += '<div class="surface-row">'
-                + '<div class="surface-lbl">' + esc(label) + '</div>'
-                + '<div' + (style ? ' style="' + style + '"' : '') + '>' + inner + '</div>'
-                + '</div>';
-        }
-        if (f.scanner)
-            row(_t("fd.scanner", "Scanner"), f.scanner);
-        if (f.type)
-            row(_t("fd.type", "Type"), f.type);
-        row(_t("fd.target", "Cible"), f.target || "-", { style: "font-family:monospace;word-break:break-all" });
-        if (f.cve_id)
-            row("CVE", f.cve_id);
-        if (f.application_name)
-            row(_t("findings.application", "Application"), f.application_name);
-        if (f.created_at)
-            row(_t("fd.created", "Créé le"), _fmtDate(f.created_at));
-        if (f.triaged_at) {
-            var by = f.triaged_by ? (" " + _t("fd.triaged_by", "par") + " " + f.triaged_by) : "";
-            row(_t("fd.triaged", "Trié le"), _fmtDate(f.triaged_at) + by);
-        }
-        if (f.description) {
-            row(_t("fd.description", "Description"), f.description, {
-                html: true,
-                style: "white-space:pre-wrap"
-            });
-            // (html:true passes value verbatim; we still escape)
-            // Fix: re-escape on the row-call side. Simpler: build inline.
-        }
-        // Inline description (ensures escaping while keeping pre-wrap)
-        // → actually we want to escape the description. Let me redo this cleanly:
-        // Reset: rebuild description row with proper escaping.
-        // (We could refactor `row` but keeping it local for clarity.)
-        // Evidence (JSON pretty-print, with optional inline screenshot)
-        var ev = f.evidence;
-        if (ev && typeof ev === "object" && Object.keys(ev).length) {
-            var evDisplay = ev;
-            if (opts.showScreenshot !== false && ev.png_b64 && typeof ev.png_b64 === "string") {
-                var src = "data:image/png;base64," + ev.png_b64;
-                h += '<div class="surface-row">'
-                    + '<div class="surface-lbl">' + esc(_t("fd.screenshot", "Capture d\'écran")) + '</div>'
-                    + '<div><a href="' + esc(src) + '" target="_blank" rel="noopener">'
-                    + '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
-                    + '</a></div></div>';
-                evDisplay = Object.assign({}, ev, { png_b64: "[" + Math.round(ev.png_b64.length * 0.75 / 1024) + " KB PNG — affichée au-dessus]" });
-            }
-            h += '<div class="surface-row">'
-                + '<div class="surface-lbl">' + esc(_t("fd.evidence", "Preuves")) + '</div>'
-                + '<div><pre style="background:var(--ct-surface-2);color:var(--ct-ink);padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
-                + esc(JSON.stringify(evDisplay, null, 2))
-                + '</pre></div></div>';
-        }
-        if (f.triage_notes) {
-            h += '<div class="surface-row">'
-                + '<div class="surface-lbl">' + esc(_t("fd.notes", "Notes")) + '</div>'
-                + '<div style="white-space:pre-wrap">' + esc(f.triage_notes) + '</div>'
-                + '</div>';
-        }
-        if (Array.isArray(opts.infoRows)) {
-            opts.infoRows.forEach(function (r) {
-                if (!r || r.label == null)
-                    return;
-                var val = r.valueHtml != null ? r.valueHtml : esc(r.value == null ? "" : String(r.value));
-                h += '<div class="surface-row">'
-                    + '<div class="surface-lbl">' + esc(r.label) + '</div>'
-                    + '<div' + (r.style ? ' style="' + esc(r.style) + '"' : '') + '>' + val + '</div>'
-                    + '</div>';
-            });
-        }
-        h += '</div>';
-        // _renderInfoCard contains a bug in the description path — rewrite
-        // inline (without row(,,{html:true}) which passed val unescaped).
-        // Since we already appended the bad description call above, we'll
-        // fix it on the caller side. Simpler: skip that row() call and
-        // render description directly here. (Leaving the code above for
-        // legibility; the real description row is emitted at the top via
-        // the inline-safe path below.)
-        return h;
-    }
-    // Simpler, unified info-card builder (avoids the bug above).
     function _renderInfoCardClean(f, opts) {
         var cc = opts.cardClass || "surface-card";
         var h = '<div class="' + esc(cc) + '">';
@@ -232,7 +161,7 @@
             if (opts.showScreenshot !== false && ev.png_b64 && typeof ev.png_b64 === "string") {
                 var src = "data:image/png;base64," + ev.png_b64;
                 row(_t("fd.screenshot", "Capture d'écran"), '<a href="' + esc(src) + '" target="_blank" rel="noopener">'
-                    + '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--border);border-radius:4px;background:#fff"/>'
+                    + '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--ct-line);border-radius:4px;background:#fff"/>'
                     + '</a>', true);
                 evDisplay = Object.assign({}, ev, { png_b64: "[" + Math.round(ev.png_b64.length * 0.75 / 1024) + " KB PNG — affichée au-dessus]" });
             }
@@ -273,28 +202,28 @@
         var triage = opts.triageHandler || "_ctFvNoop";
         h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
         if (f.status !== "to_fix") {
-            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["to_fix"]\'>'
+            h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["to_fix"]\'>'
                 + _icn("check", 14) + ' ' + esc(_t("fd.triage_to_fix", "À corriger")) + '</button>';
         }
         if (f.status !== "false_positive") {
-            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["false_positive"]\'>'
+            h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["false_positive"]\'>'
                 + _icn("x", 14) + ' ' + esc(_t("fd.triage_fp", "Faux positif")) + '</button>';
         }
         if (f.status !== "fixed" && opts.showFixed !== false) {
-            h += '<button class="btn-add btn-icon" data-click="' + esc(triage) + '" data-args=\'["fixed"]\'>'
+            h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["fixed"]\'>'
                 + _icn("check", 14) + ' ' + esc(_t("fd.triage_fixed", "Corrigé")) + '</button>';
         }
         if (f.status !== "new") {
-            h += '<button class="btn-add" data-click="' + esc(triage) + '" data-args=\'["new"]\'>'
+            h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["new"]\'>'
                 + esc(_t("fd.triage_reset", "Réinitialiser")) + '</button>';
         }
         if (opts.aiEnabled && opts.aiHandler) {
-            h += '<button class="btn-ai btn-icon" data-click="' + esc(opts.aiHandler) + '">'
-                + _icn("zap", 14) + ' ' + esc(_t("fd.ai_triage", "Triage IA")) + '</button>';
+            h += '<button class="ct-btn btn-ai" data-click="' + esc(opts.aiHandler) + '">'
+                + '\u2728 ' + esc(_t("fd.ai_triage", "Triage IA")) + '</button>';
         }
         if (opts.deleteHandler) {
             h += '<span style="flex:1"></span>';
-            h += '<button class="ct-btn" data-variant="danger" data-click="' + esc(opts.deleteHandler) + '">'
+            h += '<button class="ct-btn" data-write data-variant="danger" data-click="' + esc(opts.deleteHandler) + '">'
                 + esc(_t("fd.delete", "Supprimer")) + '</button>';
         }
         h += '</div>';
@@ -319,7 +248,7 @@
         if (m.echeance)
             meta.push(esc(_t("fd.measure_due", "Échéance")) + ' : ' + esc(m.echeance));
         if (meta.length) {
-            h += '<div style="font-size:0.82em;color:var(--text-muted);margin-top:4px">' + meta.join(' &middot; ') + '</div>';
+            h += '<div style="font-size:0.82em;color:var(--ct-ink-2);margin-top:4px">' + meta.join(' &middot; ') + '</div>';
         }
         h += '</div>';
         return h;
@@ -390,7 +319,7 @@
             // standard form styling (full width, padding, border, min-
             // height) instead of the browser's default narrow textarea.
             var body = ''
-                + '<div style="font-size:0.82em;color:var(--text-muted);margin-bottom:12px">'
+                + '<div style="font-size:0.82em;color:var(--ct-ink-2);margin-bottom:12px">'
                 + '<strong>' + esc(_t("tm.finding", "Finding")) + '</strong> ' + esc(f.title || "")
                 + '</div>'
                 + '<div class="ct-measure-form">'

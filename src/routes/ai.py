@@ -24,7 +24,7 @@ from src.ai_proxy_common import (
     _runtime_provider_model,
     make_ai_router,
 )
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.models import User
 
@@ -119,6 +119,7 @@ async def analyze_finding(body: FindingAnalyzeRequest,
     CISO summary and remediation steps. The methodology prompt and the NVD
     enrichment are built server-side — the frontend only posts the raw finding.
     """
+    require_min_role(user, "editor", SURFACE_ROLES)
     _check_ai_access(user)
     _check_rate_limit(str(user.id) if user else "anonymous")
     provider, model = await _runtime_provider_model(db)

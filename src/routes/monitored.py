@@ -13,11 +13,11 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user
+from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.crypto import encrypt_secret
 from src.database import async_session, get_db
 from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
-from src.models import MonitoredAsset, ScanJob, User
+from src.models import MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 from src.audit import log_action
@@ -25,12 +25,21 @@ from src.audit import log_action
 router = APIRouter(prefix="/api/monitored-assets", tags=["monitored"])
 
 
+async def _load_exclusions(db: AsyncSession) -> list[str]:
+    """All blocklist values, as lower-case strings (see models.is_excluded)."""
+    res = await db.execute(select(ScanExclusion.value))
+    return [v for (v,) in res.all()]
+
+
 _DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})+$")
+# Blocklist values are hostnames, IPs, CIDRs or domains — a permissive charset,
+# validated further by is_excluded at match time.
+_EXCLUSION_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,500}$")
 
 
 def _validate(kind: str, value: str) -> str:
     """Return canonical value or raise. Also applies SSRF safeguards."""
-    from src.scanners import _safe_target
+    from src.scanners import _resolve_safe_target, _safe_target
 
     v = (value or "").strip()
     if not v:
@@ -39,6 +48,12 @@ def _validate(kind: str, value: str) -> str:
         if not _DOMAIN_RE.match(v):
             raise ValueError(f"Domaine invalide : {v}")
         v = v.lower()
+        # A domain is a discovery seed (CT logs, DNS brute-force, SAN): its apex
+        # need not resolve — MX-only, freshly registered, or subdomain-only
+        # domains are legitimate perimeter entries. Still reject one that
+        # resolves to a forbidden target (loopback/metadata/docker sibling).
+        _resolve_safe_target(v, allow_unresolved=True)
+        return v
     elif kind == "host":
         try:
             ipaddress.ip_address(v)
@@ -64,8 +79,18 @@ def _validate(kind: str, value: str) -> str:
         if len(parts) < 2:
             raise ValueError(f"Partage invalide (attendu \\\\serveur\\partage) : {value}")
         host = parts[0].lower()
-        if host in ("localhost",) or host.startswith(("127.", "169.254.", "::1")) or host in ("0.0.0.0",):
-            raise ValueError(f"Hôte de partage bloqué : {host}")
+        # Prefix matching on the string was trivially sidestepped:
+        # \\2130706433\share (decimal loopback), a hex/octal literal, or any
+        # hostname with a 127.x A record all walked through — and the SMB
+        # credentials would then be handed to whatever answered, which is an
+        # NTLM capture/relay primitive. Resolve and apply the same policy as
+        # the HTTP scanners (LAN allowed — on-prem shares live there —
+        # loopback/link-local/metadata/docker siblings refused).
+        from src.scanners import _resolve_safe_target
+        try:
+            _resolve_safe_target(host)
+        except ValueError as e:
+            raise ValueError(f"Hôte de partage bloqué : {e}")
         return v
     else:
         raise ValueError(f"Type inconnu : {kind}")
@@ -236,6 +261,7 @@ async def create_asset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     try:
         canonical = _validate(body.kind, body.value)
     except ValueError as e:
@@ -283,6 +309,7 @@ async def update_asset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     a = await db.get(MonitoredAsset, asset_id)
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -332,6 +359,7 @@ async def delete_asset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_min_role(user, "editor", SURFACE_ROLES)
     a = await db.get(MonitoredAsset, asset_id)
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -388,6 +416,7 @@ async def _run_manual_scan(
                 select(MonitoredAsset.value).where(MonitoredAsset.kind.in_(["host", "domain"]))
             )
             existing_values = {v for (v,) in existing_q.all()}
+            exclusions = await _load_exclusions(db)
             # Newly discovered hosts get the full host default suite +
             # any host-compatible extras the parent had explicitly enabled.
             host_defaults = set(DEFAULT_SCANNERS_BY_KIND.get("host", []))
@@ -400,6 +429,10 @@ async def _run_manual_scan(
                 if new_hosts_added >= 50:
                     break
                 if dv in existing_values:
+                    continue
+                # Never auto-enrol a blocklisted value (host/IP/CIDR/domain) —
+                # this is what makes an exclusion stick across rediscovery.
+                if is_excluded([dv], exclusions):
                     continue
                 existing_values.add(dv)
                 db.add(MonitoredAsset(
@@ -453,10 +486,17 @@ async def scan_asset(
     """Kick off a full scan on a single monitored asset as a background
     task. Returns immediately with the `job_id` so the frontend can show
     the job in its list and poll for completion."""
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     a = await db.get(MonitoredAsset, asset_id)
     if not a:
         raise HTTPException(status_code=404, detail="Asset not found")
+
+    # Honour the blocklist: refuse to scan an asset whose value or resolved IP
+    # is excluded, so an exclusion can't be bypassed by hitting "scan now".
+    exclusions = await _load_exclusions(db)
+    if is_excluded([a.value, a.resolved_ip or ""], exclusions):
+        raise HTTPException(status_code=400, detail="Asset is excluded from scanning")
 
     kind = a.kind
     value = a.value
@@ -498,9 +538,14 @@ async def scan_all(
     """Scan every enabled monitored asset in parallel. Runs the full
     scanner chain (same as the scheduler tick) on each asset so the
     result mirrors what the background scheduler would produce."""
+    require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
     result = await db.execute(select(MonitoredAsset).where(MonitoredAsset.enabled == True))
     assets = list(result.scalars().all())
+    # Drop blocklisted assets (value or resolved IP) before fanning out.
+    exclusions = await _load_exclusions(db)
+    if exclusions:
+        assets = [a for a in assets if not is_excluded([a.value, a.resolved_ip or ""], exclusions)]
     total_findings = 0
     scanned = 0
     errors = []
@@ -546,3 +591,75 @@ async def scan_all(
         total_findings += (counts or {}).get("inserted", 0) + (counts or {}).get("reopened", 0)
         scanned += 1
     return {"scanned": scanned, "findings_created": total_findings, "errors": errors}
+
+
+# ── Scan blocklist (exclusions) ───────────────────────────────────
+# Values here are never scanned nor auto-enrolled. A value is a hostname, IP,
+# CIDR or domain; matching (models.is_excluded) also covers subdomains and CIDR
+# membership so excluding a discovered IP holds even if it is rediscovered.
+
+class ExclusionCreate(BaseModel):
+    value: str
+    note: Optional[str] = ""
+
+    @field_validator("value")
+    @classmethod
+    def _v(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not v or not _EXCLUSION_RE.match(v):
+            raise ValueError("Invalid exclusion value (expected host, IP, CIDR or domain)")
+        return v
+
+
+def _exclusion_to_dict(e: ScanExclusion) -> dict:
+    return {
+        "id": str(e.id),
+        "value": e.value,
+        "note": e.note or "",
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+@router.get("/exclusions")
+async def list_exclusions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(ScanExclusion).order_by(ScanExclusion.created_at.desc()))
+    return [_exclusion_to_dict(e) for e in res.scalars().all()]
+
+
+@router.post("/exclusions", status_code=201)
+async def create_exclusion(
+    payload: ExclusionCreate,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    require_min_role(user, "editor", SURFACE_ROLES)
+    existing = await db.execute(select(ScanExclusion).where(ScanExclusion.value == payload.value))
+    e = existing.scalar_one_or_none()
+    if e:  # idempotent — return the existing row instead of a 409
+        return _exclusion_to_dict(e)
+    e = ScanExclusion(value=payload.value, note=(payload.note or "")[:255])
+    db.add(e)
+    await log_action(db, user, request, "exclusion.add", target=payload.value)
+    await db.commit()
+    await db.refresh(e)
+    return _exclusion_to_dict(e)
+
+
+@router.delete("/exclusions/{exclusion_id}", status_code=204)
+async def delete_exclusion(
+    exclusion_id: uuid.UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    require_min_role(user, "editor", SURFACE_ROLES)
+    e = await db.get(ScanExclusion, exclusion_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Exclusion not found")
+    await log_action(db, user, request, "exclusion.remove", target=e.value)
+    await db.delete(e)
+    await db.commit()

@@ -1,3 +1,8 @@
+# -----------------------------------------------------------------------------
+# REPLICATED from the private shared repository (shared/python/mailer_common.py).
+# DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
+# Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+# -----------------------------------------------------------------------------
 """Shared SMTP helpers for CISO Toolbox backend modules.
 
 Master copy: ``shared/python/mailer_common.py``. Copied verbatim into each
