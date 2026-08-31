@@ -360,6 +360,7 @@ interface Window {
 
     // Hosts
     _setHostSearch?: (v: string) => void;
+    _hostsSetView?: (view: string) => void;
     _clearHostSearch?: () => void;
     _openHost?: (id: string) => void;
     _backToHosts?: () => void;

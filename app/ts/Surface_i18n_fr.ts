@@ -33,7 +33,7 @@ if (typeof _registerTranslations === "function") {
             '<p class="text-muted">Découverte, cartographie et surveillance continue de votre surface d\'attaque externe.</p>' +
             '<h2>Qu\'est-ce que l\'ASM ?</h2>' +
             '<p>L\'<strong>Attack Surface Management</strong> est la discipline qui consiste à identifier, inventorier et surveiller en continu tous les actifs exposés d\'une organisation — domaines, sous-domaines, hosts, IPs, services, certificats TLS, endpoints HTTP — du point de vue d\'un attaquant externe. L\'objectif est de détecter avant les attaquants les <strong>assets oubliés, mal configurés ou vulnérables</strong> qui constituent des points d\'entrée.</p>' +
-            '<div class="help-tip"><strong>Pourquoi c\'est critique :</strong> 70 % des incidents documentés par l\'ANSSI et Mandiant en 2024-2025 ont comme point d\'entrée un asset que l\'organisation ignorait posséder, ou qu\'elle croyait désactivé (shadow IT, ancien site marketing, zone dev oubliée, bucket S3 abandonné, sous-domaine délégué à un SaaS disparu).</div>' +
+            '<div class="ct-help-tip"><strong>Pourquoi c\'est critique :</strong> 70 % des incidents documentés par l\'ANSSI et Mandiant en 2024-2025 ont comme point d\'entrée un asset que l\'organisation ignorait posséder, ou qu\'elle croyait désactivé (shadow IT, ancien site marketing, zone dev oubliée, bucket S3 abandonné, sous-domaine délégué à un SaaS disparu).</div>' +
             '<h2>Les 5 piliers de l\'ASM dans Surface</h2>' +
             '<h3>1. Découverte passive (sans toucher la cible)</h3>' +
             '<p>Surface exploite plusieurs sources publiques pour recenser les actifs sans générer le moindre trafic vers la cible :</p>' +
@@ -71,7 +71,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Analyse de bundles JS (<code>js_analysis</code>)</strong> — télécharge chaque <code>&lt;script src&gt;</code> (borné 512 KB × 20 fichiers) du domaine cible et grep 12 patterns de secrets : AWS Access/Secret Key, Google API, Slack webhook, Stripe live, Sentry DSN, JWT, IP privée, buckets S3/Azure/GCS, Firebase. Les secrets critical/high sont stockés masqués (<code>abcd…wxyz</code>) pour ne pas les reproduire côté base.</li>' +
                 '<li><strong>Énumération de buckets cloud (<code>cloud_buckets</code>)</strong> — génère 80 candidats de nom (préfixes <em>static-/cdn-/backup-</em>, suffixes <em>-prod/-staging/-dev/-backup</em>) et probe S3, Azure Blob, GCS, DigitalOcean Spaces. Un 200 sur <code>&lt;ListBucketResult&gt;</code> est flaggé high (contenu listable), un 403 medium (bucket existe).</li>' +
             '</ul>' +
-            '<div class="help-tip"><strong>Anti-SSRF :</strong> chacun de ces scanners passe par <code>_resolve_safe_target</code> (blocklist loopback / RFC1918 sensibles / metadata cloud / docker siblings) et re-valide chaque URL secondaire (scripts JS, redirects) avant fetch. Une page HTML hostile ne peut pas détourner <code>js_analysis</code> vers une ressource interne.</div>' +
+            '<div class="ct-help-tip"><strong>Anti-SSRF :</strong> chacun de ces scanners passe par <code>_resolve_safe_target</code> (blocklist loopback / RFC1918 sensibles / metadata cloud / docker siblings) et re-valide chaque URL secondaire (scripts JS, redirects) avant fetch. Une page HTML hostile ne peut pas détourner <code>js_analysis</code> vers une ressource interne.</div>' +
             '<h2>Modèle de sévérité</h2>' +
             '<p>Chaque finding porte une sévérité sur 5 niveaux, avec l\'échelle de couleurs harmonisée de la suite (teinte / remplissage / aplat identiques dans tous les modules) :</p>' +
             '<table><thead><tr><th>Niveau</th><th>Signification</th><th>Attente de traitement</th></tr></thead><tbody>' +
@@ -101,7 +101,7 @@ if (typeof _registerTranslations === "function") {
             '</ul>' +
             '<h2>Philosophie « continuous discovery »</h2>' +
             '<p>L\'ASM n\'est pas un scan ponctuel mais une <strong>surveillance continue</strong>. Surface exécute les scanners via un scheduler qui relance les checks selon une fréquence configurable par asset (par défaut 24 h). Les hosts découverts automatiquement sont enrôlés comme <code>MonitoredAsset</code> et scannés à leur tour — c\'est un effet boule de neige contrôlé par le scope.</p>' +
-            '<div class="help-tip"><strong>Scope :</strong> tous les scanners qui découvrent des hostnames filtrent les résultats selon le domaine parent surveillé. Une brute-force DNS sur <code>example.com</code> ne retiendra que <code>*.example.com</code>, pas les domaines externes qui pourraient apparaître dans un CT log.</div>' +
+            '<div class="ct-help-tip"><strong>Scope :</strong> tous les scanners qui découvrent des hostnames filtrent les résultats selon le domaine parent surveillé. Une brute-force DNS sur <code>example.com</code> ne retiendra que <code>*.example.com</code>, pas les domaines externes qui pourraient apparaître dans un CT log.</div>' +
             '<h2>Intégration à la suite CISO Toolbox</h2>' +
             '<p>En déploiement suite, les <strong>remédiations</strong> de ce module remontent automatiquement dans le <strong>plan d\'action de Pilot</strong> (hub de gouvernance), y sont consolidées avec les items des autres modules sous le terme commun <strong>Action</strong>, et peuvent être regroupées en <strong>projets</strong> pour piloter l\'avancement transverse. Le module reste l\'autorité de son domaine — Pilot ne fait que consolider.</p>' +
             '<h2>Limites à connaître</h2>' +
@@ -127,7 +127,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Santé du scanner</strong> — jobs 24 h, taux de succès, échecs, scans en cours, prochain scan planifié.</li>' +
             '</ul>' +
             '<p>Boutons d\'en-tête : <strong>Scanner tout</strong>, <strong>Ajouter une cible</strong>, <strong>Importer JSON</strong>.</p>' +
-            '<div class="help-tip"><strong>À utiliser pour :</strong> la réunion de suivi hebdo, le reporting, ou vérifier en 5 secondes si la situation se dégrade ou s\'améliore.</div>' +
+            '<div class="ct-help-tip"><strong>À utiliser pour :</strong> la réunion de suivi hebdo, le reporting, ou vérifier en 5 secondes si la situation se dégrade ou s\'améliore.</div>' +
             '<h2>Surveillance</h2>' +
             '<p>Le <strong>périmètre surveillé</strong> — la liste des cibles que Surface scanne automatiquement. Trois types de base :</p>' +
             '<ul>' +
@@ -159,7 +159,7 @@ if (typeof _registerTranslations === "function") {
             '<p>Le champ de recherche filtre par hostname, libellé ou notes. Cliquer sur une carte ouvre la vue <strong>détail du host</strong> : fiche complète, boutons <strong>Scanner maintenant</strong> / <strong>Modifier</strong> / <strong>Supprimer</strong>, <strong>historique des scans</strong> (8 derniers jobs avec le différentiel +N nouveaux / ↻N réouverts), tuiles de synthèse par sévérité, case « Masquer les N faux positifs », et le tableau des findings associés — triables en unitaire ou en groupe exactement comme dans la page Findings. Pour un serveur de fichiers, la fiche liste tous ses partages avec leurs actions propres.</p>' +
             '<h2>Scans</h2>' +
             '<p>Historique des jobs — chaque tick du scheduler et chaque scan manuel crée un job. Le tableau montre la cible, le type de scanner, la source (AUTO vs MANUEL), le statut (<strong>En attente / En cours / Terminé / Partiel / Échoué</strong>), le nombre de findings avec le différentiel (+N nouveaux, ↻N réouverts), la date de lancement et la durée. Filtres par type de scanner et par statut. Chaque job terminé peut être <strong>relancé</strong> (bouton ↻) ou supprimé. La page se <strong>rafraîchit automatiquement</strong> tant qu\'un job tourne.</p>' +
-            '<div class="help-tip"><strong>Utile pour :</strong> diagnostiquer pourquoi un scan n\'a rien trouvé (échec silencieux ? timeout ?), vérifier que le scheduler tourne bien, ou relancer un scan qui a échoué.</div>' +
+            '<div class="ct-help-tip"><strong>Utile pour :</strong> diagnostiquer pourquoi un scan n\'a rien trouvé (échec silencieux ? timeout ?), vérifier que le scheduler tourne bien, ou relancer un scan qui a échoué.</div>' +
             '<h2>Findings</h2>' +
             '<p>Le cœur du triage. Tous les findings remontés par les scanners atterrissent ici avec les filtres :</p>' +
             '<ul>' +
@@ -189,7 +189,7 @@ if (typeof _registerTranslations === "function") {
             '<p>Les remédiations créées depuis les findings « à corriger ». Chaque remédiation a un ID court (<code>SRF-XXXXXXXX</code>), un titre, le nombre de findings couverts, un statut (À faire / En cours / Terminé), un responsable, une échéance (mise en évidence si dépassée). Cliquer sur une ligne ouvre la modale d\'édition, avec un <strong>journal de suivi</strong> pour horodater l\'avancement. Les cases à cocher permettent de marquer <strong>Terminé</strong> ou de <strong>Supprimer</strong> en masse.</p>' +
             '<h2>Digest hebdomadaire par email</h2>' +
             '<p>Une fois SMTP configuré (voir Paramètres), Surface envoie <strong>automatiquement</strong> un digest HTML chaque semaine : résumé des compteurs, top 10 findings à traiter, top 10 hosts exposés, statistiques scans et remédiations. Le scheduler vérifie toutes les heures si 7 jours se sont écoulés depuis le dernier envoi (<code>digest.last_sent_at</code> en base). Un bouton <strong>Envoyer maintenant</strong> dans la section SMTP permet d\'envoyer un digest ad-hoc (manuel) sans attendre le prochain tick hebdomadaire.</p>' +
-            '<div class="help-tip"><strong>Sécurité :</strong> le host SMTP est validé par la même blocklist anti-SSRF que les scanners (pas de <code>localhost</code>, pas de <code>surface-db</code>). Les adresses sender / recipients sont filtrées contre l\'injection d\'en-têtes (CRLF). Le mot de passe SMTP est stocké en base côté serveur et n\'est jamais renvoyé dans les réponses GET.</div>' +
+            '<div class="ct-help-tip"><strong>Sécurité :</strong> le host SMTP est validé par la même blocklist anti-SSRF que les scanners (pas de <code>localhost</code>, pas de <code>surface-db</code>). Les adresses sender / recipients sont filtrées contre l\'injection d\'en-têtes (CRLF). Le mot de passe SMTP est stocké en base côté serveur et n\'est jamais renvoyé dans les réponses GET.</div>' +
             '<h2>Analyse IA</h2>' +
             '<p>Dans la vue détail d\'un finding, le bouton <strong>Analyse IA</strong> (icône éclair) envoie le finding au backend, qui construit le prompt méthodologique, l\'enrichit avec les données NVD et interroge le provider LLM configuré. Le résultat s\'affiche sous le finding :</p>' +
             '<ul>' +
@@ -212,7 +212,7 @@ if (typeof _registerTranslations === "function") {
                 '<li><strong>Shodan API</strong> — clé API stockée côté backend (masquée à l\'affichage). Active les scanners <code>shodan_domain</code> et <code>shodan_host</code>.</li>' +
                 '<li><strong>Envoi email (digest hebdomadaire)</strong> — configuration SMTP complète : host, port, username/password, sender, recipients, toggle STARTTLS, bouton « Envoyer maintenant ».</li>' +
             '</ol>' +
-            '<div class="help-tip"><strong>Conseil tuning Nuclei :</strong> sur des cibles clients ou des environnements surveillés par un WAF, baissez le rate-limit à 5-10 req/s pour éviter le blacklistage. Pour vos propres assets, 20-50 req/s est confortable.</div>' +
+            '<div class="ct-help-tip"><strong>Conseil tuning Nuclei :</strong> sur des cibles clients ou des environnements surveillés par un WAF, baissez le rate-limit à 5-10 req/s pour éviter le blacklistage. Pour vos propres assets, 20-50 req/s est confortable.</div>' +
             '<h2>Workflow typique</h2>' +
             '<ol style="font-size:var(--ct-text-data);line-height:1.8">' +
                 '<li>Ajouter le domaine racine dans <strong>Surveillance</strong> avec tous les scanners cochés</li>' +
@@ -228,7 +228,7 @@ if (typeof _registerTranslations === "function") {
             '<ul>' +
             '<li><strong>Analyse IA d\'un finding</strong> : qualification, contexte d\'exploitation et détection des faux positifs probables</li>' +
             '</ul>' +
-            '<p class="help-tip">Où configurer : dans une installation autonome, via <strong>Réglages &rarr; IA</strong> du module (votre propre clé API). Dans la suite, les clés sont centralisées par <strong>Pilot</strong> et poussées aux modules &mdash; rien à saisir ici, et l\'accès à l\'IA se donne par utilisateur dans les habilitations.</p>',
+            '<p class="ct-help-tip">Où configurer : dans une installation autonome, via <strong>Réglages &rarr; IA</strong> du module (votre propre clé API). Dans la suite, les clés sont centralisées par <strong>Pilot</strong> et poussées aux modules &mdash; rien à saisir ici, et l\'accès à l\'IA se donne par utilisateur dans les habilitations.</p>',
 
         // ── Dashboard ──────────────────────────────────────
         "dash.title":          "Tableau de bord",
@@ -339,7 +339,14 @@ if (typeof _registerTranslations === "function") {
 
         // ── Hosts panel ────────────────────────────────────
         "hosts.title":            "Hosts",
-        "hosts.count":            "host(s) surveillé(s)",
+        "hosts.view_cards": "Affichage en tuiles",
+    "hosts.view_table": "Affichage en tableau",
+    "hosts.col.host": "Hôte",
+    "hosts.col.kind": "Type",
+    "hosts.col.criticality": "Criticité",
+    "hosts.col.ip": "IP résolue",
+    "hosts.col.findings": "Actifs",
+    "hosts.count":            "host(s) surveillé(s)",
         "hosts.help":             "Liste de tous les hosts surveillés, ajoutés manuellement ou découverts automatiquement par les scanners (CT logs, SAN, ping sweep). Cliquez sur une carte pour voir le détail et les findings associés.",
         "hosts.search.placeholder": "Rechercher par hostname, IP, libellé, source...",
         "hosts.no_match":         "Aucun host ne correspond à la recherche.",

@@ -624,7 +624,7 @@
     background: var(--ct-neutral-tint);
     border-radius: 4px;
 }
-.bulk-action-bar .btn-add {
+.bulk-action-bar .ct-btn-add {
     background: var(--ct-surface);
     color: var(--ct-surface-2);
     border: none;
@@ -1068,7 +1068,7 @@
     border-top: 1px solid var(--ct-line-strong);
     box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.45);
 }
-:root[data-theme="dark"] .bulk-action-bar .btn-add {
+:root[data-theme="dark"] .bulk-action-bar .ct-btn-add {
     background: var(--ct-surface);
     color: var(--ct-ink);
     border: 1px solid var(--ct-line-strong);

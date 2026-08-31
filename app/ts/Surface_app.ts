@@ -527,7 +527,7 @@ function _renderJobs(c: HTMLElement) {
     h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("jobs.help")) + '</div>';
 
     if (!_jobs.length) {
-        h += '<div class="empty-state">' + esc(t("jobs.empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("jobs.empty")) + '</div>';
         c.innerHTML = h;
         return;
     }
@@ -563,7 +563,7 @@ function _renderJobs(c: HTMLElement) {
     });
 
     if (!filtered.length) {
-        h += '<div class="empty-state">' + esc(t("jobs.no_match")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("jobs.no_match")) + '</div>';
         c.innerHTML = h;
         return;
     }
@@ -737,7 +737,7 @@ function _renderMonitored(c: HTMLElement) {
     h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("monitored.help")) + '</div>';
 
     if (!_monitored.length) {
-        h += '<div class="empty-state">' + esc(t("monitored.empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("monitored.empty")) + '</div>';
         c.innerHTML = h;
         return;
     }
@@ -804,7 +804,7 @@ function _refreshMonitoredTable() {
     var h = '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _monitored.length + ' ' + esc(t("monitored.count")) + '</div>';
 
     if (!filtered.length) {
-        h += '<div class="empty-state">' + esc(t("monitored.no_match")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("monitored.no_match")) + '</div>';
         wrap.innerHTML = h;
         return;
     }
@@ -2332,7 +2332,7 @@ function _refreshFindingsBody() {
     h += '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _findings.length + ' ' + esc(t("findings.count")) + '</div>';
 
     if (!filtered.length) {
-        h += '<div class="empty-state">' + esc(t("findings.empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("findings.empty")) + '</div>';
         wrap.innerHTML = h;
         return;
     }
@@ -2991,7 +2991,7 @@ function _renderMeasures(c: HTMLElement) {
     h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("measures.help")) + '</div>';
 
     if (!total) {
-        h += '<div class="empty-state">' + esc(t("measures.empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("measures.empty")) + '</div>';
         c.innerHTML = h;
         return;
     }
@@ -3258,6 +3258,20 @@ function _assetGroup(a: SurfaceMonitoredAsset): SurfaceMonitoredAsset[] {
 // section) so an operator can see and re-enable a domain they turned off
 // without leaving the Hosts view; enabled domains stay in the Surveillance
 // table only (this view is host-centric).
+// Vue de la page Hotes : tuiles (defaut) ou tableau. Persistee comme
+// _appsView dans AppSec, pour retrouver sa preference apres rechargement.
+var _hostsView: string = (function() {
+    try { return localStorage.getItem("surface.hostsView") === "table" ? "table" : "cards"; }
+    catch (e) { return "cards"; }
+})();
+
+window._hostsSetView = function(view: string) {
+    _hostsView = view === "table" ? "table" : "cards";
+    try { localStorage.setItem("surface.hostsView", _hostsView); } catch (e) {}
+    var c = document.getElementById("content");
+    if (c) _renderHosts(c);
+};
+
 function _hostsViewAssets(): SurfaceMonitoredAsset[] {
     var hostAssets = _monitored.filter(function(a) { return a.kind === "host"; });
     var hostNames: Record<string, boolean> = {};
@@ -3320,6 +3334,12 @@ function _renderHosts(c: HTMLElement) {
     var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
     h += '<h2 class="ct-m-0">' + esc(t("hosts.title")) + '</h2>';
     h += '<span class="ct-flex-1"></span>';
+    h += '<div class="ct-btngroup">';
+    h += '<button class="ct-btn"' + (_hostsView === "cards" ? ' data-variant="primary"' : '')
+       + ' data-click="_hostsSetView" data-args=\'' + _da("cards") + '\' title="' + esc(t("hosts.view_cards")) + '" data-icon>' + _icon("grid", 14) + '</button>';
+    h += '<button class="ct-btn"' + (_hostsView === "table" ? ' data-variant="primary"' : '')
+       + ' data-click="_hostsSetView" data-args=\'' + _da("table") + '\' title="' + esc(t("hosts.view_table")) + '" data-icon>' + _icon("list", 14) + '</button>';
+    h += '</div>';
     h += '<span class="ct-text-label ct-muted">' + hosts.length + ' ' + esc(t("hosts.count")) + '</span>';
     h += '</div>';
     h += '<div class="ct-text-meta ct-muted ct-mb-3">' + esc(t("hosts.help")) + '</div>';
@@ -3344,6 +3364,50 @@ function _renderHosts(c: HTMLElement) {
             if (map && Object.keys(map).length) _refreshHostCards();
         });
     }
+}
+
+// Vue tableau de la page Hotes. Prend les memes `entries` que les tuiles —
+// un hote regroupe reste une seule ligne, ses alias comptes a part — pour que
+// les deux vues montrent exactement le meme ensemble.
+function _hostsTableHtml(entries: { primary: SurfaceMonitoredAsset; aliases: SurfaceMonitoredAsset[]; ip: string }[],
+                         counts: Record<string, SurfaceHostCounts>): string {
+    var h = '<table class="ct-table ct-text-label"><thead><tr>';
+    h += '<th>' + esc(t("hosts.col.host")) + '</th>';
+    h += '<th>' + esc(t("hosts.col.kind")) + '</th>';
+    h += '<th>' + esc(t("hosts.col.criticality")) + '</th>';
+    h += '<th>' + esc(t("hosts.col.ip")) + '</th>';
+    h += '<th>' + esc(t("hosts.col.findings")) + '</th>';
+    h += '<th>' + esc(t("hosts.last_scan")) + '</th>';
+    h += '</tr></thead><tbody>';
+    entries.forEach(function(entry) {
+        var a = entry.primary;
+        var isShare = a.kind === "file_share";
+        var f = counts[a.id] || _countFindingsByHost(a);
+        var last = a.last_scan_at ? String(a.last_scan_at).slice(0, 10) : "—";
+        h += '<tr class="ct-clickable' + (a.enabled === false ? ' host-row-disabled' : '')
+           + '" data-click="_openHost" data-args=\'' + _da(a.id) + '\'>';
+        h += '<td>' + esc(isShare ? _assetHostKey(a) : a.value);
+        if (entry.aliases.length) {
+            h += ' <span class="ct-muted ct-text-meta">+' + entry.aliases.length + '</span>';
+        }
+        if (a.label) h += '<div class="ct-muted ct-text-meta">' + esc(a.label) + '</div>';
+        h += '</td>';
+        h += '<td><span class="ct-badge" data-size="sm" data-tone="'
+           + (isShare ? "medium" : a.kind === "domain" ? "info" : "neutral") + '">'
+           + esc(isShare ? t("hosts.badge.share") : _kindLabel(a.kind || "host")) + '</span></td>';
+        h += '<td>' + (a.criticality
+            ? '<span class="ct-badge" data-size="sm" data-tone="' + _surfaceTone(a.criticality) + '">'
+              + esc(t("crit." + a.criticality)) + '</span>'
+            : '<span class="ct-muted">—</span>') + '</td>';
+        h += '<td class="ct-mono ct-text-data">' + esc(a.resolved_ip || entry.ip || "—") + '</td>';
+        h += '<td>' + (f.active
+            ? '<span class="ct-badge" data-size="sm" data-tone="high">' + f.active + '</span>'
+            : '<span class="ct-muted">0</span>') + '</td>';
+        h += '<td class="ct-text-meta ct-muted">' + esc(last) + '</td>';
+        h += '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
 }
 
 function _refreshHostCards() {
@@ -3423,8 +3487,13 @@ function _refreshHostCards() {
     var h = '<div class="ct-text-label ct-muted ct-mb-2">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups")) + '</div>';
 
     if (!filtered.length) {
-        h += '<div class="empty-state">' + esc(hosts.length ? t("hosts.no_match") : t("hosts.empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(hosts.length ? t("hosts.no_match") : t("hosts.empty")) + '</div>';
         wrap.innerHTML = h;
+        return;
+    }
+
+    if (_hostsView === "table") {
+        wrap.innerHTML = h + _hostsTableHtml(entries, _entryCounts);
         return;
     }
 
@@ -3791,7 +3860,7 @@ function _renderHostDetail(c: HTMLElement) {
     }
 
     if (!hostFindings.length) {
-        h += '<div class="empty-state">' + esc(t("host.findings_empty")) + '</div>';
+        h += '<div class="ct-empty-state">' + esc(t("host.findings_empty")) + '</div>';
     } else {
         // Render via the shared ct_table + ct_bulkbar so the host view
         // uses the same chrome / bulk actions as the main Findings panel.

@@ -45,39 +45,39 @@ var ct_notifprefs = {
         opts.fetchPrefs().then(function (p) {
             var hasPilot = typeof p.enabled === "boolean" && typeof p.day_of_week === "number";
             var appsec = (p.module_prefs || {}).appsec || null;
-            var h = '<div class="np-form">';
-            h += '<div class="np-group"><h3 class="np-section">' + esc(t("notif.section.general")) + '</h3>';
-            h += '<div class="form-row"><label for="np-lang">' + esc(t("notif.lang_global")) + '</label><select id="np-lang">'
+            var h = '<div class="ct-notifprefs-form">';
+            h += '<div class="ct-notifprefs-group"><h3 class="ct-notifprefs-section">' + esc(t("notif.section.general")) + '</h3>';
+            h += '<div class="ct-form-row"><label for="np-lang">' + esc(t("notif.lang_global")) + '</label><select id="np-lang">'
                 + '<option value="fr"' + (p.lang !== "en" ? " selected" : "") + '>Français</option>'
                 + '<option value="en"' + (p.lang === "en" ? " selected" : "") + '>English</option>'
                 + '</select>'
-                + '<div class="np-help">' + esc(t("notif.lang_global_hint")) + '</div></div>';
-            h += '<div class="np-help">' + esc(t("notif.hint.general")) + '</div>';
+                + '<div class="ct-notifprefs-help">' + esc(t("notif.lang_global_hint")) + '</div></div>';
+            h += '<div class="ct-notifprefs-help">' + esc(t("notif.hint.general")) + '</div>';
             h += '</div>';
             if (hasPilot) {
-                h += '<details class="np-group" name="np-module-acc"><summary class="np-section">' + esc(t("notif.section.pilot")) + '</summary>';
-                h += '<div class="np-help np-modhint">' + esc(t("notif.hint.pilot")) + '</div>';
-                h += '<div class="form-row"><label class="ct-flex ct-items-center ct-gap-2">'
+                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.pilot")) + '</summary>';
+                h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.pilot")) + '</div>';
+                h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-enabled"' + (p.enabled ? " checked" : "") + '> '
                     + esc(t("notif.enabled")) + '</label></div>';
-                h += '<div class="form-row"><label for="np-day">' + esc(t("notif.day_label")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-day">' + esc(t("notif.day_label")) + '</label>'
                     + _npDaySelect("np-day", p.day_of_week) + '</div>';
-                h += '<div class="form-row"><label for="np-window">' + esc(t("notif.window")) + '</label><select id="np-window">';
+                h += '<div class="ct-form-row"><label for="np-window">' + esc(t("notif.window")) + '</label><select id="np-window">';
                 [7, 14, 30].forEach(function (n) {
                     h += '<option value="' + n + '"' + (p.upcoming_days === n ? " selected" : "") + '>' + n + ' ' + esc(t("notif.days_unit")) + '</option>';
                 });
                 h += '</select></div>';
-                h += '<div class="form-row"><label class="ct-flex ct-items-center ct-gap-2">'
+                h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-overdue"' + (p.include_overdue ? " checked" : "") + '> '
                     + esc(t("notif.include_overdue")) + '</label></div>';
                 if (opts.isAdmin) {
-                    h += '<div class="form-row"><label for="np-scope">' + esc(t("notif.scope")) + '</label><select id="np-scope">'
+                    h += '<div class="ct-form-row"><label for="np-scope">' + esc(t("notif.scope")) + '</label><select id="np-scope">'
                         + '<option value="mine"' + (p.scope !== "all" ? " selected" : "") + '>' + esc(t("notif.scope.mine")) + '</option>'
                         + '<option value="all"' + (p.scope === "all" ? " selected" : "") + '>' + esc(t("notif.scope.all")) + '</option>'
                         + '</select></div>';
                 }
                 if (opts.modules && opts.modules.length) {
-                    h += '<div class="form-row"><label class="np-label">' + esc(t("notif.modules")) + '</label><div class="ct-flex ct-gap-2" style="flex-wrap:wrap">';
+                    h += '<div class="ct-form-row"><label class="ct-notifprefs-label">' + esc(t("notif.modules")) + '</label><div class="ct-flex ct-gap-2" style="flex-wrap:wrap">';
                     opts.modules.forEach(function (mid) {
                         var on = !(p.modules || []).length || (p.modules || []).indexOf(mid) >= 0;
                         h += '<label class="ct-text-meta ct-flex ct-items-center ct-gap-1">'
@@ -85,39 +85,39 @@ var ct_notifprefs = {
                     });
                     h += '</div></div>';
                 }
-                h += '<div class="form-row"><label for="np-prefix">' + esc(t("notif.prefix")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-prefix">' + esc(t("notif.prefix")) + '</label>'
                     + '<input type="text" id="np-prefix" maxlength="60" value="' + esc(p.subject_prefix || "[CISO Toolbox]") + '" placeholder="[CISO Toolbox]"></div>';
                 h += '</details>';
             }
             if (appsec) {
-                h += '<details class="np-group" name="np-module-acc"><summary class="np-section">' + esc(t("notif.section.appsec")) + '</summary>';
-                h += '<div class="np-help np-modhint">' + esc(t("notif.hint.appsec")) + '</div>';
-                h += '<div class="form-row"><label class="ct-flex ct-items-center ct-gap-2">'
+                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.appsec")) + '</summary>';
+                h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.appsec")) + '</div>';
+                h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-as-alert"' + (appsec.alert_enabled ? " checked" : "") + '> '
                     + esc(t("notif.appsec.alert_enabled")) + '</label></div>';
-                h += '<div class="form-row"><label for="np-as-alert-sev">' + esc(t("notif.appsec.alert_threshold")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-as-alert-sev">' + esc(t("notif.appsec.alert_threshold")) + '</label>'
                     + _npSevSelect("np-as-alert-sev", appsec.alert_min_severity || "low") + '</div>';
-                h += '<div class="form-row"><label class="ct-flex ct-items-center ct-gap-2">'
+                h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-as-weekly"' + (appsec.weekly_enabled ? " checked" : "") + '> '
                     + esc(t("notif.appsec.weekly_enabled")) + '</label></div>';
-                h += '<div class="form-row"><label for="np-as-weekly-day">' + esc(t("notif.appsec.weekly_day")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-as-weekly-day">' + esc(t("notif.appsec.weekly_day")) + '</label>'
                     + _npDaySelect("np-as-weekly-day", typeof appsec.weekly_day === "number" ? appsec.weekly_day : 0) + '</div>';
-                h += '<div class="form-row"><label for="np-as-weekly-sev">' + esc(t("notif.appsec.weekly_threshold")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-as-weekly-sev">' + esc(t("notif.appsec.weekly_threshold")) + '</label>'
                     + _npSevSelect("np-as-weekly-sev", appsec.weekly_min_severity || "low") + '</div>';
-                h += '<div class="form-row"><label for="np-as-prefix">' + esc(t("notif.prefix")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-as-prefix">' + esc(t("notif.prefix")) + '</label>'
                     + '<input type="text" id="np-as-prefix" maxlength="60" value="' + esc(appsec.subject_prefix || "[AppSec]") + '" placeholder="[AppSec]"></div>';
                 h += '</details>';
             }
             var surface = (p.module_prefs || {}).surface || null;
             if (surface) {
-                h += '<details class="np-group" name="np-module-acc"><summary class="np-section">' + esc(t("notif.section.surface")) + '</summary>';
-                h += '<div class="np-help np-modhint">' + esc(t("notif.hint.surface")) + '</div>';
-                h += '<div class="form-row"><label class="ct-flex ct-items-center ct-gap-2">'
+                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.surface")) + '</summary>';
+                h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.surface")) + '</div>';
+                h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-sf-alert"' + (surface.alert_enabled ? " checked" : "") + '> '
                     + esc(t("notif.surface.alert_enabled")) + '</label></div>';
-                h += '<div class="form-row"><label for="np-sf-alert-sev">' + esc(t("notif.surface.alert_threshold")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-sf-alert-sev">' + esc(t("notif.surface.alert_threshold")) + '</label>'
                     + _npSevSelect("np-sf-alert-sev", surface.alert_min_severity || "low") + '</div>';
-                h += '<div class="form-row"><label for="np-sf-prefix">' + esc(t("notif.prefix")) + '</label>'
+                h += '<div class="ct-form-row"><label for="np-sf-prefix">' + esc(t("notif.prefix")) + '</label>'
                     + '<input type="text" id="np-sf-prefix" maxlength="60" value="' + esc(surface.subject_prefix || "[Surface]") + '" placeholder="[Surface]"></div>';
                 h += '</details>';
             }
