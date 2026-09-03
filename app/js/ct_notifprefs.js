@@ -55,7 +55,7 @@ var ct_notifprefs = {
             h += '<div class="ct-notifprefs-help">' + esc(t("notif.hint.general")) + '</div>';
             h += '</div>';
             if (hasPilot) {
-                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.pilot")) + '</summary>';
+                h += '<details class="ct-notifprefs-group" name="ct-notifprefs-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.pilot")) + '</summary>';
                 h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.pilot")) + '</div>';
                 h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-enabled"' + (p.enabled ? " checked" : "") + '> '
@@ -81,7 +81,7 @@ var ct_notifprefs = {
                     opts.modules.forEach(function (mid) {
                         var on = !(p.modules || []).length || (p.modules || []).indexOf(mid) >= 0;
                         h += '<label class="ct-text-meta ct-flex ct-items-center ct-gap-1">'
-                            + '<input type="checkbox" class="np-mod" value="' + esc(mid) + '"' + (on ? " checked" : "") + '> ' + esc(mid) + '</label>';
+                            + '<input type="checkbox" class="ct-notifprefs-mod" value="' + esc(mid) + '"' + (on ? " checked" : "") + '> ' + esc(mid) + '</label>';
                     });
                     h += '</div></div>';
                 }
@@ -90,7 +90,7 @@ var ct_notifprefs = {
                 h += '</details>';
             }
             if (appsec) {
-                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.appsec")) + '</summary>';
+                h += '<details class="ct-notifprefs-group" name="ct-notifprefs-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.appsec")) + '</summary>';
                 h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.appsec")) + '</div>';
                 h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-as-alert"' + (appsec.alert_enabled ? " checked" : "") + '> '
@@ -110,7 +110,7 @@ var ct_notifprefs = {
             }
             var surface = (p.module_prefs || {}).surface || null;
             if (surface) {
-                h += '<details class="ct-notifprefs-group" name="np-module-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.surface")) + '</summary>';
+                h += '<details class="ct-notifprefs-group" name="ct-notifprefs-acc"><summary class="ct-notifprefs-section">' + esc(t("notif.section.surface")) + '</summary>';
                 h += '<div class="ct-notifprefs-help ct-notifprefs-modhint">' + esc(t("notif.hint.surface")) + '</div>';
                 h += '<div class="ct-form-row"><label class="ct-flex ct-items-center ct-gap-2">'
                     + '<input type="checkbox" id="np-sf-alert"' + (surface.alert_enabled ? " checked" : "") + '> '
@@ -132,9 +132,9 @@ var ct_notifprefs = {
                     out.include_overdue = _npChecked("np-overdue");
                     if (_npHas("np-scope"))
                         out.scope = _npVal("np-scope");
-                    if (document.querySelectorAll(".np-mod").length) {
+                    if (document.querySelectorAll(".ct-notifprefs-mod").length) {
                         var mods = [];
-                        var checks = document.querySelectorAll(".np-mod");
+                        var checks = document.querySelectorAll(".ct-notifprefs-mod");
                         for (var i = 0; i < checks.length; i++) {
                             if (checks[i].checked)
                                 mods.push(checks[i].value);

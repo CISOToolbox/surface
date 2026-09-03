@@ -274,6 +274,12 @@
     box-shadow: var(--ct-shadow-card);
     transform: translateY(-1px);
 }
+/* Scanning disabled: greyed out — table row variant. The class was emitted
+   by the list view but never defined: a disabled host was indistinguishable. */
+.host-row-disabled td {
+    opacity: 0.5;
+    filter: grayscale(0.6);
+}
 /* Scanning disabled: greyed out and grouped at the end of the grid. */
 .host-card-disabled {
     opacity: 0.5;

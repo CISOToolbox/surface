@@ -16,3 +16,9 @@ docs
 docker-compose*.yml
 .dockerignore
 Dockerfile*
+
+# Add-on build trees. The image ships the COMPILED artefacts (addons/generic/
+# smb_scan_rs/bin/ciso-smb-scan-<arch>, produced by rust/build.sh before the
+# image build), never the sources: rust/target-* alone is several hundred MB.
+addons/*/*/rust
+addons/*/*/*/rust
