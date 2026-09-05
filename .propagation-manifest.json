@@ -1,6 +1,6 @@
 {
   "$comment": "Files replicated from a private upstream repository. Do NOT edit them here: the next propagation overwrites them and CI rejects local edits. See CONTRIBUTING.md, section 'Shared code'.",
-  "generated": "2026-09-05T17:27:11Z",
+  "generated": "2026-09-05T20:14:29Z",
   "checker": "check-replicated-files.py (run it in CI)",
   "files": {
     "Dockerfile": "sha256:c5618de4c623c610330142b9e35ef4853bc08fe0daac75f0720eeb47243c5482",
@@ -49,7 +49,7 @@
     "alembic/versions/014_smtp_key_alignment.py": "sha256:80c8742e11179bfc7764c670d392970569995957f39b9f240b8884945b711949",
     "app/.dockerignore": "sha256:4cb45b8dd426234ac077fd0aa14dda7f043fc5d83f95b756008a1305ade77e86",
     "app/css/Surface.css": "sha256:f2870310d8d56d2a09d0e5db10591bc4dad8723ab1a3db69cc38e890e39f9dcc",
-    "app/css/cisotoolbox.css": "sha256:a406cc2ef7c2a17c818bc8f0e13d891b1bf45a1dd607f5286146e87f6c3264ad",
+    "app/css/cisotoolbox.css": "sha256:3143b0ac334266cfbd1878b7d992ee132425a531ce1c52954dfaf6c35c5ded09",
     "app/css/login.css": "sha256:6f42bd1422b982ecdc267876c7bfc423c660603b0a63362a0ebc628be34cf607",
     "app/favicon.svg": "sha256:f653db1f09ee507721e1fadc3f500fd59bf47a23e4130199dd27f26a58ac1231",
     "app/fonts/IBMPlexMono-Medium.woff2": "sha256:309f31ec72260a823fc712000504015fe43f2aba3d80835516b63ae10a10a5db",
@@ -76,7 +76,7 @@
     "app/js/Surface_i18n_fr.js": "sha256:0a18326c20696786fb219d857d4fb21e43e1c7b1b9368955af4a3a2d73d483fa",
     "app/js/ai_backend.js": "sha256:00edcf30b642f5dd4eb5e0c23e96e102612a5eb3c66f0840575a9394930218c3",
     "app/js/ai_common.js": "sha256:d6f33442450fd218263e1e4c10168cf934062595aa88491794c337483deea4bf",
-    "app/js/cisotoolbox.js": "sha256:6b0dc6c0b56aecb45fe0f659aa73e8b8f73e6c32f959f8bbb9fb7cdc2f1a6397",
+    "app/js/cisotoolbox.js": "sha256:bb96d75aacfa4e20fb198eed8a46a0bb651c1ee5afedc985cd2f9f039a33a235",
     "app/js/cisotoolbox_backend.js": "sha256:b8126b062c434358711015598623236517d41271fb3a17215694f11035b94c92",
     "app/js/ct_audit.js": "sha256:7f9425e4c61648bb19075c90498539ea27d279f878ef5a9a0bdd6013429afacc",
     "app/js/ct_bulkbar.js": "sha256:ce5aa10ee808b21dc3bf34b82936b17ada005c0ddbfddeb85114dbd89a9cd091",
