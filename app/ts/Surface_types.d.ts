@@ -1,17 +1,17 @@
 /**
- * Surface (demo-docker) — types du module.
+ * Surface (demo-docker) — module types.
  *
- * Modèle de données (findings / monitored assets / scan jobs / mesures),
- * payloads de l'API REST (window.SurfaceAPI) et globals posés par
- * surface_api.js / Surface_app.js / Surface_config.js.
+ * Data model (findings / monitored assets / scan jobs / measures), REST API
+ * payloads (window.SurfaceAPI) and globals set by surface_api.js /
+ * Surface_app.js / Surface_config.js.
  *
- * Convention nullabilité : les champs optionnels venant du backend sont
- * déclarés `?: T` (sans `| null`) pour rester structurellement assignables
- * aux types partagés CtFvFinding / CtFvLinkedMeasure (un null JSON se
- * comporte comme absent dans tout le code — tests `||` / `!x`).
+ * Nullability convention: optional fields coming from the backend are
+ * declared `?: T` (without `| null`) so they stay structurally assignable to
+ * the shared CtFvFinding / CtFvLinkedMeasure types (a JSON null behaves like
+ * an absent value everywhere in the code — `||` / `!x` checks).
  */
 
-/* ── Modèle de données ─────────────────────────────────────────── */
+/* ── Data model ────────────────────────────────────────────────── */
 
 type SurfaceSeverity = "critical" | "high" | "medium" | "low" | "info";
 type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed";
@@ -107,7 +107,7 @@ interface CtAddonDoc {
     doc: Record<string, { methodo?: string; usage?: string }>;
 }
 
-/** Point quotidien de la timeline dashboard (cumuls par sévérité + triage du jour). */
+/** Daily point of the dashboard timeline (severity totals + that day's triage). */
 interface SurfaceTimelineBucket {
     key: string;
     label: string;
@@ -115,7 +115,7 @@ interface SurfaceTimelineBucket {
     triaged: number;
 }
 
-/** Compteurs par hôte (index signature : agrégation dynamique des alias). */
+/** Per-host counters (index signature: dynamic aggregation of the aliases). */
 interface SurfaceHostCounts {
     total: number; active: number; open: number;
     critical: number; high: number; medium: number; low: number; info: number;
@@ -242,10 +242,10 @@ interface SurfaceAPIShape {
     sendEmailDigest(): Promise<{ recipients?: string[] }>;
 }
 
-/* ── Globals script (assignés via window.X, appelés nus) ───────── */
-// En scope script global, une propriété window et la variable globale du
-// même nom sont la même entité — déclarées ici pour les appels non
-// qualifiés (les decls gen/ partagées ne les exposent que sur Window).
+/* ── Script globals (assigned via window.X, called bare) ───────── */
+// In global script scope a window property and the global variable of the
+// same name are the same entity — declared here for the unqualified calls
+// (the shared gen/ declarations only expose them on Window).
 
 declare var SurfaceAPI: SurfaceAPIShape;
 declare var ct_modal: CtModalApi;
@@ -261,7 +261,7 @@ declare var _closeMonitoredModal: () => void;
 declare var _closeBulkImportModal: () => void;
 declare var _editScannersDialog: (idOrIds: string | string[]) => void;
 
-/* ── Propriétés Window posées par le module ────────────────────── */
+/* ── Window properties set by the module ───────────────────────── */
 
 interface Window {
     ct_notifprefs?: { open: (opts: Record<string, unknown>) => void };

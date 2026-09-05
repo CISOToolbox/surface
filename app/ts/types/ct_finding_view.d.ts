@@ -10,7 +10,7 @@
  * finding: header (back button + title + severity/status badges),
  * optional subheader (scanner + app + timestamps), info card
  * (target, CVE, description, evidence, screenshot, triage metadata,
- * notes), triage card (À corriger / Faux positif / Réinitialiser
+ * notes), triage card ("À corriger" / "Faux positif" / "Réinitialiser"
  * + optional AI + optional Delete) and, when relevant, a linked
  * measure card.
  *

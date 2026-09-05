@@ -221,20 +221,20 @@ def _check_ip_allowed(ip: ipaddress._BaseAddress, original: str) -> None:
         raise ValueError(f"Cible multicast bloquee : {ip_str}")
     if ip.is_reserved:
         raise ValueError(f"Cible dans un bloc reserve : {ip_str}")
-    # is_private == RFC1918 (10/8, 172.16/12, 192.168/16) — AUTORISE par choix utilisateur
-    # is_global == IP publique — AUTORISE
+    # is_private == RFC1918 (10/8, 172.16/12, 192.168/16) — ALLOWED by user choice
+    # is_global == public IP — ALLOWED
 
 
-# Blocs interdits, sous forme de reseaux, pour tester le RECOUVREMENT d'une
-# plage CIDR. Verifier seulement l'adresse de reseau et celle de diffusion
-# laissait passer toute plage qui *contient* une cible interdite sans la border :
-# 100.100.100.0/24 a pour bornes .0 et .255, donc l'IP de metadonnees Alibaba
-# (100.100.100.200) etait balayee sans qu'aucun des deux controles ne bronche.
+# Blocked ranges, expressed as networks, so that a CIDR range can be tested for
+# OVERLAP. Checking only the network address and the broadcast address let
+# through any range that *contains* a forbidden target without bounding it:
+# 100.100.100.0/24 has .0 and .255 as its bounds, so the Alibaba metadata IP
+# (100.100.100.200) was swept without either of the two checks flinching.
 _BLOCKED_NETWORKS: tuple = tuple(
     ipaddress.ip_network(n) for n in (
         "127.0.0.0/8", "::1/128",                 # loopback
         "169.254.0.0/16", "fe80::/10",            # link-local (metadata cloud)
-        "0.0.0.0/32", "::/128",                   # non specifie
+        "0.0.0.0/32", "::/128",                   # unspecified
         "224.0.0.0/4", "ff00::/8",                # multicast
         "100.100.100.200/32",                     # Alibaba
         "192.0.0.192/32",                         # Oracle Cloud
@@ -244,12 +244,12 @@ _BLOCKED_NETWORKS: tuple = tuple(
 
 
 def _check_network_allowed(net: ipaddress._BaseNetwork, original: str) -> None:
-    """Refuse une plage CIDR qui recouvre un bloc interdit.
+    """Reject a CIDR range that overlaps a blocked range.
 
-    Enumerer chaque hote serait impraticable (un /8 en compte 16 millions), on
-    teste donc le recouvrement de reseau a reseau. Les bornes restent verifiees
-    individuellement pour conserver les messages d'erreur precis de
-    _check_ip_allowed sur les cas les plus courants.
+    Enumerating every host would be impractical (a /8 holds 16 million of them),
+    so overlap is tested network against network. The bounds are still checked
+    individually so that the precise error messages of _check_ip_allowed are
+    kept for the most common cases.
     """
     for ip in (net.network_address, net.broadcast_address):
         _check_ip_allowed(ip, original=original)

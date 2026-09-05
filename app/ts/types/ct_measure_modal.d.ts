@@ -8,7 +8,7 @@
  *
  * Depends on ct_modal and ct_userpicker. All text goes through t()
  * with inline fallbacks. CSP-safe (data-click). Survives the
- * "+ Créer utilisateur" sub-modal via a deferred Promise that is
+ * "+ Create user" sub-modal via a deferred Promise that is
  * only resolved by the save/cancel/delete/extra button of the
  * terminal reopened instance.
  *

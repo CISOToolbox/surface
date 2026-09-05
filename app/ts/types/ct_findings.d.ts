@@ -4,25 +4,25 @@
 // Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
 // -----------------------------------------------------------------------------
 /**
- * CISO Toolbox — Libellés de findings localisés (FR/EN)
+ * CISO Toolbox — localized finding labels (FR/EN)
  *
- * Les findings sont générés côté serveur (scanners) avec un title/description
- * figés dans une langue. Ce module reconstruit un libellé TRADUIT au moment de
- * l'affichage, à partir des champs structurés que le finding porte déjà :
- *   - f.type      : identifiant du gabarit (open_port, host_summary, sast, cve…)
- *   - f.evidence  : données structurées (address, port, service, cve_id…)
- *   - f.severity  : sévérité (pour une note optionnelle)
+ * Findings are generated server-side (scanners) with a title/description
+ * frozen in one language. This module rebuilds a TRANSLATED label at display
+ * time, from the structured fields the finding already carries:
+ *   - f.type      : template identifier (open_port, host_summary, sast, cve…)
+ *   - f.evidence  : structured data (address, port, service, cve_id…)
+ *   - f.severity  : severity (for an optional note)
  *
- * Chaque module déclare ses gabarits dans ses dictionnaires i18n :
+ * Each module declares its templates in its i18n dictionaries:
  *   "finding.<type>.title"   → "Port {port}/{protocol} ({service}) ouvert sur {address}"
  *   "finding.<type>.desc"    → "Le service {service} écoute sur {address}:{port}/{protocol}."
- *   "finding.<type>.sev.<s>" → note ajoutée au desc pour la sévérité <s> (optionnel)
+ *   "finding.<type>.sev.<s>" → note appended to desc for severity <s> (optional)
  *
- * Générique et réutilisable (Surface, AppSec, …). Si le gabarit n'existe pas
- * (type technique parse_error/exception, finding historique), on retombe sur le
- * texte backend (f.title / f.description) — jamais de trou à l'écran.
+ * Generic and reusable (Surface, AppSec, …). When the template does not exist
+ * (technical parse_error/exception type, legacy finding), it falls back to the
+ * backend text (f.title / f.description) — never a blank on screen.
  *
- * Charger APRÈS i18n.js (utilise t()).
+ * Load AFTER i18n.js (uses t()).
  */
 declare function _findingParams(f: any): Record<string, string | number>;
 declare function _findingApply(key: string, params: Record<string, string | number>): string | null;

@@ -1,10 +1,10 @@
-/* Primitives partagées : NE PAS redéfinir ici.
-   Les feuilles de module se chargent après cisotoolbox.css, donc à spécificité
-   égale c'est celle-ci qui gagnait. Un composant partagé — ct_finding_view.js,
-   ct_modal.js — émet le même balisage partout et se peignait différemment selon
-   le module, sans erreur ni test rouge. Le focus d'un champ était rouge ici et
-   indigo ailleurs : un champ actif se lisait comme un champ en erreur.
-   Les besoins de géométrie passent par les attributs prévus (data-width). */
+/* Shared primitives: do NOT redefine them here.
+   Module stylesheets load after cisotoolbox.css, so at equal specificity this
+   one used to win. A shared component — ct_finding_view.js, ct_modal.js —
+   emits the same markup everywhere and got painted differently depending on
+   the module, with no error and no red test. A field's focus was red here and
+   indigo elsewhere: an active field read as a field in error.
+   Geometry needs go through the attributes provided for it (data-width). */
 /* Surface-specific styles */
 
 /* Severity-aware stat tile values — match the chart and badge palette. */
@@ -109,8 +109,8 @@
     font-size: 0.85em;
     transition: all 0.15s;
 }
-/* Sélection en indigo, comme partout ailleurs dans la suite : en rouge elle se
-   lisait comme une alerte. L'encre suit le grade -ink de sa teinte. */
+/* Selection in indigo, as everywhere else in the suite: in red it read as an
+   alert. The ink follows the -ink grade of its tint. */
 .surface-radio:has(input:checked) {
     border-color: var(--ct-accent-ink);
     background: var(--ct-accent-tint);
@@ -153,11 +153,11 @@
 /* Scanner type badges in the jobs panel */
 
 /* Scanner checklist in monitored asset modal */
-/* Liste de scanners — MISE EN PAGE, pas des badges. Ces règles ont été emportées
-   par la suppression des familles de badges : l'expression visait le préfixe
-   `.scanner-` sans distinguer une pastille colorée d'un conteneur flex. Sans
-   elles, la configuration des scans d'un hôte affichait tout le texte à la
-   suite, sans retour à la ligne. */
+/* Scanner list — LAYOUT, not badges. These rules were swept away by the
+   removal of the badge families: the expression targeted the `.scanner-`
+   prefix without telling a colored pill from a flex container. Without them,
+   a host's scan configuration displayed all the text run together, with no
+   line breaks. */
 .scanner-checklist {
     display: flex;
     flex-direction: column;
@@ -237,8 +237,8 @@
     color: var(--ct-onaccent);
     border-color: var(--ct-accent);
 }
-/* Actives sévérité : mêmes paires que les sev-badges (tint/ink), sélection
-   marquée par la bordure couleur base — lisible dans les deux thèmes. */
+/* Severity actives: same pairs as the sev-badges (tint/ink), selection marked
+   by the base-color border — readable in both themes. */
 .filter-pill.sev-critical.active { background: var(--ct-critical-tint); color: var(--ct-critical-ink); border-color: var(--ct-critical-ink); }
 .filter-pill.sev-high.active     { background: var(--ct-high-tint);     color: var(--ct-high-ink);     border-color: var(--ct-high-ink); }
 .filter-pill.sev-medium.active   { background: var(--ct-medium-tint);   color: var(--ct-medium-ink);   border-color: var(--ct-medium-ink); }
@@ -1083,13 +1083,13 @@
 /* Misc hard-coded light values */
 :root[data-theme="dark"] .bulk-import-sample    { color: var(--ct-ink-1); } /* --ct-line text turned dark-on-dark */
 
-/* Boutons destructifs : teinté au repos, rouge plein au survol (spec Supprimer). */
+/* Destructive buttons: tinted at rest, solid red on hover (Supprimer spec). */
 
-/* Bouton de fermeture des modales — local au module, PAS une primitive du socle.
-   Renommé hors du préfixe ct- : ce préfixe est réservé aux primitives partagées,
-   et un nom local qui l'emprunte finit par entrer en collision. L'encre suit
-   désormais le texte courant : elle était blanche ici parce que l'en-tête de
-   modale était violet plein, en-tête supprimé avec les collisions. */
+/* Modal close button — module-local, NOT a socle primitive.
+   Renamed out of the ct- prefix: that prefix is reserved for shared primitives,
+   and a local name that borrows it ends up colliding. The ink now follows the
+   current text: it was white here because the modal header was solid purple,
+   a header that was removed along with the collisions. */
 .surface-modal-close {
     background: none;
     border: none;
@@ -1102,5 +1102,5 @@
 }
 .surface-modal-close:hover { opacity: 1; }
 
-/* Extrait du balisage : la classe existait, son style vivait a cote. */
+/* Extracted from the markup: the class existed, its style lived next to it. */
 .appsec-filter { min-width:200px; }

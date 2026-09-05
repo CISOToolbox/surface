@@ -123,21 +123,21 @@ var _ICON_PATHS: Record<string, string> = {
 };
 
 
-// Badges Surface — un état métier se mappe sur un TON, pas sur une classe par
-// valeur (spec §2). La palette de tons est fermée : critical · high · medium ·
-// low · info · neutral · accent. Ajouter un statut ne demande plus de CSS.
+// Surface badges — a domain state maps onto a TONE, not onto a per-value
+// class (spec §2). The tone palette is closed: critical · high · medium ·
+// low · info · neutral · accent. Adding a status no longer needs CSS.
 var _SURFACE_TONES: Record<string, string> = {
-    // sévérités
+    // severities
     critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
-    // statuts de constat
+    // finding statuses
     new: "info", to_fix: "medium", fixed: "low", accepted: "neutral",
     ignored: "neutral", false_positive: "neutral",
-    // origine et état d'un hôte
+    // origin and state of a host
     auto: "accent", manual: "info", off: "neutral", share: "medium", scanner: "low",
 };
 
-// État d'un job de scan. « running » porte en plus data-live : la pulsation est
-// un état générique du socle, pas une animation propre à Surface.
+// Scan-job state. "running" also carries data-live: the pulse is a generic
+// core state, not a Surface-specific animation.
 var _JOB_TONES: Record<string, string> = {
     pending: "neutral", running: "info", completed: "low",
     partial: "medium", failed: "critical",
@@ -351,7 +351,7 @@ window.renderPanel = renderPanel;
 // the backend (GET /api/monitored-assets/addon-docs), which returns doc only
 // for add-ons actually loaded in this image. So an image built without an
 // add-on never even ships its help text. The HTML is injected into the
-// Méthodologie / Utilisation tabs. Fetched once, then re-injected on every
+// "Méthodologie" / "Utilisation" tabs. Fetched once, then re-injected on every
 // renderPanel — which covers boot, navigation and switchLang (the latter
 // resets the tabs' data-i18n-html, wiping our injected nodes; we re-add them
 // in the current language).
@@ -484,8 +484,8 @@ function _scannerLabel(s: string | undefined) {
             var list = entry && entry.scanners ? entry.scanners : [];
             for (var i = 0; i < list.length; i++) {
                 if (list[i].name === s && list[i].label) {
-                    // Libellé localisé si "scanner.<name>.label" est déclaré,
-                    // sinon le label backend (langue pivot, anglais).
+                    // Localized label when "scanner.<name>.label" is declared,
+                    // otherwise the backend label (English pivot language).
                     var _lk = "scanner." + list[i].name + ".label";
                     var _lv = t(_lk);
                     return _lv === _lk ? list[i].label : _lv;
@@ -500,9 +500,9 @@ function _scannerLabel(s: string | undefined) {
 // .scanner-<type> style in Surface.css; anything else (e.g. "manual",
 // "scheduled") falls back to the neutral .scanner-unknown pill so TYPE
 // columns render a pill on every row instead of mixing pills and raw text.
-// Le scanner est une identité, pas une gravité : chacun avait sa classe et sa
-// couleur, ce qui faisait lire nmap comme un incident (teinte critical). Il
-// devient un ton, choisi pour distinguer sans alarmer.
+// A scanner is an identity, not a severity: each had its own class and colour,
+// which made nmap read like an incident (critical tint). It becomes a tone,
+// chosen to distinguish without alarming.
 var _SCANNER_TONES: Record<string, string> = {
     nmap: "accent", "scheduled-host": "accent",
     "scheduled-domain": "info", "scheduled-discovery": "medium",
@@ -689,9 +689,9 @@ window._rerunJob = function(id, el) {
     // take 30s+ to return, so the user needs to see something happen NOW.
     showStatus(t("jobs.rerun_in_progress").replace("{target}", job.target));
 
-    // any localisé : trois endpoints de relance aux réponses hétérogènes
-    // (createJob / scanMonitored / quickScan), seuls findings_created /
-    // findings_count sont lus avec garde null.
+    // Local any: three re-run endpoints with heterogeneous responses
+    // (createJob / scanMonitored / quickScan); only findings_created /
+    // findings_count are read, with a null guard.
     var ok = function(r: any) {
         var n = (r && (r.findings_created != null ? r.findings_created : r.findings_count)) || 0;
         showStatus(
@@ -1715,8 +1715,8 @@ function _schedulerHealth() {
         var due = new Date(a.last_scan_at).getTime() + a.scan_frequency_hours * 3600000;
         if (due < nextMs) { nextMs = due; nextAsset = a; }
     });
-    // Cast : les affectations dans le forEach ne sont pas vues par le CFA
-    // (TS garde le narrowing `null` de l'initialisation).
+    // Cast: the assignments inside the forEach are not seen by the CFA
+    // (TS keeps the `null` narrowing from the initialisation).
     var nextInHours = (nextAsset as SurfaceMonitoredAsset | null) ? Math.max(0, Math.round((nextMs - now) / 3600000)) : null;
     return {
         ok: ok, failed: failed, running: running, total24: jobs24.length,
@@ -2348,7 +2348,7 @@ function _refreshFindingsBody() {
     if (prunedKeys.length !== sel.size) ct_bulkbar.setSelection("surface-findings", prunedKeys);
 
     h += ct_table.render({
-        // ct_table travaille en Record<string, any>[] (decl partagée)
+        // ct_table works on Record<string, any>[] (shared declaration)
         rows: filtered as unknown as Record<string, any>[],
         rowKey: "id",
         onRowClick: "_openFindingRow",
@@ -2619,7 +2619,7 @@ window._aiTriageFinding = async function() {
     }
     box.style.display = "block";
     box.innerHTML = '<em>' + esc(t("fd.ai_analyzing")) + '…</em>';
-    // Métier endpoint: the methodology prompt + NVD enrichment are built
+    // Domain endpoint: the methodology prompt + NVD enrichment are built
     // server-side (POST /api/ai/surface/analyze-finding). The browser only
     // ships the raw finding — same-origin, so the strict CSP is satisfied
     // (the old client-side NVD fetch was blocked by connect-src 'self').
@@ -2999,7 +2999,7 @@ function _renderMeasures(c: HTMLElement) {
     var today = new Date().toISOString().substring(0, 10);
 
     h += ct_table.render({
-        // ct_table travaille en Record<string, any>[] (decl partagée)
+        // ct_table works on Record<string, any>[] (shared declaration)
         rows: _measures as unknown as Record<string, any>[],
         rowKey: "id",
         onRowClick: "_editSurfaceMeasureRow",
@@ -3258,8 +3258,8 @@ function _assetGroup(a: SurfaceMonitoredAsset): SurfaceMonitoredAsset[] {
 // section) so an operator can see and re-enable a domain they turned off
 // without leaving the Hosts view; enabled domains stay in the Surveillance
 // table only (this view is host-centric).
-// Vue de la page Hotes : tuiles (defaut) ou tableau. Persistee comme
-// _appsView dans AppSec, pour retrouver sa preference apres rechargement.
+// View of the Hosts page: cards (default) or table. Persisted the same way as
+// _appsView in AppSec, so the preference survives a page reload.
 var _hostsView: string = (function() {
     try { return localStorage.getItem("surface.hostsView") === "table" ? "table" : "cards"; }
     catch (e) { return "cards"; }
@@ -3366,9 +3366,9 @@ function _renderHosts(c: HTMLElement) {
     }
 }
 
-// Vue tableau de la page Hotes. Prend les memes `entries` que les tuiles —
-// un hote regroupe reste une seule ligne, ses alias comptes a part — pour que
-// les deux vues montrent exactement le meme ensemble.
+// Table view of the Hosts page. Takes the same `entries` as the cards —
+// a grouped host stays a single row, its aliases counted apart — so that
+// the two views show exactly the same set.
 function _hostsTableHtml(entries: { primary: SurfaceMonitoredAsset; aliases: SurfaceMonitoredAsset[]; ip: string }[],
                          counts: Record<string, SurfaceHostCounts>): string {
     var h = '<table class="ct-table ct-text-label"><thead><tr>';
@@ -3653,7 +3653,7 @@ window._backToHosts = function() {
     renderPanel();
 };
 
-// NB: hostValue jamais passé par l'appelant (param mort hérité de la source).
+// NB: hostValue is never passed by the caller (dead param inherited from the source).
 function _renderHostFindingInline(c: HTMLElement, hostValue?: string) {
     var f = _hostSelectedFinding!;
     // Same shared vertical card stack as the main findings detail page,
@@ -3868,7 +3868,7 @@ function _renderHostDetail(c: HTMLElement) {
         // survives navigation back to the main panel, which is what the
         // user expects (selection follows findings, not the view).
         h += ct_table.render({
-            // ct_table travaille en Record<string, any>[] (decl partagée)
+            // ct_table works on Record<string, any>[] (shared declaration)
             rows: hostFindings as unknown as Record<string, any>[],
             rowKey: "id",
             onRowClick: "_openFindingRowFromHost",
@@ -4182,7 +4182,7 @@ document.addEventListener("DOMContentLoaded", function() {
     // Apply static translations now that the app i18n dicts are registered.
     // i18n.js only auto-applies at boot when the locale is EN (or on a manual
     // switchLang); in the default FR locale nothing applies the dictionaries,
-    // so data-i18n-html blocks (the Méthodologie / Utilisation help content,
+    // so data-i18n-html blocks (the "Méthodologie" / "Utilisation" help content,
     // which have no baked fallback) would render empty. Apply once here so the
     // help core content is present before any add-on doc is injected.
     if (typeof _applyStaticTranslations === "function") _applyStaticTranslations();
@@ -4407,8 +4407,8 @@ function _surfaceWireSmtpSection() {
 
 function _renderSmtpFormInto(holder: HTMLElement, cfg: SurfaceSmtpConfig) {
     var h = '';
-    // Suite : la config SERVEUR (hôte/auth/expéditeur) est centralisée dans
-    // Pilot et poussée au module — seuls les destinataires se règlent ici.
+    // Suite: the SERVER config (host/auth/sender) is centralised in Pilot and
+    // pushed to the module — only the recipients are set here.
     if ((cfg as any).managed) {
         h += '<div class="surface-settings-help">' + esc(t("smtp.managed_notice")) + '</div>';
         h += '<div class="surface-settings-grid">';
@@ -4476,8 +4476,8 @@ window._saveSmtpConfig = function() {
 window._sendSmtpDigestNow = function() {
     showStatus(t("smtp.sending"));
     SurfaceAPI.sendEmailDigest().then(function(r) {
-        // Confirmation bloquante : le toast de 3 s se rate (retour utilisateur),
-        // et un envoi mail mérite un accusé explicite.
+        // Blocking confirmation: the 3 s toast is easy to miss (user feedback),
+        // and sending an email deserves an explicit acknowledgement.
         alert(t("smtp.sent_confirm").replace("{recipients}", (r.recipients || []).join(", ")));
     }).catch(function(e) { alert(t("smtp.send_failed").replace("{msg}", e.message || String(e))); });
 };
@@ -4485,7 +4485,7 @@ window._sendSmtpDigestNow = function() {
 })();
 
 
-// FEAT-35 — préférences de notification (modale partagée ct_notifprefs)
+// FEAT-35 — notification preferences (shared ct_notifprefs modal)
 window._openNotifPrefs = function() {
     if (!window.ct_notifprefs) return;
     var isAdmin = !!(window._currentUser && window._currentUser.role === "admin");

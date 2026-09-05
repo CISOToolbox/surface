@@ -559,8 +559,8 @@ if (typeof _registerTranslations === "function") {
         "scanner.manual_host": "Manual host scan",
         "scanner.manual_domain": "Manual domain scan",
         "scanner.manual_discovery": "Manual discovery",
-        // NB: clé dupliquée dans la source ("Scheduled discovery" masquée) —
-        // seule la dernière valeur gagnait au runtime, conservée ici.
+        // NB: key duplicated in the source ("Scheduled discovery" shadowed) —
+        // only the last value won at runtime, kept here.
         "scanner.scheduled_discovery": "Auto discovery (CIDR)",
         // ── Jobs panel ─────────────────────────────────────
         "jobs.title": "Scans",

@@ -8,7 +8,7 @@
  *
  * Depends on ct_modal and ct_userpicker. All text goes through t()
  * with inline fallbacks. CSP-safe (data-click). Survives the
- * "+ Créer utilisateur" sub-modal via a deferred Promise that is
+ * "+ Create user" sub-modal via a deferred Promise that is
  * only resolved by the save/cancel/delete/extra button of the
  * terminal reopened instance.
  *
@@ -169,7 +169,7 @@
         var prefill = opts._prefill || {};
         var FM = opts.fieldMap || {};
         var hide = opts.hideFields || [];
-        // willReopen: set to true when "+ Créer utilisateur" triggers a
+        // willReopen: set to true when "+ Create user" triggers a
         // sub-modal. Prevents the outer deferred from resolving with null
         // when ct_modal closes the current instance to open the sub-modal.
         var willReopen = false;
@@ -579,7 +579,7 @@
                 }
             }
         }).then(function (result) {
-            // Skip resolution if this instance was torn down by a "+ Créer"
+            // Skip resolution if this instance was torn down by a "+ Create"
             // → the reopened instance owns the deferred resolution.
             if (willReopen)
                 return;

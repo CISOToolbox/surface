@@ -10,7 +10,7 @@
  * finding: header (back button + title + severity/status badges),
  * optional subheader (scanner + app + timestamps), info card
  * (target, CVE, description, evidence, screenshot, triage metadata,
- * notes), triage card (À corriger / Faux positif / Réinitialiser
+ * notes), triage card ("À corriger" / "Faux positif" / "Réinitialiser"
  * + optional AI + optional Delete) and, when relevant, a linked
  * measure card.
  *
@@ -64,8 +64,8 @@
  */
 (function () {
     "use strict";
-    // Tons partages : severite et statut d'un finding. Meme table qu'AppSec, pour
-    // que le meme etat porte le meme ton dans la vue partagee et dans le module.
+    // Shared tones: a finding's severity and status. Same table as AppSec, so
+    // that the same state carries the same tone in the shared view and in the module.
     var _FV_TONES = {
         critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
         new: "critical", to_fix: "high", false_positive: "neutral", fixed: "low",

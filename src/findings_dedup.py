@@ -62,7 +62,7 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
         if existing.measure and existing.measure.statut != "termine":
             existing.last_seen_at = now
             return "silenced"
-        # Measure is terminée OR no measure attached → reopen
+        # Measure is "terminée" OR no measure attached → reopen
         existing.status = "new"
         existing.title = fd.get("title", existing.title)
         existing.description = (fd.get("description", "") or "") + "\n\n[Reouvert : detecte a nouveau apres remediation]"

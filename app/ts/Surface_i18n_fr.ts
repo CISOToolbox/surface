@@ -389,7 +389,7 @@ if (typeof _registerTranslations === "function") {
 
         // ── Findings panel ─────────────────────────────────
         "findings.title":             "Findings",
-        // Libellés de findings reconstruits depuis type + evidence (cf. ct_findings.js)
+        // Finding labels rebuilt from type + evidence (see ct_findings.js)
         "finding.open_port.title":        "Port {port}/{protocol} ({service}) ouvert sur {address}",
         "finding.open_port.desc":         "Le service {service} écoute sur {address}:{port}/{protocol}.",
         "finding.open_port.sev.critical": "Service obsolète ou fortement exposé. À fermer immédiatement.",
@@ -423,7 +423,7 @@ if (typeof _registerTranslations === "function") {
         "finding.dmarc_weak.desc":              "Le DMARC est en monitoring, pas en application. Après une période d'observation, durcir vers quarantine ou reject. DMARC : {dmarc}",
         "finding.dkim_missing.title":           "DKIM non détecté sur {target}",
         "finding.dkim_missing.desc":            "Aucun sélecteur DKIM commun n'a été trouvé. Vérifier la configuration DKIM avec votre fournisseur mail.",
-        // smb_scan (add-on) — type dynamique (nom de règle) → gabarit par scanner
+        // smb_scan (add-on) — dynamic type (rule name) → per-scanner template
         "finding.smb_scan.title":               "Donnée sensible ({rule}) : {file}",
         "finding.smb_scan.desc":                "Un secret de type « {rule} » a été détecté dans un fichier de partage. Extrait : {match}",
         "finding.interesting_name.title":       "Fichier sensible par son nom : {file}",
@@ -450,7 +450,7 @@ if (typeof _registerTranslations === "function") {
         "finding.tls_self_signed.desc":         "Le certificat de {target} est auto-signé. Acceptable en interne, mais pas pour un service exposé publiquement.",
         "finding.tls_unverifiable.title":       "Certificat TLS non vérifiable sur {target}:443 (magasin CA limité)",
         "finding.tls_unverifiable.desc":        "La vérification système a échoué, mais l'analyse directe du certificat ne montre pas de problème — probablement une chaîne de confiance incomplète côté scanner. Aucun risque pour la cible.",
-        // Vague 3 — découvertes & résumés (dns_brute, typosquat, ct_logs, discovery)
+        // Wave 3 — discoveries & summaries (dns_brute, typosquat, ct_logs, discovery)
         "finding.dns_brute_discovery.title":    "DNS brute-force : {count} sous-domaine(s) découvert(s) pour {target}",
         "finding.dns_brute_discovery.desc":     "Le scan par force brute DNS a identifié {count} hostnames qui résolvent sous {target}.",
         "finding.typosquat_domain.title":       "Domaine lookalike actif : {lookalike}",
@@ -465,7 +465,7 @@ if (typeof _registerTranslations === "function") {
         "finding.host_discovered.desc":         "Un host est joignable sur {address}. Il a été ajouté aux hosts surveillés.",
         "finding.discovery_summary.title":      "Découverte sur {cidr} : {discovered_count} host(s) actif(s)",
         "finding.discovery_summary.desc":       "{discovered_count} hosts répondent au ping sweep sur {cidr}.",
-        // Vague 4 — erreurs de scan (titre générique traduit ; détail technique laissé brut)
+        // Wave 4 — scan errors (generic title translated; technical detail left raw)
         "finding.scanner_error.title":          "Échec du scanner",
         "finding.scanner_timeout.title":        "Délai de scan dépassé",
         "finding.parse_error.title":            "Erreur d'analyse du scan",
@@ -501,7 +501,7 @@ if (typeof _registerTranslations === "function") {
         "finding.screenshot_disabled.desc":     "Le scanner de captures nécessite playwright + chromium. Installez-les puis relancez le scan.",
         "finding.screenshot.title":             "Capture d'écran de {target}",
         "finding.screenshot.desc":              "Capture visuelle de {url}.",
-        // Labels de scanners (localisés ; backend en anglais pivot)
+        // Scanner labels (localized; backend uses English as pivot)
         "scanner.nmap_quick.label":       "Nmap (top 100 ports)",
         "scanner.nmap_standard.label":    "Nmap (top 1000 + détection de services)",
         "scanner.nmap_deep.label":        "Nmap (tous les ports + détection de services)",
@@ -585,8 +585,8 @@ if (typeof _registerTranslations === "function") {
         "scanner.manual_host":          "Scan host manuel",
         "scanner.manual_domain":        "Scan domaine manuel",
         "scanner.manual_discovery":     "Découverte manuelle",
-        // NB: clé dupliquée dans la source ("Découverte planifiée" masquée) —
-        // seule la dernière valeur gagnait au runtime, conservée ici.
+        // NB: key duplicated in the source ("Découverte planifiée" shadowed) —
+        // only the last value won at runtime, kept here.
         "scanner.scheduled_discovery":  "Auto discovery (CIDR)",
 
         // ── Jobs panel ─────────────────────────────────────

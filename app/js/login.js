@@ -4,14 +4,14 @@
 // Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
 // -----------------------------------------------------------------------------
 /**
- * Login page script — variante OAUTH (surface, appsec, watch).
- * Suite mode → redirection Pilot ; standalone → boutons OAuth
- * (Entra / Google / OIDC) révélés selon la conf backend + formulaire
- * token optionnel.
+ * Login page script — OAUTH variant (surface, appsec, watch).
+ * Suite mode → redirect to Pilot; standalone → OAuth buttons
+ * (Entra / Google / OIDC) revealed according to the backend config, plus an
+ * optional token form.
  *
- * Compilé vers login_oauth.js ; le script de build le copie sous le nom
- * app/js/login.js pour les modules concernés (cf. ts-build.sh).
- * Voir login.ts pour la note de factorisation.
+ * Compiled to login_oauth.js; the build script copies it as
+ * app/js/login.js for the modules concerned (see ts-build.sh).
+ * See login.ts for the factorisation note.
  */
 (function () {
     "use strict";

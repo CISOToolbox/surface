@@ -20,7 +20,7 @@
  *                ct_bulkbar scope.
  *   onRowClick — global function name (CSP-safe) invoked with the row
  *                object as single arg (via data-args). Omit for no-op.
- *   emptyHtml  — HTML shown when rows is empty (default "Aucun élément")
+ *   emptyHtml  — HTML shown when rows is empty (default "Aucun élément", i18n)
  *   bulk       — { scope } — enables the first checkbox column.
  *                ct_bulkbar selection is synced via data-bulk-scope /
  *                data-bulk-key attributes + data-bulk-all on the header.
