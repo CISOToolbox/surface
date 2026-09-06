@@ -1,6 +1,6 @@
 {
   "$comment": "Files replicated from a private upstream repository. Do NOT edit them here: the next propagation overwrites them and CI rejects local edits. See CONTRIBUTING.md, section 'Shared code'.",
-  "generated": "2026-09-06T06:05:45Z",
+  "generated": "2026-09-06T06:46:25Z",
   "checker": "check-replicated-files.py (run it in CI)",
   "files": {
     "Dockerfile": "sha256:c5618de4c623c610330142b9e35ef4853bc08fe0daac75f0720eeb47243c5482",
