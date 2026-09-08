@@ -217,22 +217,43 @@ def _to_dict(a: MonitoredAsset) -> dict:
 
 
 @router.get("/scanners-catalog")
-async def scanners_catalog(user: User = Depends(get_current_user)):
+async def scanners_catalog(user: User = Depends(get_current_user),
+                           db: AsyncSession = Depends(get_db)):
     """Return the available scanners per asset kind for the UI.
 
     Kinds are derived from the loaded scanners: the 3 base kinds are always
     present, plus any extra kind contributed by an add-on scanner (e.g.
     `file_share` from the SMB add-on). This way the add-target UI only offers
-    a target type when a scanner actually supports it."""
+    a target type when a scanner actually supports it.
+
+    Connector INSTANCES (FEAT-37) are listed as host scanners: on a host card
+    they are one scanner among others — unticking the connector stops its
+    findings for that host, exactly like unticking nmap stops port scans."""
     base = ["domain", "host", "ip_range"]
     extra = sorted({k for meta in SCANNER_REGISTRY.values() for k in meta.get("kinds", ())} - set(base))
-    return {
+    catalog = {
         kind: {
             "scanners": available_scanners_for_kind(kind),
             "defaults": DEFAULT_SCANNERS_BY_KIND.get(kind, []),
         }
         for kind in base + extra
     }
+    try:
+        from src.connectors_config import list_instances
+        from src.scanners import CONNECTOR_REGISTRY
+        if CONNECTOR_REGISTRY:
+            extras = await list_instances(db)
+            entries = [{"name": t, "label": m.get("label", t)}
+                       for t, m in sorted(CONNECTOR_REGISTRY.items())]
+            entries += [{"name": key,
+                         "label": (CONNECTOR_REGISTRY.get(info.get("type", ""), {})
+                                   .get("label", info.get("type", key)))
+                                  + " — " + info.get("label", key)}
+                        for key, info in sorted(extras.items())]
+            catalog["host"]["scanners"] = catalog["host"]["scanners"] + entries
+    except Exception:  # noqa: BLE001 — the catalog must render even without connectors
+        pass
+    return catalog
 
 
 @router.get("/addon-docs")

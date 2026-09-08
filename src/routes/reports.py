@@ -98,7 +98,10 @@ async def _aggregate_report(db: AsyncSession) -> dict[str, Any]:
         )
     )).all()
     by_sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    by_status = {"new": 0, "to_fix": 0, "false_positive": 0, "fixed": 0}
+    # closed_upstream initialised to 0 so the bucket exists even when empty:
+    # otherwise it only appears after the first connector-closed finding, and
+    # the report changes shape from one run to the next.
+    by_status = {"new": 0, "to_fix": 0, "false_positive": 0, "fixed": 0, "closed_upstream": 0}
     for sev, status, count in sev_status_rows:
         by_status[status] = by_status.get(status, 0) + count
         if status in ("new", "to_fix"):

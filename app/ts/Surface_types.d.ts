@@ -14,7 +14,10 @@
 /* ── Data model ────────────────────────────────────────────────── */
 
 type SurfaceSeverity = "critical" | "high" | "medium" | "low" | "info";
-type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed";
+// closed_upstream (FEAT-37): the upstream source no longer reports the
+// finding — fixed, or excepted on its side. The backend can return it, so
+// the type must admit it.
+type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed" | "closed_upstream";
 type SurfaceAssetKind = "domain" | "host" | "ip_range" | "file_share";
 type SurfaceJobStatus = "pending" | "running" | "completed" | "partial" | "failed";
 
@@ -173,6 +176,49 @@ interface SurfaceMonitoredPayload {
     config?: Record<string, any>;
 }
 
+interface SurfaceConnectorType {
+    name: string;
+    label: string;
+    interval_hours: number;
+}
+
+/** FEAT-37 — one connector configuration field.
+ *  `value` is ALWAYS empty for a secret field; `set` says whether it exists. */
+interface SurfaceConnectorField {
+    key: string;
+    label: string;
+    type: string;
+    required: boolean;
+    secret: boolean;
+    value: string;
+    set: boolean;
+}
+
+interface SurfaceConnectorReport {
+    connector?: string;
+    ok: boolean;
+    hosts?: number;
+    findings?: number;
+    closed?: number;
+    error?: string | null;
+    duration_s?: number;
+}
+
+interface SurfaceConnector {
+    name: string;
+    /** Connector TYPE (the add-on): several instances can share it. */
+    type?: string;
+    /** Extra instances are deletable; the default (bare type) is not. */
+    deletable?: boolean;
+    label: string;
+    interval_hours: number;
+    enabled: boolean;
+    configured: boolean;
+    last_run_at: string | null;
+    last_result: SurfaceConnectorReport | null;
+    fields: SurfaceConnectorField[];
+}
+
 interface SurfaceNucleiConfig {
     installed?: boolean;
     version?: string;
@@ -225,6 +271,12 @@ interface SurfaceAPIShape {
     listExclusions(): Promise<SurfaceExclusion[]>;
     addExclusion(data: SurfaceExclusionPayload): Promise<SurfaceExclusion>;
     deleteExclusion(id: string): Promise<null>;
+    listConnectors(): Promise<SurfaceConnector[]>;
+    listConnectorTypes(): Promise<SurfaceConnectorType[]>;
+    saveConnector(name: string, data: { values?: Record<string, string | null>; enabled?: boolean }): Promise<SurfaceConnector>;
+    runConnector(name: string): Promise<SurfaceConnectorReport>;
+    createConnectorInstance(ctype: string, label: string): Promise<{ name: string }>;
+    deleteConnectorInstance(name: string): Promise<{ ok: boolean }>;
     nucleiConfig(): Promise<SurfaceNucleiConfig>;
     nucleiUpdateConfig(data: Record<string, number>): Promise<unknown>;
     nucleiUpdateTemplates(): Promise<{ templates_count: number; stdout?: string }>;
@@ -287,6 +339,11 @@ interface Window {
 
     // Audit log
     _setAuditSearch?: (v: string) => void;
+    _toggleConnector?: (name: string, checked: boolean) => void;
+    _runConnector?: (name: string) => void;
+    _addConnector?: () => void;
+    _configureConnector?: (name: string) => void;
+    _deleteConnectorInstance?: (name: string) => void;
 
     // Scan jobs
     _setJobsScannerFilter?: (v: string) => void;

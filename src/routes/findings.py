@@ -50,7 +50,7 @@ async def list_findings(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed"}
+    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed", "closed_upstream"}
     _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)

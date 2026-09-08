@@ -348,6 +348,9 @@ window.AI_APP_CONFIG = {
             case "audit":
                 _renderAuditLog(c);
                 break;
+            case "connectors":
+                _renderConnectors(c);
+                break;
             default: _renderDashboard(c);
         }
         var tr = document.getElementById("toolbar-right");
@@ -478,14 +481,322 @@ window.AI_APP_CONFIG = {
         }
     }
     window._setAuditSearch = function (v) { _auditFilter.q = v; _refreshAuditBody(); };
+    // ═══════════════════════════════════════════════════════════════
+    // CONNECTORS (FEAT-37) — upstream source configuration
+    // ═══════════════════════════════════════════════════════════════
+    // The page is designed as if several connector TYPES existed even while
+    // Defender is the only one shipped: the admin "adds a connector" and picks
+    // its type, never "adds a Defender instance". Cards follow the suite's
+    // connector pattern (Pilot): a summary card with a status pill and actions,
+    // the schema-driven configuration lives in a modal. A secret field never
+    // has a value to display — the backend does not return it — so its input
+    // stays empty and its placeholder says whether a secret is already stored.
+    var _connectors = [];
+    var _connectorTypes = [];
+    function _isConnectorScanner(s) {
+        for (var i = 0; i < _connectors.length; i++) {
+            if (_connectors[i].name === s || _connectors[i].type === s.split(":")[0])
+                return true;
+        }
+        return false;
+    }
+    function _connectorReportHTML(r) {
+        if (!r)
+            return '<span class="ct-badge" data-tone="neutral">' + esc(t("conn.never_run")) + '</span>';
+        if (!r.ok) {
+            return '<span class="ct-badge" data-tone="critical">' + esc(t("conn.failed")) + '</span> '
+                + '<span class="ct-muted ct-text-label">' + esc(r.error || "") + '</span>';
+        }
+        return '<span class="ct-badge" data-tone="low">' + esc(t("conn.ok")) + '</span> '
+            + '<span class="ct-muted ct-text-label">' + esc(t("conn.summary")
+            .replace("{hosts}", String(r.hosts || 0))
+            .replace("{findings}", String(r.findings || 0))
+            .replace("{closed}", String(r.closed || 0))) + '</span>';
+    }
+    function _connectorTypeLabel(ctype) {
+        for (var i = 0; i < _connectorTypes.length; i++) {
+            if (_connectorTypes[i].name === ctype)
+                return _connectorTypes[i].label;
+        }
+        return ctype;
+    }
+    function _connectorCardHTML(k) {
+        var typeLabel = _connectorTypeLabel(k.type || k.name);
+        var instLabel = k.name.indexOf(":") >= 0 ? (k.label.split(" — ")[1] || k.name.split(":")[1]) : "";
+        var statusTone = k.enabled ? (k.configured ? "low" : "high") : "neutral";
+        var statusKey = !k.configured ? "conn.not_configured"
+            : k.enabled ? "conn.enabled" : "conn.disabled";
+        var h = '<div class="conn-card">';
+        h += '<div class="ct-flex ct-items-start ct-gap-2">';
+        h += '<div class="ct-flex-1">';
+        h += '<div class="ct-text-section ct-bold ct-ink">' + esc(typeLabel) + '</div>';
+        if (instLabel)
+            h += '<div class="ct-text-meta ct-muted ct-mt-1">' + esc(instLabel) + '</div>';
+        h += '</div>';
+        h += '<span class="ct-badge" data-tone="' + statusTone + '">' + esc(t(statusKey)) + '</span>';
+        h += '</div>';
+        h += '<div class="ct-text-meta ct-muted">'
+            + esc(t("conn.interval").replace("{h}", String(k.interval_hours))) + '</div>';
+        h += '<div class="ct-flex ct-items-center ct-gap-2 ct-text-label ct-row-wrap">';
+        h += '<span class="ct-muted">' + esc(t("conn.last_run")) + ' : '
+            + (k.last_run_at ? esc(new Date(k.last_run_at).toLocaleString()) : "-") + '</span>';
+        h += _connectorReportHTML(k.last_result);
+        h += '</div>';
+        h += '<div class="ct-flex ct-gap-2 ct-row-wrap conn-card-actions">';
+        h += '<button class="ct-btn" data-variant="primary" data-write data-click="_configureConnector" data-args=\''
+            + _da(k.name) + '\'>' + esc(t("conn.configure")) + '</button>';
+        h += '<button class="ct-btn" data-write data-click="_runConnector" data-args=\''
+            + _da(k.name) + '\'' + (k.configured ? '' : ' disabled') + '>'
+            + esc(t("conn.run_now")) + '</button>';
+        h += '<label class="ct-text-label ct-clickable ct-items-center ct-flex ct-gap-1"><input type="checkbox" data-change="_toggleConnector" data-args=\''
+            + _da(k.name) + '\' data-pass-checked' + (k.enabled ? ' checked' : '') + '> '
+            + esc(t("conn.enabled")) + '</label>';
+        h += '<span class="ct-flex-1"></span>';
+        if (k.deletable) {
+            h += '<button class="ct-btn" data-variant="ghost" data-write data-click="_deleteConnectorInstance" data-args=\''
+                + _da(k.name) + '\' title="' + esc(t("conn.delete_instance")) + '" aria-label="' + esc(t("conn.delete_instance")) + '" style="color:var(--ct-critical)">'
+                + esc(t("conn.delete")) + '</button>';
+        }
+        h += '</div>';
+        h += '</div>';
+        return h;
+    }
+    async function _renderConnectors(c) {
+        c.innerHTML = '<h2 class="ct-m-0 ct-mb-3">' + esc(t("conn.title")) + '</h2>'
+            + '<p class="text-muted">' + esc(t("common.loading")) + '</p>';
+        try {
+            var res = await Promise.all([SurfaceAPI.listConnectors(), SurfaceAPI.listConnectorTypes()]);
+            _connectors = res[0] || [];
+            _connectorTypes = res[1] || [];
+        }
+        catch (e) {
+            c.innerHTML = '<p class="ct-text-critical">' + esc(e.message || String(e)) + '</p>';
+            return;
+        }
+        var h = '<div class="ct-row ct-row-wrap ct-items-center ct-mb-2">';
+        h += '<h2 class="ct-m-0">' + esc(t("conn.title")) + '</h2>';
+        h += '<span class="ct-flex-1"></span>';
+        if (_connectorTypes.length) {
+            h += '<button class="ct-btn" data-variant="primary" data-write data-click="_addConnector">'
+                + _icon("plus", 14) + ' ' + esc(t("conn.add")) + '</button>';
+        }
+        h += '</div>';
+        h += '<p class="ct-text-label ct-muted ct-mb-3">' + esc(t("conn.intro")) + '</p>';
+        if (!_connectorTypes.length) {
+            // No connector add-on in this image: say so, rather than leaving an
+            // empty page that looks like an outage.
+            h += '<div class="ct-empty-state">' + esc(t("conn.none_installed")) + '</div>';
+            c.innerHTML = h;
+            return;
+        }
+        if (!_connectors.length) {
+            h += '<div class="ct-empty-state">' + esc(t("conn.none_configured")) + '</div>';
+            c.innerHTML = h;
+            return;
+        }
+        h += '<div class="conn-grid">';
+        _connectors.forEach(function (k) { h += _connectorCardHTML(k); });
+        h += '</div>';
+        c.innerHTML = h;
+    }
+    function _connectorByName(name) {
+        for (var i = 0; i < _connectors.length; i++) {
+            if (_connectors[i].name === name)
+                return _connectors[i];
+        }
+        return null;
+    }
+    function _rerenderConnectors() {
+        _renderConnectors(document.getElementById("content"));
+    }
+    // Adding or removing a connector instance changes the set of host scanners,
+    // so the cached catalog (loaded once at boot) must be refreshed — otherwise
+    // the host scanner checkboxes would not reflect a just-added connector.
+    function _reloadScannersCatalog() {
+        return SurfaceAPI.scannersCatalog()
+            .then(function (d) { _scannersCatalog = d || {}; })
+            .catch(function () { });
+    }
+    // ── Configuration modal (schema-driven) ─────────────────────────
+    function _connectorFormHTML(k) {
+        var h = "";
+        for (var j = 0; j < k.fields.length; j++) {
+            var f = k.fields[j];
+            var ph = f.secret
+                ? (f.set ? t("conn.secret_set") : t("conn.secret_empty"))
+                : "";
+            h += '<div class="ct-field"><label class="surface-field-lbl">'
+                + esc(f.label) + (f.required ? ' *' : '') + '</label>';
+            h += '<input type="' + (f.secret ? 'password' : 'text') + '" class="ct-input"'
+                + ' id="conn-cfg-' + esc(f.key) + '"'
+                + ' value="' + esc(f.value) + '" placeholder="' + esc(ph) + '"'
+                + ' autocomplete="off">';
+            h += '</div>';
+        }
+        return h;
+    }
+    /** Entered values from the config modal. A secret field left empty is NOT
+     *  sent: the backend would keep the existing secret anyway, but sending
+     *  nothing makes the intent explicit and keeps the secret out of the body. */
+    function _connectorModalValues(k) {
+        var out = {};
+        for (var i = 0; i < k.fields.length; i++) {
+            var f = k.fields[i];
+            var el = document.getElementById("conn-cfg-" + f.key);
+            if (!el)
+                continue;
+            var v = el.value;
+            if (f.secret && !v.trim())
+                continue;
+            out[f.key] = v;
+        }
+        return out;
+    }
+    window._configureConnector = function (name) {
+        var k = _connectorByName(name);
+        if (!k)
+            return;
+        ct_modal.open({
+            title: k.label,
+            body: _connectorFormHTML(k),
+            size: "md",
+            buttons: [
+                { id: "cancel", label: t("btn_cancel") || "Annuler" },
+                { id: "save", primary: true, label: t("conn.save"),
+                    result: function () { return _connectorModalValues(k); } }
+            ]
+        }).then(function (values) {
+            if (!values || typeof values !== "object")
+                return;
+            SurfaceAPI.saveConnector(name, { values: values })
+                .then(function () { showStatus(t("conn.saved")); _rerenderConnectors(); })
+                .catch(function (e) { showStatus(e.message || t("common.error"), true); });
+        });
+    };
+    window._toggleConnector = function (name, checked) {
+        SurfaceAPI.saveConnector(name, { enabled: !!checked })
+            .then(function () {
+            showStatus(t(checked ? "conn.enabled_on" : "conn.enabled_off"));
+            _rerenderConnectors();
+        })
+            .catch(function (e) { showStatus(e.message || t("common.error"), true); });
+    };
+    window._runConnector = function (name) {
+        showStatus(t("conn.running"));
+        SurfaceAPI.runConnector(name)
+            .then(function (r) {
+            // A failed import comes back 200 with ok:false — the only way to
+            // make the upstream error readable. Surface it as an error, or a
+            // failure would read as a success.
+            if (!r || !r.ok) {
+                showStatus(t("conn.failed") + " : " + (r && r.error ? r.error : ""), true);
+            }
+            else {
+                showStatus(t("conn.summary")
+                    .replace("{hosts}", String(r.hosts || 0))
+                    .replace("{findings}", String(r.findings || 0))
+                    .replace("{closed}", String(r.closed || 0)));
+            }
+            _rerenderConnectors();
+        })
+            .catch(function (e) { showStatus(e.message || t("common.error"), true); });
+    };
+    // ── Add a connector (type is CHOSEN, even with a single type today) ──
+    window._addConnector = function () {
+        var body = '<div class="ct-field"><label class="surface-field-lbl">'
+            + esc(t("conn.type")) + '</label><select class="ct-select" id="conn-new-type">';
+        _connectorTypes.forEach(function (ty) {
+            body += '<option value="' + esc(ty.name) + '">' + esc(ty.label) + '</option>';
+        });
+        body += '</select></div>';
+        body += '<div class="ct-field"><label class="surface-field-lbl">'
+            + esc(t("conn.instance_label")) + '</label>'
+            + '<input class="ct-input" id="conn-new-instance" placeholder="'
+            + esc(t("conn.instance_ph")) + '"></div>';
+        ct_modal.open({
+            title: t("conn.add"),
+            body: body,
+            size: "sm",
+            onOpen: function () { var el = document.getElementById("conn-new-instance"); if (el)
+                el.focus(); },
+            buttons: [
+                { id: "cancel", label: t("btn_cancel") || "Annuler" },
+                { id: "create", primary: true, label: t("conn.create"),
+                    result: function () {
+                        return {
+                            type: (document.getElementById("conn-new-type") || { value: "" }).value,
+                            label: (document.getElementById("conn-new-instance") || { value: "" }).value.trim()
+                        };
+                    } }
+            ]
+            // ct_modal.open resolves the RAW value returned by the clicked
+            // button's result(); cancel resolves a falsy value.
+        }).then(function (res) {
+            if (!res || typeof res !== "object" || !res.type || !res.label)
+                return;
+            SurfaceAPI.createConnectorInstance(res.type, res.label)
+                .then(function () { return _reloadScannersCatalog(); })
+                .then(function () { showStatus(t("conn.instance_created")); _rerenderConnectors(); })
+                .catch(function (e) { showStatus(e.message || t("common.error"), true); });
+        });
+    };
+    window._deleteConnectorInstance = function (name) {
+        var k = _connectorByName(name);
+        ct_modal.confirm({
+            title: t("conn.delete_instance"),
+            message: t("conn.delete_confirm").replace("{label}", k ? k.label : name),
+            danger: true,
+            confirmLabel: t("btn_delete") || "Supprimer"
+        }).then(function (ok) {
+            if (!ok)
+                return;
+            SurfaceAPI.deleteConnectorInstance(name)
+                .then(function () { return _reloadScannersCatalog(); })
+                .then(function () { showStatus(t("conn.instance_deleted")); _rerenderConnectors(); })
+                .catch(function (e) { showStatus(e.message || t("common.error"), true); });
+        });
+    };
     window.renderAll = renderPanel;
     window._initDataAndRender = function () { _panel = "dashboard"; _loadAndRender(); };
     // ═══════════════════════════════════════════════════════════════
     // SCAN JOBS (real nmap scans, async background tasks)
     // ═══════════════════════════════════════════════════════════════
+    // name -> label for every scanner AND connector actually installed in this
+    // image, derived once from the scanners catalog (which the backend builds
+    // from the live SCANNER_REGISTRY + CONNECTOR_REGISTRY). This is what makes
+    // every scanner-type control — filter pills, host checkboxes, labels —
+    // reflect what is really installed, with no hardcoded list.
+    function _installedScannerLabels() {
+        var out = {};
+        var cat = _scannersCatalog || {};
+        Object.keys(cat).forEach(function (kind) {
+            ((cat[kind] || {}).scanners || []).forEach(function (sc) {
+                if (sc && sc.name)
+                    out[sc.name] = sc.label || sc.name;
+            });
+        });
+        return out;
+    }
     function _scannerLabel(s) {
         if (!s)
             return "";
+        // Runtime catalog first: the authoritative label for anything installed,
+        // connector instances included.
+        var installed = _installedScannerLabels();
+        if (installed[s])
+            return installed[s];
+        // A connector instance key ("defender:acme") whose base type is installed
+        // but which carries a per-instance suffix: derive "Type (instance)".
+        if (s.indexOf(":") >= 0) {
+            var head = s.split(":", 1)[0];
+            if (installed[head])
+                return installed[head] + " (" + s.slice(head.length + 1) + ")";
+            var k = _connectorByName(s);
+            if (k)
+                return k.label;
+            var cap = head.charAt(0).toUpperCase() + head.slice(1);
+            return cap + " (" + s.slice(head.length + 1) + ")";
+        }
         var key = {
             "nmap": "scanner.nmap",
             "scheduled-host": "scanner.scheduled_host",
@@ -1583,7 +1894,7 @@ window.AI_APP_CONFIG = {
         // active  — actionable findings EXCLUDING info (drives alert counts)
         // byStatus— raw status counts (all severities)
         var bySev = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-        var byStatus = { new: 0, false_positive: 0, to_fix: 0, fixed: 0 };
+        var byStatus = { new: 0, false_positive: 0, to_fix: 0, fixed: 0, closed_upstream: 0 };
         var active = [];
         _findings.forEach(function (f) {
             if (byStatus[f.status] != null)
@@ -1606,8 +1917,17 @@ window.AI_APP_CONFIG = {
                 return;
             if (f.severity === "info")
                 return;
-            var tgt = (f.target || "").split(":")[0];
-            if (!tgt)
+            // Group on the host the finding ATTACHES to: connector findings carry
+            // an opaque stable target (machineId|cveId|product) and name their
+            // host in the evidence — keying on the raw target filled this widget
+            // with unreadable strings, the documented symptom of the first
+            // delivery. Recommendations are org-wide: no host, skip them.
+            if (f.type === "defender_recommendation")
+                return;
+            var ev = f.evidence || {};
+            var tgt = String(ev.hostname || ev.host || ev.address || "").toLowerCase()
+                || (f.target || "").split(":")[0];
+            if (!tgt || tgt.indexOf("|") >= 0)
                 return;
             if (!map[tgt])
                 map[tgt] = { host: tgt, total: 0, maxSev: 9 };
@@ -2318,13 +2638,19 @@ window.AI_APP_CONFIG = {
             { v: "to_fix", key: "status.to_fix" },
             { v: "false_positive", key: "dash.false_positive" },
             { v: "fixed", key: "status.fixed" },
+            // FEAT-37 — closed because the upstream source no longer reports it.
+            // Placed after "fixed": it is a closure, not a state to work on.
+            { v: "closed_upstream", key: "status.closed_upstream", help: "status.closed_upstream_help" },
             { v: "", key: "status.all" }
         ];
         h += '<div class="filter-pills-row">';
         h += '<span class="filter-pills-lbl">' + esc(t("findings.filter.status")) + '</span>';
         statusOptions.forEach(function (opt) {
             var on = _filterStatus === opt.v;
-            h += '<button type="button" class="filter-pill status-pill-' + (opt.v || "all") + (on ? " active" : "") + '" data-click="_setStatusFilter" data-args=\'' + _da(opt.v) + '\'>' + esc(t(opt.key)) + '</button>';
+            // Tooltip when the pill carries one: "Closed upstream" is not
+            // self-explanatory the way "New" is.
+            var help = opt.help ? ' title="' + esc(t(opt.help)) + '"' : '';
+            h += '<button type="button" class="filter-pill status-pill-' + (opt.v || "all") + (on ? " active" : "") + '"' + help + ' data-click="_setStatusFilter" data-args=\'' + _da(opt.v) + '\'>' + esc(t(opt.key)) + '</button>';
         });
         h += '</div>';
         // ── Severity multi-select pills ────────────────────────
@@ -2650,6 +2976,7 @@ window.AI_APP_CONFIG = {
             linked = _measures.find(function (x) { return x.id === f.measure_id; }) || null;
         var fd = Object.assign({}, f, { title: _findingTitle(f), description: _findingDesc(f) });
         c.innerHTML = ct_finding_view.render(fd, {
+            infoRows: _defenderInfoRows(f),
             backHandler: "_backToFindings",
             triageHandler: "_triageDetail",
             aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
@@ -2658,6 +2985,58 @@ window.AI_APP_CONFIG = {
             linkedMeasure: linked || undefined,
             cardClass: "surface-card"
         });
+    }
+    // ── Defender finding enrichment (FEAT-37) ──────────────────────
+    // Connector findings name the machines/users concerned and deep-link to the
+    // Defender console so the analyst can drill down without hunting. Links are
+    // built from ids we received from the API, never from free text.
+    var _DEFENDER_CONSOLE = "https://security.microsoft.com";
+    function _defenderInfoRows(f) {
+        if ((f.type || "").indexOf("defender_") !== 0)
+            return [];
+        var ev = f.evidence || {};
+        var rows = [];
+        var link = function (url, label) {
+            return '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(label) + '</a>';
+        };
+        if (f.type === "defender_cve") {
+            var machine = [ev.hostname, ev.address, ev.os].filter(function (x) { return !!x; }).join(" · ");
+            if (machine)
+                rows.push({ label: t("fdx.machine"), value: machine });
+            var links = [];
+            if (ev.machine_id) {
+                links.push(link(_DEFENDER_CONSOLE + "/machines/" + encodeURIComponent(ev.machine_id) + "/overview", t("fdx.open_machine")));
+            }
+            if (ev.cve) {
+                links.push(link(_DEFENDER_CONSOLE + "/vulnerabilities/vulnerability/" + encodeURIComponent(ev.cve) + "/overview", t("fdx.open_cve")));
+            }
+            if (links.length)
+                rows.push({ label: t("fdx.console"), valueHtml: links.join(" · ") });
+        }
+        if (f.type === "defender_recommendation") {
+            var machines = Array.isArray(ev.machines) ? ev.machines : [];
+            if (machines.length) {
+                var shown = machines.slice(0, 20);
+                var chips = shown.map(function (m) {
+                    return '<span class="ct-badge" data-tone="neutral">' + esc(m) + '</span>';
+                }).join(" ");
+                if (machines.length > shown.length) {
+                    chips += ' <span class="ct-muted ct-text-label">+' + (machines.length - shown.length) + '</span>';
+                }
+                rows.push({ label: t("fdx.machines").replace("{n}", String(ev.exposed_machines || machines.length)),
+                    valueHtml: chips });
+            }
+            else if (ev.exposed_machines) {
+                rows.push({ label: t("fdx.machines").replace("{n}", String(ev.exposed_machines)), value: "" });
+            }
+            // Deep link to THIS recommendation (the portal opens its flyout via
+            // recommendationId); if the portal ignores the param it degrades to
+            // the list — never worse than the generic link.
+            rows.push({ label: t("fdx.console"),
+                valueHtml: link(_DEFENDER_CONSOLE + "/security-recommendations?recommendationId="
+                    + encodeURIComponent(f.target || ""), t("fdx.open_reco")) });
+        }
+        return rows;
     }
     // v0.3 — AI triage button: sends the finding to the configured LLM
     // (via ai_common.js) and asks for a structured JSON response.

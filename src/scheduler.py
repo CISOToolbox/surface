@@ -26,7 +26,8 @@ from sqlalchemy import select
 from src.database import async_session
 from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, is_excluded
-from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, resolve_first_ip, run_enabled_scanners
+from src.scanners import (CONNECTOR_REGISTRY, DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY,
+                          resolve_first_ip, run_enabled_scanners)
 
 logger = logging.getLogger("surface.scheduler")
 
@@ -63,6 +64,14 @@ async def _scan_one(asset_id) -> None:
         kind = asset.kind
         value = asset.value
         enabled_scanners = list(asset.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(kind, [])
+        # Connector-only host (e.g. enabled_scanners=["defender"]): nothing in
+        # the SCANNER registry to run — the connector feeds it on its own
+        # cadence. Stamp last_scan_at and skip, or the scheduler would create
+        # an empty ScanJob per cycle and per host, polluting the Scans page.
+        if not any(sc in SCANNER_REGISTRY for sc in enabled_scanners):
+            asset.last_scan_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
         scanner_name = _SCANNER_BY_KIND.get(kind, "scheduled")
         stealth = bool(asset.stealth_mode)
         cfg = dict(asset.config or {})
@@ -450,6 +459,7 @@ async def run_scheduler() -> None:
     digest_ticks = 0
     rebalance_ticks = 0
     nuclei_ticks = 0
+    connector_ticks = 0
     while True:
         try:
             await _tick()
@@ -482,4 +492,105 @@ async def run_scheduler() -> None:
                 await _maybe_update_nuclei_templates()
             except Exception:
                 logger.exception("scheduler: nuclei update crashed")
+        # FEAT-37 — run due connectors every ~10 min, as a detached task: a
+        # tenant import can take minutes and must not stall the scan tick
+        # (the first delivery ran it inline and froze the scheduler). The
+        # per-connector lock inside makes a pass that overlaps the previous
+        # one, or a manual run, a no-op instead of a duplicate import.
+        connector_ticks += 1
+        if connector_ticks >= CONNECTOR_CHECK_INTERVAL_TICKS:
+            connector_ticks = 0
+            # The set keeps a strong reference until completion: a bare local
+            # is reassigned on the next tick, and asyncio only holds weak
+            # references to tasks — a long import could be garbage-collected
+            # mid-flight (review finding).
+            task = asyncio.create_task(_run_due_connectors())
+            _CONNECTOR_TASKS.add(task)
+            task.add_done_callback(_log_connector_task)
         await asyncio.sleep(TICK_SECONDS)
+
+# Connectors declare their own interval_hours; this is only how often we come
+# back to LOOK. 10 min is fine for a 6 h cadence and keeps the tick cheap.
+CONNECTOR_CHECK_INTERVAL_TICKS = 10
+
+
+_CONNECTOR_TASKS: set = set()
+
+
+def _log_connector_task(task: "asyncio.Task") -> None:
+    """Surfaces a crashed detached pass — a swallowed exception would retry
+    silently forever, which is how the first delivery hid its rollback loop."""
+    _CONNECTOR_TASKS.discard(task)
+    try:
+        task.result()
+    except Exception:
+        logger.exception("connector pass crashed")
+
+
+async def _run_due_connectors() -> None:
+    """FEAT-37 — runs the enabled connectors whose interval has elapsed.
+
+    A connector only runs if it is **enabled AND fully configured**: without
+    credentials it would fail on every pass and fill the error log for
+    nothing. Acceptance criterion 1 of the spec follows — with no connector
+    configured, Surface behaves exactly as before.
+
+    Each connector is isolated: one blowing up does not stop the next. The
+    per-connector lock is shared with the manual-run route; a locked
+    connector is simply skipped (it is already running).
+    """
+    from src.connectors_config import (LAST_RUN, _raw, instance_type,
+                                       is_configured, is_enabled, list_instances,
+                                       read_config, record_run)
+    from src.connectors_run import lock_for, run_connector
+
+    if not CONNECTOR_REGISTRY:
+        return
+
+    # One pass per INSTANCE: the default one per installed type, plus every
+    # registered extra instance (several Defender tenants, each with its own
+    # config, lock, cadence and reconciliation scope).
+    async with async_session() as db:
+        extras = await list_instances(db)
+    instances: list[tuple[str, dict]] = [(t, m) for t, m in CONNECTOR_REGISTRY.items()]
+    for key, info in extras.items():
+        meta = CONNECTOR_REGISTRY.get(info.get("type", instance_type(key)))
+        if meta is not None:
+            instances.append((key, meta))
+
+    now = datetime.now(timezone.utc)
+    for name, meta in instances:
+        lock = lock_for(name)
+        if lock.locked():
+            logger.info("connector '%s' already running — skipped", name)
+            continue
+        try:
+            async with lock:
+                async with async_session() as db:
+                    schema = meta.get("config_schema", []) or []
+                    if not await is_enabled(db, name):
+                        continue
+                    if not await is_configured(db, name, schema):
+                        logger.info("connector '%s' enabled but incomplete — skipped", name)
+                        continue
+
+                    last = (await _raw(db, name)).get(LAST_RUN, "")
+                    if last:
+                        try:
+                            due = datetime.fromisoformat(last) + timedelta(
+                                hours=float(meta.get("interval_hours", 6) or 6))
+                            if now < due:
+                                continue
+                        except ValueError:
+                            pass    # unreadable timestamp: rerun
+                    cfg = await read_config(db, name, schema)
+                    report = await run_connector(db, name, meta, cfg)
+                    # Timestamped even on failure — otherwise a failing
+                    # connector would rerun on every pass (see record_run).
+                    await record_run(db, name, report)
+                    await db.commit()
+                    logger.info("connector '%s': ok=%s hosts=%s findings=%s closed=%s",
+                                name, report.get("ok"), report.get("hosts"),
+                                report.get("findings"), report.get("closed"))
+        except Exception:
+            logger.exception("connector '%s' pass failed", name)

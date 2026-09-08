@@ -150,6 +150,34 @@ def shodan_key_masked(key: str | None) -> str:
 
 SCANNER_REGISTRY: dict[str, dict[str, Any]] = {}
 
+# ── Connectors (FEAT-37) ──────────────────────────────────────
+# A connector is NOT a scanner: it pulls a tenant-wide inventory instead of
+# probing one target, and it DISCOVERS hosts — they are its product, not its
+# starting point. Add-ons may expose:
+#
+#   SURFACE_CONNECTORS = { "<name>": {
+#       "label":         str,
+#       "callable":      async fn(config: dict) -> dict,   # see below
+#       "config_schema": [ {key, label, type, secret?, required?} ],
+#       "interval_hours": int,       # default import cadence
+#   } }
+#
+# The callable returns:
+#   { "ok": bool,            # did the import run to completion? Gates the
+#                            # reconciliation — an error mid-pagination must
+#                            # not close a single finding
+#     "hosts":    [ {...} ], # discovered machines
+#     "findings": [ {...} ], # findings, WITHOUT their dedup_key
+#     "excepted": [ {type, target, reason} ],  # upstream exceptions, closed
+#                            # with their motive (criterion 10)
+#     "error":    str | None }
+#
+# Dedup keys are NOT provided by the connector: they are derived from
+# scanner|type|target by the same function as the insertion. Two separate
+# computations would diverge, and the reconciliation would close, on every
+# import, what it just inserted.
+CONNECTOR_REGISTRY: dict[str, dict[str, Any]] = {}
+
 
 DEFAULT_SCANNERS_BY_KIND = {
     "domain": ["email_security", "typosquatting", "tls", "ct_logs", "dns_brute", "takeover"],
@@ -203,6 +231,9 @@ def _load_addon_scanners() -> None:
                     for name, entry in (getattr(mod, "SURFACE_SCANNERS", {}) or {}).items():
                         SCANNER_REGISTRY[name] = entry
                         logger.info("Loaded add-on scanner '%s' from %s", name, fpath)
+                    for name, entry in (getattr(mod, "SURFACE_CONNECTORS", {}) or {}).items():
+                        CONNECTOR_REGISTRY[name] = entry
+                        logger.info("Loaded add-on connector '%s' from %s", name, fpath)
                     for kind, names in (getattr(mod, "SURFACE_DEFAULT_SCANNERS", {}) or {}).items():
                         DEFAULT_SCANNERS_BY_KIND.setdefault(kind, [])
                         for n in names:

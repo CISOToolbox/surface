@@ -9,6 +9,8 @@ exists. The behavior depends on the existing finding's status:
         measure not 'termine' → keep frozen, bump last_seen_at
         measure  'termine'    → reopen as 'new' (the issue came back after fix)
     fixed          → reopen as 'new'
+    closed_upstream → reopen as 'new' (the upstream source lists it again:
+                      the fix was undone, or the exception was lifted)
 
 The dedup key is `<scanner>|<type>|<target>`. Same key = same logical issue
 across rescans. For findings without a target (rare) we fall back to title hash.
@@ -74,10 +76,18 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
         existing.last_seen_at = now
         return "reopened"
 
-    if existing.status == "fixed":
+    # FEAT-37 — closed because the upstream source stopped reporting it. It
+    # reappears: either the fix was undone, or the exception was lifted. Both
+    # ways it is an open finding again, and the reopening is handled like a
+    # "fixed" one. This status is NOT frozen, unlike false_positive: nobody
+    # decided to ignore it, the source merely went quiet.
+    if existing.status in ("fixed", "closed_upstream"):
+        _motif = ("[Reouvert : de nouveau remonte par la source amont]"
+                  if existing.status == "closed_upstream"
+                  else "[Reouvert : detecte a nouveau]")
         existing.status = "new"
         existing.title = fd.get("title", existing.title)
-        existing.description = (fd.get("description", "") or "") + "\n\n[Reouvert : detecte a nouveau]"
+        existing.description = (fd.get("description", "") or "") + "\n\n" + _motif
         existing.evidence = fd.get("evidence", {}) or {}
         existing.severity = fd.get("severity", existing.severity)
         existing.last_seen_at = now

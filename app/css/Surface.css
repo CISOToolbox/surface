@@ -1104,3 +1104,8 @@
 
 /* Extracted from the markup: the class existed, its style lived next to it. */
 .appsec-filter { min-width:200px; }
+
+/* ── Connectors page (FEAT-37) — same card pattern as the suite ── */
+.conn-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:14px; }
+.conn-card { background:var(--ct-surface); border:1px solid var(--ct-line); border-radius:12px; padding:18px; display:flex; flex-direction:column; gap:10px; }
+.conn-card-actions { border-top:1px solid var(--ct-line); padding-top:10px; margin-top:auto; }

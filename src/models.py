@@ -20,6 +20,15 @@ class FindingStatus(str, Enum):
     FALSE_POSITIVE = "false_positive"
     TO_FIX = "to_fix"
     FIXED = "fixed"
+    # FEAT-37 — the upstream source no longer reports this finding. A connector
+    # (Defender and its kind) cannot tell "fixed" from "excepted as a false
+    # positive": both present as an absence from the feed. This status says
+    # what is known, and nothing more. Marking it FIXED would assert a fix
+    # nobody has proof of; FALSE_POSITIVE would assert a human decision that
+    # may never have happened.
+    #
+    # The column is a String(30), not a SQL enum: no migration needed.
+    CLOSED_UPSTREAM = "closed_upstream"
 
 
 class ScanJobStatus(str, Enum):
@@ -153,7 +162,7 @@ class MonitoredAsset(Base):
     __tablename__ = "monitored_assets"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
-    kind = Column(String(20), nullable=False, default="domain")  # domain | ip | ip_range
+    kind = Column(String(20), nullable=False, default="domain")  # domain | host | ip_range | file_share
     value = Column(String(500), nullable=False)
     label = Column(String(255), nullable=True, default="")
     notes = Column(Text, nullable=True, default="")

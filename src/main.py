@@ -22,6 +22,7 @@ from src.routes.reports import router as reports_router
 from src.routes.scans import router as scans_router
 from src.routes.users import router as users_router
 from src.routes.audit import router as audit_router
+from src.routes.connectors import router as connectors_router
 from src.version_common import version_payload
 
 # Suite-integration routers — only present in the full suite build;
@@ -108,6 +109,7 @@ app.include_router(ai_router)
 app.include_router(reports_router)
 app.include_router(users_router)
 app.include_router(audit_router)
+app.include_router(connectors_router)
 from src.routes.notifications import router as notifications_router
 app.include_router(notifications_router)
 if internal_router is not None:
