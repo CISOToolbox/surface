@@ -1,6 +1,6 @@
 {
   "$comment": "Files replicated from a private upstream repository. Do NOT edit them here: the next propagation overwrites them and CI rejects local edits. See CONTRIBUTING.md, section 'Shared code'.",
-  "generated": "2026-09-08T13:28:16Z",
+  "generated": "2026-09-08T18:32:16Z",
   "checker": "check-replicated-files.py (run it in CI)",
   "files": {
     "Dockerfile": "sha256:c5618de4c623c610330142b9e35ef4853bc08fe0daac75f0720eeb47243c5482",
@@ -68,7 +68,7 @@
     "app/img/modules/vendor.svg": "sha256:f27187dc0e5dc8aa5996e0a31bcfe155b11e1968afacfaac30383878775b4316",
     "app/img/modules/watch.svg": "sha256:1e1e6980a9847d2025abaee4a6e2a43955aba20e53afcc4510fcb0e463c707eb",
     "app/index.html": "sha256:1a3050e84acc787606fdf58140d7401fc79466d2cd3a27911f19f9f8f8effe5c",
-    "app/js/Surface_app.js": "sha256:07a1c94255caabc3664e4cf6ec9e1a93c4eb300247a1f25c2e24e8137cbc1727",
+    "app/js/Surface_app.js": "sha256:30db9c5e72ca6d51c23f1f35f1a4f85dd2ac117c53b0fd43423d8c1e124a865e",
     "app/js/Surface_config.js": "sha256:5e5b848cadd5bbac7367625477e6fd5cba9ba3cb9272eee648ac76112c613d94",
     "app/js/Surface_i18n_en.js": "sha256:e900573524e0c4d1a47ca18e548daa74e4ce79ae19c55769d75cd4dbc57b2c96",
     "app/js/Surface_i18n_fr.js": "sha256:ffb32e34770a4673d6716690023570e0f0223de605e0496414a64a540e586aab",
@@ -93,7 +93,7 @@
     "app/js/login.js": "sha256:1ed0ef62e9a1022dfb8975f866817cc9339b6d16b846900b4aa8b8682f8741e9",
     "app/js/surface_api.js": "sha256:db9e0c86607363e82502f58d6f5b68932673b3581d35b42e5f008f83180d9be5",
     "app/login.html": "sha256:a4ee781e450a565d64c290a6dfd1a1f5c5a68a0bc869758c74eb0ef97eb7a7a3",
-    "app/ts/Surface_app.ts": "sha256:d78da662ac1583173ad3ba5cc9a0ceebbaabb9dbd21343da8052cfa14e3603dc",
+    "app/ts/Surface_app.ts": "sha256:568e6d3a3e7f595807c63800535b2f73cdd138ee832f6ad95e31ec38de4c2d82",
     "app/ts/Surface_config.ts": "sha256:5e5b848cadd5bbac7367625477e6fd5cba9ba3cb9272eee648ac76112c613d94",
     "app/ts/Surface_i18n_en.ts": "sha256:c0dbaa32bcaa77a6b446d52f3f9b5a8aa7757971b7ce7487044f04777f03dfb3",
     "app/ts/Surface_i18n_fr.ts": "sha256:2ed9c3462cbfcb65c2854a37d3bd4d3cc863d26db86a8032ff67672026335196",

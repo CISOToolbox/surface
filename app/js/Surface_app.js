@@ -4036,8 +4036,11 @@ window.AI_APP_CONFIG = {
             else {
                 h += '<div class="host-card-findings empty">' + esc(t("hosts.findings.none")) + '</div>';
             }
-            // Footer with a scanner count + quick-edit button. Stops propagation
-            // so the click doesn't bubble to the host-card "open detail" handler.
+            // Footer with a scanner count + edit button opening the full asset
+            // modal (enabled, frequency, scanners…) — the same one as the
+            // Surveillance table. The scanner-only dialog stays for bulk edits.
+            // Stops propagation so the click doesn't bubble to the card's
+            // "open detail" handler.
             var scs = a.enabled_scanners || [];
             h += '<div class="host-card-footer">';
             h += '<span class="host-card-scancount">' + _icon("search", 12) + ' ' + scs.length + ' ' + esc(t("hosts.scanners")) + '</span>';
@@ -4047,7 +4050,7 @@ window.AI_APP_CONFIG = {
                 h += '<button class="ct-btn" data-size="sm" data-variant="success" data-click="_toggleHostFromDetail" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("host.enable_scan")) + '">' + _icon("check", 12) + ' ' + esc(t("hosts.reactivate")) + '</button>';
             }
             else {
-                h += '<button class="ct-btn" data-size="sm" data-click="_editScannersDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("hosts.configure_scans")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
+                h += '<button class="ct-btn" data-size="sm" data-click="_editMonitoredDialog" data-args=\'' + _da(a.id) + '\' data-stop title="' + esc(t("host.edit")) + '">' + _icon("edit", 12) + ' ' + esc(t("hosts.configure")) + '</button>';
             }
             h += '</div>';
             h += '</div>';
