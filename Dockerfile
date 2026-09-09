@@ -27,7 +27,7 @@ FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5
 LABEL org.opencontainers.image.title="ciso-surface" \
       org.opencontainers.image.description="CISO Toolbox — Surface (ASM) module" \
       org.opencontainers.image.vendor="CISOToolbox" \
-      org.opencontainers.image.source="https://github.com/CISOToolbox/demo-docker" \
+      org.opencontainers.image.source="https://github.com/CISOToolbox/suite" \
       org.opencontainers.image.licenses="MIT"
 
 # Runtime system packages — no compilers, no curl/wget/git. nmap is the one

@@ -1,5 +1,5 @@
 # Client add-on overlay for Surface — layers selected add-on scanners on top
-# of a core Surface image. Built by shared/build-client-image.sh, which stages
+# of a core Surface image. Built by tools/build-client-image.sh, which stages
 # the chosen addons into .client-addons/. NOT used by the suite/public image.
 #
 #   BASE = a core Surface image (e.g. ciso-surface:local, or a pinned

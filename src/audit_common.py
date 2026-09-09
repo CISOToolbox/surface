@@ -1,12 +1,12 @@
 # -----------------------------------------------------------------------------
-# REPLICATED from the private shared repository (shared/python/audit_common.py).
-# DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
-# Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+# Generated file - do not edit.
+# It is overwritten at every release; a change made here is lost.
+# See CONTRIBUTING.md.
 # -----------------------------------------------------------------------------
 """CISO Toolbox — server-side write journal (FEAT-30 P1.6).
 
-Propagated from the shared backend library (audit_common) — do not edit this
-module's src/audit.py-equivalent (shared/python is NOT auto-synced).
+Shared backend library (audit_common) — do not edit this
+module's src/audit.py-equivalent (identical in every module).
 
 Superset of the historical surface/appsec/watch ``log_action``: adds the
 technical identity of the touched object (``entity_type`` / ``entity_id``)

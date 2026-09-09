@@ -1,5 +1,5 @@
 /**
- * Surface (demo-docker) — module types.
+ * Surface (backend) — module types.
  *
  * Data model (findings / monitored assets / scan jobs / measures), REST API
  * payloads (window.SurfaceAPI) and globals set by surface_api.js /

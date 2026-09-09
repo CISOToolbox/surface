@@ -1,6 +1,6 @@
 # Generic add-on scanners (Surface)
 
-> **Full contract & runtime/help/build/propagation rules: see
+> **Full contract & runtime/help/build rules: see
 > [`../README.md`](../README.md).** This file is a quick reference.
 
 **Shareable** Surface scanners, reusable across clients. Each connector lives

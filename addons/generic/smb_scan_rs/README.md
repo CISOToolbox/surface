@@ -14,7 +14,7 @@ multi-arch GHCR image, build it once per target platform.
 
 ## Package into a client image
 ```bash
-shared/build-client-image.sh <client> --module surface --addons generic/smb_scan_rs
+tools/build-client-image.sh <client> --module surface --addons generic/smb_scan_rs
 ```
 `Dockerfile.addons` installs the runtime lib from `apt-packages.txt`
 (`libsmbclient`) and makes `bin/*` executable.

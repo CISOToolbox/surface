@@ -3,7 +3,7 @@
 #
 # The binary is dynamically linked against libsmbclient and is arch-specific.
 # It is NOT committed (see ../.gitignore); build it before packaging a client
-# image (shared/build-client-image.sh stages addons/generic/smb_scan_rs/bin/).
+# image (tools/build-client-image.sh stages addons/generic/smb_scan_rs/bin/).
 #
 # Built inside the official rust:1-slim-bookworm image so the ABI matches the
 # python:3.12-slim (bookworm) runtime of the Surface image. Compiles natively

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
-// REPLICATED from the private shared repository (shared/js/backend/login_oauth.js).
-// DO NOT EDIT HERE - changes will be overwritten by the next propagation run.
-// Fix the master in the shared repository and re-propagate. See CONTRIBUTING.md.
+// Generated file - do not edit.
+// It is overwritten at every release; a change made here is lost.
+// See CONTRIBUTING.md.
 // -----------------------------------------------------------------------------
 /**
  * Login page script — OAUTH variant (surface, appsec, watch).
@@ -10,7 +10,7 @@
  * optional token form.
  *
  * Compiled to login_oauth.js; the build script copies it as
- * app/js/login.js for the modules concerned (see ts-build.sh).
+ * app/js/login.js for the modules concerned.
  * See login.ts for the factorisation note.
  */
 (function () {

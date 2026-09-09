@@ -388,11 +388,10 @@ Dependency pins are checked with `bash tests/check-deps-drift.sh`.
 
 ## Contributing
 
-Part of this repository is **replicated** from a private shared repository and
-must not be edited here: `src/*_common.py`, `src/ssrf_guard.py`, and every
-`app/js` / `app/css` file carrying a `GENERATED` header. Changes to those files
-are overwritten on the next propagation, so they have to be made on the shared
-master — open an issue describing what should change. Everything else
+Some files in this repository are **generated** and must not be edited here:
+`src/*_common.py`, `src/ssrf_guard.py`, and every `app/js` / `app/css` file
+carrying the "Generated file - do not edit" header. The next release overwrites
+them — open an issue describing what should change. Everything else
 (`src/scanners.py`, `addons/`, `app/ts/`, migrations, packaging) is editable
 here. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
 
