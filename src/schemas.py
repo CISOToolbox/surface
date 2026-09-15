@@ -78,6 +78,15 @@ class FindingResponse(BaseModel):
 
 # ── Measures ───────────────────────────────────────────────────
 
+class MeasureCreate(BaseModel):
+    """A corrective measure created on its own (FEAT-45 remediation of a
+    non-conformity); triage remains the way to create one from a finding."""
+    title: str = Field(min_length=3, max_length=500)
+    description: str = ""
+    responsable: str = ""
+    echeance: str = ""
+
+
 class MeasureUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None

@@ -147,6 +147,19 @@ async def test_guard_3_false_positive_stays_frozen(db):
 
 
 @pytest.mark.asyncio
+async def test_guard_3_derogated_stays_frozen(db):
+    """An approved derogation is a decision, not a detection state: the feed
+    going quiet must not close the finding and strand a live derogation."""
+    await run_connector(db, "defender", _meta(_feed("CVE-1")), {})
+    f = (await db.execute(select(Finding))).scalar_one()
+    f.status = "derogated"
+    await db.commit()
+    report = await run_connector(db, "defender", _meta(_feed()), {})
+    assert report["closed"] == 0
+    assert (await _statuses(db))[_key("m-1", "CVE-1")] == "derogated"
+
+
+@pytest.mark.asyncio
 async def test_guard_3_to_fix_with_open_measure_is_not_closed(db):
     """THE regression test of the revert: the guard reads ``f.measure`` on a
     real async session. Without eager loading this raises MissingGreenlet and

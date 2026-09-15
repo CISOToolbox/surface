@@ -60,6 +60,13 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
         existing.last_seen_at = now
         return "silenced"
 
+    # FEAT-45 — under an approved derogation: accepted for a bounded time,
+    # so a re-detection is expected and silenced. The scheduler brings it
+    # back to to_fix when the derogation expires.
+    if existing.status == "derogated":
+        existing.last_seen_at = now
+        return "silenced"
+
     if existing.status == "to_fix":
         if existing.measure and existing.measure.statut != "termine":
             existing.last_seen_at = now

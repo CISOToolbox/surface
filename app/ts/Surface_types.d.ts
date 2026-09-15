@@ -17,7 +17,7 @@ type SurfaceSeverity = "critical" | "high" | "medium" | "low" | "info";
 // closed_upstream (FEAT-37): the upstream source no longer reports the
 // finding — fixed, or excepted on its side. The backend can return it, so
 // the type must admit it.
-type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed" | "closed_upstream";
+type SurfaceFindingStatus = "new" | "to_fix" | "false_positive" | "fixed" | "closed_upstream" | "derogated";
 type SurfaceAssetKind = "domain" | "host" | "ip_range" | "file_share";
 type SurfaceJobStatus = "pending" | "running" | "completed" | "partial" | "failed";
 
@@ -33,6 +33,8 @@ interface SurfaceFinding {
     evidence?: CtFvEvidence;
     cve_id?: string;
     measure_id?: string;
+    /** Approved derogation covering the finding (status "derogated"). */
+    derogation_id?: string | null;
     triage_notes?: string;
     triaged_at?: string;
     triaged_by?: string;
@@ -256,6 +258,18 @@ interface SurfaceAPIShape {
     put(url: string, body?: unknown): Promise<any>;
     listFindings(filters?: Record<string, string>): Promise<SurfaceFinding[]>;
     deleteFinding(id: string): Promise<null>;
+    listNonconformities(status?: string): Promise<{ items: CtNcRecord[]; total: number }>;
+    createNonconformity(body: Record<string, unknown>): Promise<CtNcRecord>;
+    qualifyNonconformity(id: string, body: Record<string, unknown>): Promise<CtNcRecord>;
+    rejectNonconformity(id: string, note: string): Promise<CtNcRecord>;
+    remediationNonconformity(id: string, measureIds: string[]): Promise<CtNcRecord>;
+    closeNonconformity(id: string, evidence: string): Promise<CtNcRecord>;
+    listDerogations(filters?: Record<string, string>): Promise<{ items: CtDerRecord[]; total: number }>;
+    createDerogation(body: Record<string, unknown>): Promise<CtDerRecord>;
+    decideDerogation(id: string, approve: boolean, note: string): Promise<CtDerRecord>;
+    revokeDerogation(id: string, reason: string): Promise<CtDerRecord>;
+    nonconformitySettings(): Promise<{ max_derogation_days: number }>;
+    saveNonconformitySettings(days: number): Promise<unknown>;
     triageFinding(id: string, payload: SurfaceTriagePayload): Promise<SurfaceFinding>;
     bulkTriageFindings(payload: SurfaceBulkTriagePayload): Promise<SurfaceBulkTriageResult>;
     bulkDeleteFindings(ids: string[]): Promise<{ deleted: number }>;
@@ -287,6 +301,7 @@ interface SurfaceAPIShape {
     createJob(data: { target: string; profile?: string }): Promise<SurfaceScanJob>;
     deleteJob(id: string): Promise<null>;
     listMeasures(): Promise<SurfaceMeasure[]>;
+    createMeasure(data: { title: string; description?: string; responsable?: string; echeance?: string }): Promise<SurfaceMeasure>;
     updateMeasure(id: string, data: Partial<SurfaceMeasure>): Promise<SurfaceMeasure>;
     deleteMeasure(id: string): Promise<null>;
     smtpConfig(): Promise<SurfaceSmtpConfig>;
@@ -305,6 +320,7 @@ declare var ct_measure_modal: CtMeasureModalApi;
 declare var ct_table: CtTableApi;
 declare var ct_bulkbar: CtBulkbarApi;
 declare var ct_finding_view: CtFindingViewApi;
+declare var ct_nonconformity: CtNonconformityApi;
 
 declare var selectPanel: (id: string) => void;
 declare var renderAll: () => void;
@@ -322,6 +338,7 @@ interface Window {
     _appInitCallback?: () => void;
     _initDataAndRender?: () => void;
     _currentUser?: SurfaceAuthUser;
+    _requestDerogationDetail?: () => void;
     _moduleRole?: string;
     _logout?: () => void;
 
@@ -411,7 +428,7 @@ interface Window {
     _bulkImportDialog?: () => void;
 
     // Measures
-    _editSurfaceMeasureRow?: (row: Record<string, any>) => void;
+    _editSurfaceMeasureRow?: (row: Record<string, any>) => Promise<unknown>;
     _bulkSurfaceMeasuresDone?: (scope: string) => void;
     _bulkSurfaceMeasuresDelete?: (scope: string) => void;
 

@@ -131,7 +131,7 @@ var _SURFACE_TONES: Record<string, string> = {
     critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
     // finding statuses
     new: "info", to_fix: "medium", fixed: "low", accepted: "neutral",
-    ignored: "neutral", false_positive: "neutral",
+    ignored: "neutral", false_positive: "neutral", derogated: "neutral",
     // origin and state of a host
     auto: "accent", manual: "info", off: "neutral", share: "medium", scanner: "low",
 };
@@ -317,7 +317,7 @@ function _loadAndRender() {
     var p5 = _scannersCatalog
         ? Promise.resolve()
         : SurfaceAPI.scannersCatalog().then(function(d) { _scannersCatalog = d || {}; }).catch(function() { _scannersCatalog = {}; });
-    Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { renderPanel(); });
+    return Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { renderPanel(); });
 }
 
 function renderPanel() {
@@ -333,6 +333,7 @@ function renderPanel() {
         case "measures": _renderMeasures(c); break;
         case "audit": _renderAuditLog(c); break;
         case "connectors": _renderConnectors(c); break;
+        case "nonconformities": _renderNonconformities(c); break;
         default: _renderDashboard(c);
     }
     var tr = document.getElementById("toolbar-right");
@@ -1843,7 +1844,7 @@ function _dashStats() {
     // active  — actionable findings EXCLUDING info (drives alert counts)
     // byStatus— raw status counts (all severities)
     var bySev: Record<SurfaceSeverity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    var byStatus: Record<SurfaceFindingStatus, number> = { new: 0, false_positive: 0, to_fix: 0, fixed: 0, closed_upstream: 0 };
+    var byStatus: Record<SurfaceFindingStatus, number> = { new: 0, false_positive: 0, to_fix: 0, fixed: 0, closed_upstream: 0, derogated: 0 };
     var active: SurfaceFinding[] = [];
     _findings.forEach(function(f) {
         if (byStatus[f.status] != null) byStatus[f.status]++;
@@ -2601,6 +2602,8 @@ function _refreshFindingsBody() {
         // FEAT-37 — closed because the upstream source no longer reports it.
         // Placed after "fixed": it is a closure, not a state to work on.
         { v: "closed_upstream", key: "status.closed_upstream", help: "status.closed_upstream_help" },
+        // FEAT-45 — covered by an approved derogation; the finding is silenced until it expires.
+        { v: "derogated",      key: "status.derogated", help: "status.derogated_help" },
         { v: "",               key: "status.all" }
     ];
     h += '<div class="filter-pills-row">';
@@ -2927,10 +2930,88 @@ function _renderFindingDetail(c: HTMLElement) {
         aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
         aiHandler: "_aiTriageFinding",
         deleteHandler: "_deleteFindingDetail",
+        derogationHandler: "_requestDerogationDetail",
         linkedMeasure: linked || undefined,
         cardClass: "surface-card"
     });
 }
+
+// ── Non-conformities and derogations (FEAT-45) ─────────────────
+// The register itself is the shared ct_nonconformity component; Surface only
+// supplies its transport and names the finding a derogation covers.
+function _ncOptions(): CtNcOptions {
+    return {
+        listNc: function(status) { return SurfaceAPI.listNonconformities(status); },
+        createNc: function(body) { return SurfaceAPI.createNonconformity(body); },
+        qualifyNc: function(id, body) { return SurfaceAPI.qualifyNonconformity(id, body); },
+        rejectNc: function(id, note) { return SurfaceAPI.rejectNonconformity(id, note); },
+        remediationNc: function(id, ids) { return SurfaceAPI.remediationNonconformity(id, ids); },
+        closeNc: function(id, evidence) { return SurfaceAPI.closeNonconformity(id, evidence); },
+        listDer: function(filters) { return SurfaceAPI.listDerogations(filters); },
+        createDer: function(body) { return SurfaceAPI.createDerogation(body); },
+        decideDer: function(id, approve, note) { return SurfaceAPI.decideDerogation(id, approve, note); },
+        revokeDer: function(id, reason) { return SurfaceAPI.revokeDerogation(id, reason); },
+        getSettings: function() { return SurfaceAPI.nonconformitySettings(); },
+        saveSettings: function(days) { return SurfaceAPI.saveNonconformitySettings(days); },
+        isAdmin: function() { return !!(window._currentUser && window._currentUser.role === "admin"); },
+        subjectTypes: ["finding"],
+        directoryUrl: "api/directory",
+        measureOptions: function() {
+            return _measures.map(function(m) {
+                var st = m.statut || "a_faire";
+                return { value: m.id, label: m.id + " " + (m.title || m.description || "").substring(0, 60),
+                         status: st, statusLabel: t("measures.status." + st) || st, done: st === "termine" };
+            });
+        },
+        openMeasure: function(id) { return window._editSurfaceMeasureRow!({ id: id }); },
+        // A derogation before any non-conformity: on a finding still to be handled.
+        subjectSearch: function(q) {
+            var out: CtNcMeasureOption[] = [];
+            for (var i = 0; i < _findings.length && out.length < 100; i++) {
+                var f = _findings[i];
+                if (f.status !== "new" && f.status !== "to_fix") continue;
+                var label = _findingTitle(f) + (f.target ? " · " + f.target : "");
+                if (q && label.toLowerCase().indexOf(q) < 0) continue;
+                out.push({ value: f.id, label: label });
+            }
+            return out;
+        },
+        // Corrective measure of a non-conformity: the module's measure modal,
+        // then a measure on its own (no finding) in the action plan.
+        createMeasure: function(prefill) {
+            return ct_measure_modal.open({ title: prefill.title, description: prefill.description }, {
+                title: t("measures.new_title"),
+                hideFields: ["type", "statut"],
+                titleRequired: true,
+                ownerPicker: { pickerId: "surface-nc-measure-owner", directoryUrl: "api/directory" }
+            }).then(function(data: any) {
+                if (!data || data.__deleted) return null;
+                return SurfaceAPI.createMeasure({ title: data.title, description: data.description || "",
+                                                  responsable: data.responsable || "", echeance: data.echeance || "" })
+                    .then(function(m) {
+                        _measures.push(m);
+                        return { value: m.id, label: m.id + " " + (m.title || "").substring(0, 60) };
+                    }).catch(function(e) { showStatus(e.message || t("common.error"), true); return null; });
+            });
+        },
+        openSubject: function(type, id) { if (type === "finding") { _panel = "findings"; window._openFinding(id); } },
+        onChange: function() { return _loadAndRender(); }
+    };
+}
+
+function _renderNonconformities(c: HTMLElement) {
+    ct_nonconformity.renderPanel(c, _ncOptions());
+}
+
+window._requestDerogationDetail = function() {
+    var f = _selectedFinding;
+    if (!f) return;
+    ct_nonconformity.requestDerogation(_ncOptions(), {
+        subject_type: "finding", subject_id: f.id,
+        subject_label: _findingTitle(f) + (f.target ? " · " + f.target : ""),
+        title: _findingTitle(f)
+    });
+};
 
 // ── Defender finding enrichment (FEAT-37) ──────────────────────
 // Connector findings name the machines/users concerned and deep-link to the
@@ -3433,8 +3514,8 @@ function _renderMeasures(c: HTMLElement) {
 
 window._editSurfaceMeasureRow = function(row) {
     var m = _measures.find(function(x) { return x.id === row.id; });
-    if (!m) return;
-    ct_measure_modal.open(m, {
+    if (!m) return Promise.resolve();
+    return ct_measure_modal.open(m, {
         title: m.id + " — " + (m.title || "Mesure"),
         hideFields: ["type"],
         statusOptions: [
@@ -3463,7 +3544,8 @@ window._editSurfaceMeasureRow = function(row) {
         }
     }).then(function(result: any) {
         if (!result || result.__deleted) return;
-        SurfaceAPI.updateMeasure(m!.id, result).then(function() {
+        return SurfaceAPI.updateMeasure(m!.id, result).then(function(updated) {
+            if (updated) Object.assign(m!, updated);
             showStatus(t("measures.updated") || "Mesure mise à jour");
             _loadAndRender();
         }).catch(function(e) { showStatus(e.message || t("common.error"), true); });

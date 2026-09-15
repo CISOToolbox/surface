@@ -68,7 +68,7 @@
     // that the same state carries the same tone in the shared view and in the module.
     var _FV_TONES = {
         critical: "critical", high: "high", medium: "medium", low: "low", info: "info",
-        new: "critical", to_fix: "high", false_positive: "neutral", fixed: "low",
+        new: "critical", to_fix: "high", false_positive: "neutral", fixed: "low", derogated: "neutral",
     };
     function _fvTone(v) {
         return _FV_TONES[(v || "").toString()] || "neutral";
@@ -216,6 +216,10 @@
         if (f.status !== "new") {
             h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["new"]\'>'
                 + esc(_t("fd.triage_reset", "Réinitialiser")) + '</button>';
+        }
+        if (opts.derogationHandler && (f.status === "new" || f.status === "to_fix")) {
+            h += '<button class="ct-btn" data-write data-click="' + esc(opts.derogationHandler) + '">'
+                + _icn("shield", 14) + ' ' + esc(_t("der.request_btn", "Request a derogation")) + '</button>';
         }
         if (opts.aiEnabled && opts.aiHandler) {
             h += '<button class="ct-btn btn-ai" data-click="' + esc(opts.aiHandler) + '">'

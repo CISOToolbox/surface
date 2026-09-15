@@ -460,11 +460,21 @@ async def run_scheduler() -> None:
     rebalance_ticks = 0
     nuclei_ticks = 0
     connector_ticks = 0
+    derogation_ticks = 0
     while True:
         try:
             await _tick()
         except Exception:
             logger.exception("scheduler: tick crashed")
+        # FEAT-45 — expire derogations past their end date once an hour: the
+        # finding goes back to to_fix and the register shows it.
+        derogation_ticks += 1
+        if derogation_ticks >= 60:
+            derogation_ticks = 0
+            try:
+                await _expire_derogations()
+            except Exception:
+                logger.exception("scheduler: derogation expiry crashed")
         # Check the digest once every 60 ticks (~1 h).
         digest_ticks += 1
         if digest_ticks >= 60:
@@ -594,3 +604,13 @@ async def _run_due_connectors() -> None:
                                 report.get("findings"), report.get("closed"))
         except Exception:
             logger.exception("connector '%s' pass failed", name)
+
+
+async def _expire_derogations() -> None:
+    from src.models import Derogation, Nonconformity
+    from src.nonconformity_common import expire_derogations
+    from src.routes.nonconformities import FINDING_HOOK
+    async with async_session() as db:
+        n = await expire_derogations(db, Derogation, FINDING_HOOK, Nonconformity)
+        if n:
+            logger.info("scheduler: %d derogation(s) expired", n)

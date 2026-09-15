@@ -112,6 +112,8 @@ app.include_router(audit_router)
 app.include_router(connectors_router)
 from src.routes.notifications import router as notifications_router
 app.include_router(notifications_router)
+from src.routes.nonconformities import router as nonconformities_router  # FEAT-45
+app.include_router(nonconformities_router)
 if internal_router is not None:
     app.include_router(internal_router)
 if directory_proxy_router is not None:

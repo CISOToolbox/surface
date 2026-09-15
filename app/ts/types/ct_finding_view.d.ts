@@ -109,6 +109,8 @@ interface CtFvRenderOpts {
     aiHandler?: string;
     aiEnabled?: boolean;
     deleteHandler?: string;
+    /** Global fn name for "Request a derogation" (FEAT-45); shown while the finding is actionable. */
+    derogationHandler?: string;
     showFixed?: boolean;
     linkedMeasure?: CtFvLinkedMeasure;
     cardClass?: string;

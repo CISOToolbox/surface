@@ -54,6 +54,26 @@
             return _fetch("/findings" + qs);
         },
         deleteFinding: function (id) { return _fetch("/findings/" + id, { method: "DELETE" }); },
+        // Non-conformities and derogations (shared register served by this module)
+        listNonconformities: function (status) { return _fetch("/nonconformities" + (status ? "?status=" + encodeURIComponent(status) : "")); },
+        createNonconformity: function (body) { return _fetch("/nonconformities", { method: "POST", body: body }); },
+        qualifyNonconformity: function (id, body) { return _fetch("/nonconformities/" + id + "/qualify", { method: "POST", body: body }); },
+        rejectNonconformity: function (id, note) { return _fetch("/nonconformities/" + id + "/reject", { method: "POST", body: { note: note } }); },
+        remediationNonconformity: function (id, measureIds) { return _fetch("/nonconformities/" + id + "/remediation", { method: "POST", body: { measure_ids: measureIds } }); },
+        closeNonconformity: function (id, evidence) { return _fetch("/nonconformities/" + id + "/close", { method: "POST", body: { closure_evidence: evidence } }); },
+        listDerogations: function (filters) {
+            var parts = [];
+            if (filters)
+                for (var k in filters)
+                    if (filters[k])
+                        parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(filters[k]));
+            return _fetch("/derogations" + (parts.length ? "?" + parts.join("&") : ""));
+        },
+        createDerogation: function (body) { return _fetch("/derogations", { method: "POST", body: body }); },
+        decideDerogation: function (id, approve, note) { return _fetch("/derogations/" + id + "/decision", { method: "POST", body: { approve: approve, note: note } }); },
+        revokeDerogation: function (id, reason) { return _fetch("/derogations/" + id + "/revoke", { method: "POST", body: { reason: reason } }); },
+        nonconformitySettings: function () { return _fetch("/nonconformities-settings"); },
+        saveNonconformitySettings: function (days) { return _fetch("/nonconformities-settings", { method: "PUT", body: { max_derogation_days: days } }); },
         triageFinding: function (id, payload) {
             return _fetch("/findings/" + id + "/triage", { method: "PATCH", body: payload });
         },
@@ -95,6 +115,7 @@
         createJob: function (data) { return _fetch("/scans/jobs", { method: "POST", body: data }); },
         deleteJob: function (id) { return _fetch("/scans/jobs/" + id, { method: "DELETE" }); },
         listMeasures: function () { return _fetch("/measures"); },
+        createMeasure: function (data) { return _fetch("/measures", { method: "POST", body: data }); },
         updateMeasure: function (id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data }); },
         deleteMeasure: function (id) { return _fetch("/measures/" + id, { method: "DELETE" }); },
         smtpConfig: function () { return _fetch("/reports/smtp/config"); },

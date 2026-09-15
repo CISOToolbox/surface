@@ -37,6 +37,7 @@ def _to_dict(f: Finding, *, include_evidence: bool = True) -> dict:
         "evidence": evidence, "status": f.status,
         "triaged_at": f.triaged_at, "triaged_by": f.triaged_by, "triage_notes": f.triage_notes or "",
         "created_at": f.created_at, "measure_id": measure_id,
+        "derogation_id": str(f.derogation_id) if f.derogation_id else None,
     }
 
 
@@ -50,7 +51,7 @@ async def list_findings(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed", "closed_upstream"}
+    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed", "closed_upstream", "derogated"}
     _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)
@@ -135,7 +136,12 @@ async def delete_finding(
     f = await db.get(Finding, finding_id)
     if not f:
         raise HTTPException(status_code=404, detail="Finding not found")
-    await log_action(db, user, request, "finding.delete", target=f"{f.cve_id or f.title[:60]}")
+    await log_action(db, user, request, "finding.delete", target=(f.title or "")[:60])
+    # Any derogation on the finding, approved or still requested, is settled.
+    from src.models import Derogation
+    from src.nonconformity_common import revoke_for_subject
+    await revoke_for_subject(db, Derogation, "finding", str(f.id), "finding deleted",
+                             actor=(user.name if user else None) or (user.email if user else "system"))
     await db.delete(f)
     await db.commit()
 
@@ -171,6 +177,18 @@ async def triage_finding(
     if new_status == "to_fix":
         if not (body.measure_title or "").strip():
             raise HTTPException(status_code=400, detail="Le nom de la mesure est obligatoire")
+
+    # FEAT-45 — triaging a derogated finding lifts its derogation: the
+    # analyst's decision supersedes the acceptance, and the register says so.
+    if f.status == "derogated" or new_status not in ("new", "to_fix"):
+        # ...and a request still pending on a finding that leaves the
+        # actionable states is moot: the helper rejects it.
+        from src.models import Derogation
+        from src.nonconformity_common import revoke_for_subject
+        await revoke_for_subject(db, Derogation, "finding", str(f.id),
+                                 f"finding triaged to '{new_status}'",
+                                 actor=(user.name if user else None) or (user.email if user else "system"))
+        f.derogation_id = None
 
     f.status = new_status
     f.triaged_at = datetime.now(timezone.utc)
@@ -298,6 +316,18 @@ async def bulk_triage(
     measures_created = 0
 
     # Pass 1: update status + triage metadata on every finding.
+    # FEAT-45 — same rule as the single triage: leaving `derogated` by hand
+    # lifts the derogation, so a finding never carries a live derogation
+    # while being worked on.
+    derogated = [f for f in findings if f.status == "derogated" or body.status not in ("new", "to_fix")]
+    if derogated:
+        from src.models import Derogation
+        from src.nonconformity_common import revoke_for_subject
+        actor = (user.name if user else None) or (user.email if user else None) or "system"
+        for f in derogated:
+            await revoke_for_subject(db, Derogation, "finding", str(f.id),
+                                     f"finding triaged to '{body.status}'", actor=actor)
+            f.derogation_id = None
     for f in findings:
         f.status = body.status
         f.triaged_at = now
@@ -373,6 +403,11 @@ async def bulk_delete(
     measure_rows = (await db.execute(
         select(Measure.id).where(Measure.finding_id.in_(body.ids))
     )).scalars().all()
+    from src.models import Derogation
+    from src.nonconformity_common import revoke_for_subject
+    actor = (user.name if user else None) or (user.email if user else "system")
+    for fid in body.ids:
+        await revoke_for_subject(db, Derogation, "finding", str(fid), "finding deleted", actor=actor)
     await db.execute(sa_delete(Measure).where(Measure.finding_id.in_(body.ids)))
     result = await db.execute(sa_delete(Finding).where(Finding.id.in_(body.ids)))
     await db.commit()

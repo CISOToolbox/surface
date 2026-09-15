@@ -29,6 +29,9 @@ class FindingStatus(str, Enum):
     #
     # The column is a String(30), not a SQL enum: no migration needed.
     CLOSED_UPSTREAM = "closed_upstream"
+    # FEAT-45 — covered by an approved derogation: neither open nor fixed,
+    # counted apart, back to to_fix when the derogation expires or is revoked.
+    DEROGATED = "derogated"
 
 
 class ScanJobStatus(str, Enum):
@@ -90,6 +93,8 @@ class Finding(Base):
     triaged_at = Column(DateTime(timezone=True), nullable=True)
     triaged_by = Column(String(255), nullable=True)
     triage_notes = Column(Text, nullable=True, default="")
+    # FEAT-45 — the derogation covering this finding while status == derogated
+    derogation_id = Column(UUID(as_uuid=True), nullable=True)
     # Deduplication: same dedup_key across rescans means same finding.
     # Format: "<scanner>|<type>|<target>" (computed at insert time).
     dedup_key = Column(String(500), nullable=True, unique=True, index=True)
@@ -307,3 +312,9 @@ class NotificationPrefs(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
+
+
+# FEAT-45 — declared non-conformities and derogations (shared mechanics).
+from src.nonconformity_common import define_models as _define_nc_models  # noqa: E402
+
+Nonconformity, Derogation = _define_nc_models(Base)

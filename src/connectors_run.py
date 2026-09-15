@@ -56,7 +56,9 @@ logger = logging.getLogger("surface-backend")
 # would replace a precise human decision with the vaguer "the source went
 # quiet". If the source keeps reporting it, insert_or_dedupe reopens it to
 # `new` anyway (the fix did not hold).
-FROZEN_STATUSES = ("false_positive", "fixed")
+# `derogated` too: an approved derogation is an explicit acceptance, and its
+# expiry (not the feed going quiet) is what brings the finding back to work.
+FROZEN_STATUSES = ("false_positive", "fixed", "derogated")
 
 # One lock per connector, shared by the scheduler pass and the manual-run
 # route. Single-process (uvicorn) by construction, like the scheduler itself.

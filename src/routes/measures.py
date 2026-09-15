@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 from fastapi import Request, APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.models import Finding, Measure, User
-from src.schemas import MeasureUpdate
+from src.schemas import MeasureCreate, MeasureUpdate
 from src.audit import log_action
 
 router = APIRouter(prefix="/api/measures", tags=["measures"])
@@ -37,6 +38,33 @@ async def list_measures(
 ):
     result = await db.execute(select(Measure).order_by(Measure.sort_order))
     return [_to_dict(m) for m in result.scalars().all()]
+
+
+@router.post("", status_code=201)
+async def create_measure(
+    body: MeasureCreate,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    require_min_role(user, "triager", SURFACE_ROLES)
+    count = (await db.execute(select(func.count()).select_from(Measure))).scalar() or 0
+    m = Measure(
+        id=f"MES-{uuid.uuid4().hex[:8].upper()}", finding_id=None, sort_order=count + 1,
+        title=body.title.strip()[:500], description=(body.description or "").strip()[:2000],
+        statut="a_faire", responsable=(body.responsable or "").strip(), echeance=(body.echeance or "").strip(),
+    )
+    db.add(m)
+    await log_action(db, user, request, "measure.create", target=m.title[:60])
+    await db.commit()
+    await db.refresh(m)
+    try:
+        from src.routes.internal import _measure_to_pilot_payload
+        from src.pilot_notify import notify_pilot_measure
+        asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(m)))
+    except ImportError:
+        pass
+    return _to_dict(m)
 
 
 @router.patch("/{measure_id}")
