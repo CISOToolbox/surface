@@ -404,8 +404,21 @@ class RevokeBody(BaseModel):
     reason: str = Field(min_length=3)
 
 
+class InternalDecision(BaseModel):
+    """A decision relayed by Pilot: the Pilot user is the actor."""
+    approve: bool
+    note: str = ""
+    actor: str = "pilot"
+
+
+class InternalDeclaration(NonconformityCreate):
+    """A declaration relayed by Pilot: the Pilot user is the declarant."""
+    actor: str = "pilot"
+
+
 class SettingsBody(BaseModel):
     max_derogation_days: int = Field(ge=1, le=3650)
+    actor: str = ""            # relayed by the console; ignored by the module's own route
 
 
 # ── expiration ───────────────────────────────────────────────────────────
@@ -447,6 +460,195 @@ async def _release_nonconformity(db: AsyncSession, Nonconformity: Any, d: Any) -
 
 # ── router ───────────────────────────────────────────────────────────────
 
+class NcService:
+    """The operations shared by the module's own routes and the internal
+    (service-token) routes Pilot calls: lookups, declaration, decision."""
+
+    def __init__(self, Nonconformity: Any, Derogation: Any, hook: SubjectHook, subject_types: tuple) -> None:
+        self.Nonconformity = Nonconformity
+        self.Derogation = Derogation
+        self.hook = hook
+        self.kinds = tuple(subject_types) + ("nonconformity", "none")
+
+    async def nc(self, db: AsyncSession, nc_id: str) -> Any:
+        try:
+            row = await db.get(self.Nonconformity, uuid.UUID(str(nc_id)))
+        except ValueError:
+            row = None
+        if row is None:
+            raise HTTPException(status_code=404, detail="Non-conformity not found")
+        return row
+
+    async def der(self, db: AsyncSession, der_id: str) -> Any:
+        try:
+            row = await db.get(self.Derogation, uuid.UUID(str(der_id)))
+        except ValueError:
+            row = None
+        if row is None:
+            raise HTTPException(status_code=404, detail="Derogation not found")
+        return row
+
+    async def subject_label(self, db: AsyncSession, subject_type: str, subject_id: str) -> str:
+        if subject_type == "none":
+            return ""
+        if subject_type == "nonconformity":
+            nc = await self.nc(db, subject_id)
+            if nc.status not in ("to_qualify", "open", "in_remediation"):
+                raise HTTPException(status_code=409, detail=f"non-conformity is '{nc.status}', not open")
+            return f"{nc.reference} — {nc.title}"
+        label = await self.hook.exists(db, subject_type, subject_id)
+        if label is None:
+            raise HTTPException(status_code=404, detail=f"{subject_type} '{subject_id}' not found")
+        return label
+
+    async def declare(self, db: AsyncSession, body: "NonconformityCreate", actor: str,
+                      user: Any, request: Optional[Request]) -> dict:
+        """A new non-conformity, 'to qualify'. `actor` is who declares it (the
+        module's user, or the Pilot user relayed by the internal route)."""
+        if body.source not in NC_SOURCES:
+            raise HTTPException(status_code=422, detail=f"source must be one of {', '.join(NC_SOURCES)}")
+        if body.severity not in NC_SEVERITIES:
+            raise HTTPException(status_code=422, detail=f"severity must be one of {', '.join(NC_SEVERITIES)}")
+        nc_kinds = tuple(k for k in self.kinds if k not in ("nonconformity", "none"))
+        if body.subject_type and body.subject_type not in nc_kinds:
+            raise HTTPException(status_code=422, detail=f"subject_type must be one of {', '.join(nc_kinds)}")
+        if body.subject_type:
+            await self.subject_label(db, body.subject_type, body.subject_id)
+        observed = _as_date(body.observed_at) or date.today()
+        if observed > date.today():
+            raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
+        nc = self.Nonconformity(
+            id=uuid.uuid4(), reference=await next_reference(db, self.Nonconformity, "NC"),
+            source=body.source, observed_at=observed,
+            observed_by=body.observed_by[:255] or actor, declared_by=actor,
+            title=body.title.strip()[:500], description=body.description[:5000],
+            severity=body.severity, evidence=body.evidence[:50],
+            domain=body.domain[:100], requirement_ref=body.requirement_ref[:200],
+            subject_type=body.subject_type, subject_id=body.subject_id[:200],
+            status="to_qualify",
+        )
+        await commit_with_reference(db, nc, self.Nonconformity, "NC")
+        await _audit(db, user, request, "nonconformity.declared", nc.reference,
+                     {"severity": nc.severity, "source": nc.source, "subject": f"{nc.subject_type}:{nc.subject_id}"},
+                     actor=actor)
+        await db.commit()
+        await db.refresh(nc)
+        return nc_to_dict(nc)
+
+    async def decide(self, db: AsyncSession, d: Any, approve: bool, note: str, actor: str,
+                     user: Any, request: Optional[Request]) -> dict:
+        """Approval or refusal; the subject is re-checked at approval."""
+        new = "approved" if approve else "rejected"
+        check_transition("derogation", d.status, new)
+        if not approve and not (note or "").strip():
+            raise HTTPException(status_code=422, detail="a refusal needs a note")
+        d.status = new
+        d.decided_by = actor
+        d.decided_at = _now()
+        d.decision_note = (note or "")[:5000]
+        d.updated_at = _now()
+        if approve:
+            if d.subject_type == "nonconformity":
+                nc = await self.nc(db, d.subject_id)
+                check_transition("nonconformity", nc.status, "derogated")
+                if nc.status == "to_qualify":          # approving the derogation accepts the finding
+                    nc.qualified_by = actor
+                    nc.qualified_at = _now()
+                nc.status = "derogated"
+                nc.derogation_id = d.id
+                nc.updated_at = _now()
+            elif d.subject_type != "none":
+                # The subject may have moved on since the request (a finding
+                # fixed meanwhile): approving would resurrect it.
+                if await self.hook.exists(db, d.subject_type, d.subject_id) is None:
+                    raise HTTPException(status_code=409, detail="the subject is no longer open: nothing to derogate")
+                await self.hook.apply(db, d)
+        await _audit(db, user, request, "derogation." + new, d.reference,
+                     {"subject": f"{d.subject_type}:{d.subject_id}", "note": (note or "")[:200]}, actor=actor)
+        await db.commit()
+        await db.refresh(d)
+        return der_to_dict(d)
+
+
+def nc_treatment(nc: Any) -> str:
+    """What carries the non-conformity today: a measure, a derogation, nothing."""
+    if nc.status == "derogated":
+        return "derogation"
+    if nc.status == "in_remediation" and (nc.measure_ids or []):
+        return "measure"
+    return "none"
+
+
+def make_internal_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
+                         subject_types: tuple, check_service_token: Any) -> APIRouter:
+    """The register as Pilot sees it (service-token): every non-conformity
+    with its treatment, every derogation, decisions and declarations relayed
+    from Pilot with the Pilot user as actor, and the module's settings."""
+    from src.database import get_db
+
+    svc = NcService(Nonconformity, Derogation, hook, subject_types)
+    router = APIRouter(prefix="/api/internal", tags=["nonconformities-internal"])
+
+    @router.get("/nonconformities")
+    async def internal_nonconformities(request: Request, status: Optional[str] = None,
+                                       db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        q = select(Nonconformity).order_by(Nonconformity.created_at.desc())
+        if status:
+            q = q.where(Nonconformity.status == status)
+        rows = (await db.execute(q)).scalars().all()
+        items = []
+        for r in rows:
+            d = nc_to_dict(r)
+            d["treatment"] = nc_treatment(r)
+            items.append(d)
+        return {"items": items, "total": len(items)}
+
+    @router.post("/nonconformities", status_code=201)
+    async def internal_declare(body: InternalDeclaration, request: Request,
+                               db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        return await svc.declare(db, body, (body.actor or "pilot")[:255], None, request)
+
+    @router.get("/derogations")
+    async def internal_derogations(request: Request, status: Optional[str] = None,
+                                   db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        q = select(Derogation).order_by(Derogation.created_at.desc())
+        if status:
+            q = q.where(Derogation.status == status)
+        rows = (await db.execute(q)).scalars().all()
+        return {"items": [der_to_dict(r) for r in rows], "total": len(rows)}
+
+    @router.post("/derogations/{der_id}/decision")
+    async def internal_decide(der_id: str, body: InternalDecision, request: Request,
+                              db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        d = await svc.der(db, der_id)
+        return await svc.decide(db, d, body.approve, body.note, (body.actor or "pilot")[:255], None, request)
+
+    @router.get("/nonconformities-settings")
+    async def internal_get_settings(request: Request, db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        return {"max_derogation_days": await max_derogation_days(db)}
+
+    @router.put("/nonconformities-settings")
+    async def internal_put_settings(body: SettingsBody, request: Request, db: AsyncSession = Depends(get_db)):
+        check_service_token(request)
+        from src.models import AppSettings
+        row = await db.get(AppSettings, MAX_DAYS_SETTING)
+        if row is None:
+            db.add(AppSettings(key=MAX_DAYS_SETTING, value=str(body.max_derogation_days)))
+        else:
+            row.value = str(body.max_derogation_days)
+        await _audit(db, None, request, "nonconformity.settings", MAX_DAYS_SETTING,
+                     {"max_derogation_days": body.max_derogation_days}, actor=(body.actor or "pilot")[:255])
+        await db.commit()
+        return {"max_derogation_days": body.max_derogation_days}
+
+    return router
+
+
 def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                 subject_types: tuple[str, ...]) -> APIRouter:
     """The module mounts this once. ``subject_types`` are the kinds a
@@ -460,36 +662,10 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
     # it (a practice, a policy clause); the title says what it covers.
     kinds = tuple(subject_types) + ("nonconformity", "none")
 
-    async def _nc(db: AsyncSession, nc_id: str) -> Any:
-        try:
-            row = await db.get(Nonconformity, uuid.UUID(nc_id))
-        except ValueError:
-            row = None
-        if row is None:
-            raise HTTPException(status_code=404, detail="Non-conformity not found")
-        return row
-
-    async def _der(db: AsyncSession, der_id: str) -> Any:
-        try:
-            row = await db.get(Derogation, uuid.UUID(der_id))
-        except ValueError:
-            row = None
-        if row is None:
-            raise HTTPException(status_code=404, detail="Derogation not found")
-        return row
-
-    async def _subject_label(db: AsyncSession, subject_type: str, subject_id: str) -> str:
-        if subject_type == "none":
-            return ""
-        if subject_type == "nonconformity":
-            nc = await _nc(db, subject_id)
-            if nc.status not in ("to_qualify", "open", "in_remediation"):
-                raise HTTPException(status_code=409, detail=f"non-conformity is '{nc.status}', not open")
-            return f"{nc.reference} — {nc.title}"
-        label = await hook.exists(db, subject_type, subject_id)
-        if label is None:
-            raise HTTPException(status_code=404, detail=f"{subject_type} '{subject_id}' not found")
-        return label
+    svc = NcService(Nonconformity, Derogation, hook, subject_types)
+    _nc = svc.nc
+    _der = svc.der
+    _subject_label = svc.subject_label
 
     # -- non-conformities --------------------------------------------------
     @router.get("/nonconformities")
@@ -504,34 +680,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
     @router.post("/nonconformities", status_code=201)
     async def declare_nonconformity(body: NonconformityCreate, request: Request,
                                     user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-        if body.source not in NC_SOURCES:
-            raise HTTPException(status_code=422, detail=f"source must be one of {', '.join(NC_SOURCES)}")
-        if body.severity not in NC_SEVERITIES:
-            raise HTTPException(status_code=422, detail=f"severity must be one of {', '.join(NC_SEVERITIES)}")
-        nc_kinds = tuple(k for k in kinds if k not in ("nonconformity", "none"))
-        if body.subject_type and body.subject_type not in nc_kinds:
-            raise HTTPException(status_code=422, detail=f"subject_type must be one of {', '.join(nc_kinds)}")
-        if body.subject_type:
-            await _subject_label(db, body.subject_type, body.subject_id)
-        observed = _as_date(body.observed_at) or date.today()
-        if observed > date.today():
-            raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
-        nc = Nonconformity(
-            id=uuid.uuid4(), reference=await next_reference(db, Nonconformity, "NC"),
-            source=body.source, observed_at=observed,
-            observed_by=body.observed_by[:255] or _actor(user), declared_by=_actor(user),
-            title=body.title.strip()[:500], description=body.description[:5000],
-            severity=body.severity, evidence=body.evidence[:50],
-            domain=body.domain[:100], requirement_ref=body.requirement_ref[:200],
-            subject_type=body.subject_type, subject_id=body.subject_id[:200],
-            status="to_qualify",
-        )
-        await commit_with_reference(db, nc, Nonconformity, "NC")
-        await _audit(db, user, request, "nonconformity.declared", nc.reference,
-                     {"severity": nc.severity, "source": nc.source, "subject": f"{nc.subject_type}:{nc.subject_id}"})
-        await db.commit()
-        await db.refresh(nc)
-        return nc_to_dict(nc)
+        return await svc.declare(db, body, _actor(user), user, request)
 
     @router.get("/nonconformities/{nc_id}")
     async def get_nonconformity(nc_id: str, user=Depends(get_current_user),
@@ -736,36 +885,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                                 user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         d = await _der(db, der_id)
-        new = "approved" if body.approve else "rejected"
-        check_transition("derogation", d.status, new)
-        if not body.approve and not body.note.strip():
-            raise HTTPException(status_code=422, detail="a refusal needs a note")
-        d.status = new
-        d.decided_by = _actor(user)
-        d.decided_at = _now()
-        d.decision_note = body.note[:5000]
-        d.updated_at = _now()
-        if body.approve:
-            if d.subject_type == "nonconformity":
-                nc = await _nc(db, d.subject_id)
-                check_transition("nonconformity", nc.status, "derogated")
-                if nc.status == "to_qualify":          # approving the derogation accepts the finding
-                    nc.qualified_by = _actor(user)
-                    nc.qualified_at = _now()
-                nc.status = "derogated"
-                nc.derogation_id = d.id
-                nc.updated_at = _now()
-            elif d.subject_type != "none":
-                # The subject may have moved on since the request (a finding
-                # fixed meanwhile): approving would resurrect it.
-                if await hook.exists(db, d.subject_type, d.subject_id) is None:
-                    raise HTTPException(status_code=409, detail="the subject is no longer open: nothing to derogate")
-                await hook.apply(db, d)
-        await _audit(db, user, request, "derogation." + new, d.reference,
-                     {"subject": f"{d.subject_type}:{d.subject_id}", "note": body.note[:200]})
-        await db.commit()
-        await db.refresh(d)
-        return der_to_dict(d)
+        return await svc.decide(db, d, body.approve, body.note, _actor(user), user, request)
 
     @router.post("/derogations/{der_id}/revoke")
     async def revoke_derogation(der_id: str, body: RevokeBody, request: Request,
@@ -832,7 +952,7 @@ async def revoke_for_subject(db: AsyncSession, Derogation: Any, subject_type: st
 
 
 __all__ = [
-    "commit_with_reference",
+    "commit_with_reference", "make_internal_router", "NcService", "nc_treatment", "InternalDecision", "InternalDeclaration",
     "NC_SOURCES", "NC_SEVERITIES", "NC_STATUSES", "NC_TRANSITIONS",
     "DER_STATUSES", "DER_TRANSITIONS", "DEFAULT_MAX_DAYS", "MAX_DAYS_SETTING",
     "define_models", "check_transition", "validate_derogation_request", "next_reference",

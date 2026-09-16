@@ -422,3 +422,58 @@ async def test_derogation_on_a_fresh_nonconformity_qualifies_it_on_approval(db):
 @pytest.mark.asyncio
 async def test_next_reference_is_per_year(db):
     assert await next_reference(db, Nonconformity, "NC", date(2030, 1, 1)) == "NC-2030-001"
+
+
+# ── internal register (what Pilot reads and relays) ──────────────────────
+
+@pytest.mark.asyncio
+async def test_internal_router_lists_relays_and_guards(db):
+    """The service-token router lists non-conformities with their treatment
+    and every derogation, relays a declaration and a decision with the Pilot
+    user as actor, and refuses without the token."""
+    from src.nonconformity_common import (make_internal_router, DerogationCreate, RemediationBody, QualifyBody,
+                                          InternalDeclaration, InternalDecision)
+    from src.routes.nonconformities import FINDING_HOOK
+    from src.models import Measure
+
+    calls = []
+    def check(request):
+        calls.append(request.headers.get("x-service-token"))
+        if request.headers.get("x-service-token") != "tok":
+            raise HTTPException(status_code=403, detail="Invalid service token")
+    internal = make_internal_router(Nonconformity, Derogation, FINDING_HOOK, ("finding",), check)
+    def ep(name):
+        for r in internal.routes:
+            if r.endpoint.__name__ == name:
+                return r.endpoint
+        raise KeyError(name)
+    def req(token="tok"):
+        return Request({"type": "http", "method": "POST", "path": "/api/internal/x", "query_string": b"",
+                        "headers": [(b"x-service-token", token.encode())], "client": ("127.0.0.1", 1)})
+
+    with pytest.raises(HTTPException) as e:
+        await ep("internal_nonconformities")(req("wrong"), db=db)
+    assert e.value.status_code == 403
+
+    # declaration relayed from Pilot: the actor is the Pilot user, not "system"
+    nc = await ep("internal_declare")(InternalDeclaration(title="Declared from the console", severity="high",
+                                                          actor="rssi@medsecure.example"), req(), db=db)
+    assert nc["declared_by"] == "rssi@medsecure.example" and nc["status"] == "to_qualify"
+
+    # treatment reflects the state: none → measure once in remediation
+    await _endpoint("qualify_nonconformity")(nc["id"], QualifyBody(), user=None, db=db)
+    db.add(Measure(id="MES-INT", title="Fix it", statut="a_faire")); await db.commit()
+    await _endpoint("nonconformity_in_remediation")(nc["id"], RemediationBody(measure_ids=["MES-INT"]), user=None, db=db)
+    listing = await ep("internal_nonconformities")(req(), db=db)
+    assert listing["total"] == 1 and listing["items"][0]["treatment"] == "measure"
+
+    # decision relayed from Pilot on a finding derogation
+    f = await _finding(db)
+    d = await _endpoint("request_derogation")(DerogationCreate(**_der_body(f.id)), _req(), user=None, db=db)
+    out = await ep("internal_decide")(d["id"], InternalDecision(approve=True, note="ok", actor="ciso@medsecure.example"),
+                                      req(), db=db)
+    assert out["status"] == "approved" and out["decided_by"] == "ciso@medsecure.example"
+    assert (await db.get(Finding, f.id)).status == "derogated"
+    ders = await ep("internal_derogations")(req(), db=db)
+    assert ders["total"] == 1 and ders["items"][0]["status"] == "approved"
+    assert all(c == "tok" for c in calls[1:])

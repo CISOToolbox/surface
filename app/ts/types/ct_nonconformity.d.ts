@@ -28,6 +28,11 @@ interface CtNcRecord {
     derogation_id?: string | null;
     created_at?: string;
     updated_at?: string;
+    /** Set when the record is read through the console: the module that owns it. */
+    module?: string;
+    module_name?: string;
+    module_url?: string;
+    treatment?: string;
 }
 interface CtDerRecord {
     id: string;
@@ -53,6 +58,9 @@ interface CtDerRecord {
     renews_id?: string | null;
     days_left?: number | null;
     created_at?: string;
+    module?: string;
+    module_name?: string;
+    module_url?: string;
 }
 interface CtNcMeasureOption {
     value: string;
@@ -66,18 +74,26 @@ interface CtNcOptions {
     listNc: (status?: string) => Promise<{
         items: CtNcRecord[];
     }>;
-    createNc: (body: Record<string, unknown>) => Promise<CtNcRecord>;
-    qualifyNc: (id: string, body: Record<string, unknown>) => Promise<CtNcRecord>;
-    rejectNc: (id: string, note: string) => Promise<CtNcRecord>;
-    /** Links the corrective measures (at least one) and moves to in_remediation. */
-    remediationNc: (id: string, measureIds: string[]) => Promise<CtNcRecord>;
-    closeNc: (id: string, evidence: string) => Promise<CtNcRecord>;
     listDer: (filters?: Record<string, string>) => Promise<{
         items: CtDerRecord[];
     }>;
-    createDer: (body: Record<string, unknown>) => Promise<CtDerRecord>;
-    decideDer: (id: string, approve: boolean, note: string) => Promise<CtDerRecord>;
-    revokeDer: (id: string, reason: string) => Promise<CtDerRecord>;
+    /** The writes the host can perform; an absent one hides its action. A
+     *  module supplies all of them, the console only what it relays
+     *  (declaration, decision). */
+    createNc?: (body: Record<string, unknown>) => Promise<CtNcRecord>;
+    qualifyNc?: (id: string, body: Record<string, unknown>) => Promise<CtNcRecord>;
+    rejectNc?: (id: string, note: string) => Promise<CtNcRecord>;
+    /** Links the corrective measures (at least one) and moves to in_remediation. */
+    remediationNc?: (id: string, measureIds: string[]) => Promise<CtNcRecord>;
+    closeNc?: (id: string, evidence: string) => Promise<CtNcRecord>;
+    createDer?: (body: Record<string, unknown>) => Promise<CtDerRecord>;
+    decideDer?: (id: string, approve: boolean, note: string) => Promise<CtDerRecord>;
+    revokeDer?: (id: string, reason: string) => Promise<CtDerRecord>;
+    /** Console mode: the modules a declaration can target, and the records'
+     *  module column. A declaration then carries `module`. */
+    modules?: CtNcMeasureOption[];
+    /** Replaces the built-in settings modal (the console edits per module). */
+    openSettings?: () => void;
     getSettings?: () => Promise<{
         max_derogation_days: number;
     }>;
@@ -134,7 +150,9 @@ interface Window {
     _ctNcDeclare?: () => void;
     _ctNcRequestDer?: () => void;
     _ctNcSettings?: () => void;
-    _ctNcNewMeasure?: () => void;
+    _ctNcAddMeasure?: () => void;
+    _ctNcModuleFilter?: (module: string) => void;
+    _ctNcAttachMeasures?: () => void;
     _ctNcEditMeasure?: (id: string) => void;
     _ctDerSearch?: (q: string) => void;
     _ctDerKind?: (kind: string) => void;

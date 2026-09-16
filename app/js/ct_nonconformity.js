@@ -39,6 +39,7 @@
     var _derRows = [];
     var _ncFilter = "";
     var _derFilter = "";
+    var _moduleFilter = "";
     function _tone(kind, status) {
         var m = kind === "der" ? _DER_TONES : _NC_TONES;
         return m[status] || "neutral";
@@ -65,13 +66,11 @@
         return el ? (el.value || "").trim() : "";
     }
     function _multi(id) {
-        var el = document.getElementById(id);
-        if (!el)
-            return [];
         var out = [];
-        for (var i = 0; i < el.options.length; i++)
-            if (el.options[i].selected)
-                out.push(el.options[i].value);
+        var boxes = document.querySelectorAll('#' + id + ' input[type="checkbox"]');
+        for (var i = 0; i < boxes.length; i++)
+            if (boxes[i].checked)
+                out.push(boxes[i].value);
         return out;
     }
     function _field(label, control, required) {
@@ -126,15 +125,20 @@
         });
         return h + '</select>';
     }
+    // A checklist, not a multi-select: ticking a second measure must not
+    // need a modifier key.
     function _measureSelect(id, opts, selected) {
         var options = opts.measureOptions ? opts.measureOptions() : [];
         if (!options.length)
             return '<span class="fs-xs ct-muted">' + esc(t("nc.no_measures")) + '</span>';
-        var h = '<select id="' + id + '" multiple size="4" class="w-full">';
+        var h = '<div id="' + id + '" class="ct-checklist">';
         options.forEach(function (o) {
-            h += '<option value="' + esc(o.value) + '"' + (selected.indexOf(o.value) >= 0 ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+            h += '<label class="ct-block ct-mb-1 fs-sm"><input type="checkbox" name="' + id + '" value="' + esc(o.value) + '"'
+                + (selected.indexOf(o.value) >= 0 ? ' checked' : '') + ' /> ' + esc(o.label)
+                + (o.statusLabel ? ' <span class="ct-badge" data-size="sm" data-tone="' + (o.done ? 'low' : 'medium') + '">' + esc(o.statusLabel) + '</span>' : '')
+                + '</label>';
         });
-        return h + '</select>';
+        return h + '</div>';
     }
     // Person fields go through the shared directory picker (mounted on open,
     // read back through the handle: a pick or free text alike).
@@ -175,10 +179,15 @@
     // ── Declare a non-conformity ─────────────────────────────────────
     function declare(opts, prefill) {
         var modal = _modal();
-        if (!modal)
+        if (!modal || !opts.createNc)
             return Promise.resolve(null);
         var p = prefill || {};
         var h = _errorsBox() + _subjectLine(p.subject_type, p.subject_id, p.subject_label);
+        if (opts.modules && opts.modules.length) {
+            var ms = '<select id="ct-nc-module" class="w-full">';
+            opts.modules.forEach(function (m) { ms += '<option value="' + esc(m.value) + '">' + esc(m.label) + '</option>'; });
+            h += _field(t("nc.f.module"), ms + '</select>', true);
+        }
         h += _field(t("nc.f.title"), _input("ct-nc-title", p.title || "", "text", ' maxlength="500"'), true);
         h += _field(t("nc.f.description"), _textarea("ct-nc-desc", p.description || "", 4));
         h += '<div class="ct-grid-2 ct-gap-2">';
@@ -201,13 +210,16 @@
                         if (title.length < 3)
                             return _showErrors([{ id: "ct-nc-title", label: t("nc.err_title") }], t("nc.errors_intro"));
                         var evidence = _val("ct-nc-evidence").split("\n").map(function (s) { return s.trim(); }).filter(function (s) { return !!s; });
-                        return {
+                        var out = {
                             title: title, description: _val("ct-nc-desc"), source: _val("ct-nc-source"),
                             severity: _val("ct-nc-sev"), observed_at: _val("ct-nc-observed") || null,
                             observed_by: _person("ct-nc-observer"), domain: _val("ct-nc-domain"),
                             requirement_ref: _val("ct-nc-req"), evidence: evidence,
                             subject_type: p.subject_type || "", subject_id: p.subject_id || "",
                         };
+                        if (opts.modules && opts.modules.length)
+                            out.module = _val("ct-nc-module");
+                        return out;
                     } },
             ],
         }).then(function (body) {
@@ -224,7 +236,7 @@
     // ── Request a derogation ─────────────────────────────────────────
     function requestDerogation(opts, prefill) {
         var modal = _modal();
-        if (!modal)
+        if (!modal || !opts.createDer)
             return Promise.resolve(null);
         var p = prefill || {};
         var nc = p.nonconformity || null;
@@ -294,7 +306,30 @@
             _draw();
         }).catch(function (e) { _fail(e); container.innerHTML = ""; });
     }
-    function renderPanel(container, opts) { _load(container, opts); }
+    // A deep link from the console names a record (`?nc=<id>` / `?der=<id>`
+    // before `#nonconformities`): its detail opens once the register is
+    // loaded, once per page load.
+    var _queryConsumed = false;
+    function _openFromQuery() {
+        if (_queryConsumed)
+            return;
+        _queryConsumed = true;
+        var q;
+        try {
+            q = new URLSearchParams(location.search);
+        }
+        catch (e) {
+            return;
+        }
+        var nc = q.get("nc"), der = q.get("der");
+        if (nc && _ncRows.some(function (r) { return r.id === nc; }))
+            _openNc({ id: nc });
+        else if (der && _derRows.some(function (r) { return r.id === der; }))
+            _openDer({ id: der });
+    }
+    function renderPanel(container, opts) {
+        _load(container, opts).then(_openFromQuery);
+    }
     function _reload() {
         var changed = (_opts && _opts.onChange) ? _opts.onChange() : undefined;
         return Promise.resolve(changed).then(function () {
@@ -318,19 +353,28 @@
         var admin = _opts.isAdmin();
         var h = '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-3">';
         h += '<h2 class="ct-ink ct-flex-1 ct-m-0">' + esc(t("nc.panel_title")) + '</h2>';
-        h += '<button class="ct-btn" data-write data-variant="primary" data-click="_ctNcDeclare">' + _icon("plus", 14) + ' ' + esc(t("nc.declare_btn")) + '</button>';
-        h += '<button class="ct-btn" data-write data-click="_ctNcRequestDer">' + esc(t("der.request_btn")) + '</button>';
-        if (admin && _opts.getSettings)
+        if (_opts.createNc)
+            h += '<button class="ct-btn" data-write data-variant="primary" data-click="_ctNcDeclare">' + _icon("plus", 14) + ' ' + esc(t("nc.declare_btn")) + '</button>';
+        if (_opts.createDer)
+            h += '<button class="ct-btn" data-write data-click="_ctNcRequestDer">' + esc(t("der.request_btn")) + '</button>';
+        if (admin && (_opts.getSettings || _opts.openSettings))
             h += '<button class="ct-btn" data-click="_ctNcSettings" title="' + esc(t("nc.settings_title")) + '">' + _icon("settings", 14) + '</button>';
+        var withModule = !!(_opts.modules && _opts.modules.length);
+        if (withModule) {
+            var sel = '<select class="ct-filter" data-change="_ctNcModuleFilter" data-pass-value><option value="">' + esc(t("nc.all_modules")) + '</option>';
+            _opts.modules.forEach(function (m) { sel += '<option value="' + esc(m.value) + '"' + (m.value === _moduleFilter ? ' selected' : '') + '>' + esc(m.label) + '</option>'; });
+            h += sel + '</select>';
+        }
+        var moduleCol = { key: "module", label: t("nc.col_module"), width: "110px", render: function (r) { return esc(r.module_name || r.module || ""); } };
         h += '</div>';
         // Non-conformities
         h += '<h3 class="ct-mt-4">' + esc(t("nc.list_title")) + '</h3>';
         h += _pills("nc", NC_STATUSES, _ncFilter, _ncRows);
-        var ncRows = _ncFilter ? _ncRows.filter(function (r) { return r.status === _ncFilter; }) : _ncRows;
+        var ncRows = _ncRows.filter(function (r) { return (!_ncFilter || r.status === _ncFilter) && (!_moduleFilter || r.module === _moduleFilter); });
         h += window.ct_table.render({
             rows: ncRows, rowKey: "id", onRowClick: "_ctNcOpen",
             emptyHtml: '<div class="ct-muted">' + esc(t("nc.empty")) + '</div>',
-            columns: [
+            columns: (withModule ? [moduleCol] : []).concat([
                 { key: "reference", label: t("nc.col_ref"), width: "110px", render: function (r) { return '<strong>' + esc(r.reference) + '</strong>'; } },
                 { key: "title", label: t("nc.col_title"), render: function (r) {
                         var sub = r.subject_type ? '<div class="fs-xs ct-muted">' + esc(t("nc.subject_type." + r.subject_type)) + (r.requirement_ref ? ' · ' + esc(r.requirement_ref) : '') + '</div>' : '';
@@ -340,16 +384,20 @@
                 { key: "source", label: t("nc.col_source"), width: "130px", render: function (r) { return esc(t("nc.source." + r.source)); } },
                 { key: "observed_at", label: t("nc.col_observed"), width: "110px", render: function (r) { return esc(r.observed_at || ""); } },
                 { key: "status", label: t("nc.col_status"), width: "130px", render: function (r) { return _badge("nc", r.status); } },
-            ],
+                { key: "treatment", label: t("nc.col_treatment"), width: "110px", render: function (r) {
+                        var tr = r.treatment || (r.status === "derogated" ? "derogation" : (r.status === "in_remediation" && (r.measure_ids || []).length ? "measure" : "none"));
+                        return '<span class="ct-badge" data-tone="' + (tr === "none" ? "neutral" : "info") + '">' + esc(t("nc.treatment." + tr)) + '</span>';
+                    } },
+            ]),
         });
         // Derogations
         h += '<h3 class="ct-mt-4">' + esc(t("der.list_title")) + '</h3>';
         h += _pills("der", DER_STATUSES, _derFilter, _derRows);
-        var derRows = _derFilter ? _derRows.filter(function (r) { return r.status === _derFilter; }) : _derRows;
+        var derRows = _derRows.filter(function (r) { return (!_derFilter || r.status === _derFilter) && (!_moduleFilter || r.module === _moduleFilter); });
         h += window.ct_table.render({
             rows: derRows, rowKey: "id", onRowClick: "_ctDerOpen",
             emptyHtml: '<div class="ct-muted">' + esc(t("der.empty")) + '</div>',
-            columns: [
+            columns: (withModule ? [moduleCol] : []).concat([
                 { key: "reference", label: t("der.col_ref"), width: "120px", render: function (r) { return '<strong>' + esc(r.reference) + '</strong>'; } },
                 { key: "subject", label: t("der.col_subject"), render: function (r) {
                         return '<div>' + esc(r.title || r.subject_label || r.subject_id) + '</div>'
@@ -361,7 +409,7 @@
                         return esc(r.valid_until || "") + left;
                     } },
                 { key: "status", label: t("der.col_status"), width: "150px", render: function (r) { return _badge("der", r.status); } },
-            ],
+            ]),
         });
         _container.innerHTML = h;
     }
@@ -420,35 +468,53 @@
         var canEdit = !!_opts.openMeasure && s !== "closed" && s !== "rejected";
         var measures = _measureOptionsOf(nc.measure_ids || []);
         var pendingMeasures = measures.filter(function (o) { return !o.done; });
-        if (measures.length) {
+        var canLink = !!_opts.remediationNc && (s === "open" || s === "in_remediation");
+        var unlinked = (_opts.measureOptions ? _opts.measureOptions() : []).filter(function (o) { return (nc.measure_ids || []).indexOf(o.value) < 0; });
+        if (measures.length || canLink) {
             var mh = '';
             measures.forEach(function (o) {
-                mh += '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-1">'
-                    + '<span class="ct-flex-1">' + esc(o.label) + '</span>'
+                // The measure itself is the link to its modal (when the record still moves).
+                var open = canEdit ? ' data-click="_ctNcEditMeasure" data-args=\'' + _da(o.value) + '\' title="' + esc(t("nc.edit_measure")) + '"' : '';
+                mh += '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-1' + (canEdit ? ' ct-clickable' : '') + '"' + open + '>'
+                    + '<span class="ct-flex-1' + (canEdit ? ' ct-link' : '') + '">' + esc(o.label) + '</span>'
                     + (o.statusLabel ? '<span class="ct-badge" data-tone="' + (o.done ? 'low' : 'medium') + '">' + esc(o.statusLabel) + '</span>' : '')
-                    + (canEdit ? '<button class="ct-btn" data-size="xs" data-click="_ctNcEditMeasure" data-args=\'' + _da(o.value) + '\'>' + _icon("pencil", 12) + ' ' + esc(t("nc.edit_measure")) + '</button>' : '')
                     + '</div>';
             });
+            if (canLink) {
+                // The corrective measures are added from here: + creates one in
+                // the module's own modal and comes back to this record.
+                mh += '<div class="ct-flex ct-gap-2 ct-mt-1">';
+                if (_opts.createMeasure)
+                    mh += '<button class="ct-btn" data-size="xs" data-variant="primary" data-write data-click="_ctNcAddMeasure" title="' + esc(t("nc.new_measure")) + '">' + _icon("plus", 12) + ' ' + esc(t("nc.new_measure")) + '</button>';
+                if (unlinked.length)
+                    mh += '<button class="ct-btn" data-size="xs" data-write data-click="_ctNcAttachMeasures">' + esc(t("nc.attach_measures")) + '</button>';
+                mh += '</div>';
+            }
+            if (!measures.length && canLink)
+                mh = '<div class="fs-xs ct-muted ct-mb-1">' + esc(t("nc.no_measure_yet")) + '</div>' + mh;
             h += _row(t("nc.f.measures"), mh, true);
             if (pendingMeasures.length && (s === "in_remediation" || s === "open" || s === "derogated")) {
                 h += '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("nc.close_blocked", { n: pendingMeasures.length })) + '</div>';
             }
         }
+        if (nc.module_url)
+            h = '<div class="ct-mb-2 fs-sm"><a href="' + esc(nc.module_url) + '">' + esc(t("nc.open_in_module", { module: nc.module_name || nc.module || "" })) + ' ↗</a></div>' + h;
         var buttons = [{ id: "close", label: t("nc.close") }];
         if (nc.subject_type && nc.subject_id && nc.subject_type !== "nonconformity" && _opts.openSubject) {
             buttons.push({ id: "open_subject", label: _openLabel(nc.subject_type), result: "open_subject" });
         }
-        if (s === "to_qualify" && admin) {
-            buttons.push({ id: "reject", label: t("nc.act_reject"), danger: true, result: "reject" });
+        if (s === "to_qualify" && admin && _opts.qualifyNc) {
+            if (_opts.rejectNc)
+                buttons.push({ id: "reject", label: t("nc.act_reject"), danger: true, result: "reject" });
             buttons.push({ id: "qualify", label: t("nc.act_qualify"), primary: true, result: "qualify" });
         }
         if (s === "open" || s === "in_remediation") {
-            buttons.push({ id: "derog", label: t("der.request_btn"), result: "derog" });
-            buttons.push({ id: "remed", label: t(s === "open" ? "nc.act_remediation" : "nc.act_measures"), result: "remed" });
-            if (admin && !pendingMeasures.length)
+            if (_opts.createDer)
+                buttons.push({ id: "derog", label: t("der.request_btn"), result: "derog" });
+            if (admin && _opts.closeNc && !pendingMeasures.length)
                 buttons.push({ id: "closeNc", label: t("nc.act_close"), primary: true, result: "closeNc" });
         }
-        if (s === "derogated" && admin && !pendingMeasures.length)
+        if (s === "derogated" && admin && _opts.closeNc && !pendingMeasures.length)
             buttons.push({ id: "closeNc", label: t("nc.act_close"), primary: true, result: "closeNc" });
         modal.open({ title: nc.reference, body: h, size: "md", buttons: buttons }).then(function (r) {
             if (!r || !_opts)
@@ -460,10 +526,6 @@
             if (r === "derog") {
                 requestDerogation(_opts, { nonconformity: nc }).then(function (d) { if (d)
                     _reload(); });
-                return;
-            }
-            if (r === "remed") {
-                _remediationModal(nc, nc.measure_ids || []);
                 return;
             }
             if (r === "qualify") {
@@ -503,36 +565,59 @@
         var modal = _modal();
         if (modal)
             modal.close();
-        Promise.resolve(_opts.openMeasure(id)).then(function () { return _reload(); }).then(function () {
+        Promise.resolve(_opts.openMeasure(id)).then(function () { return _reload(); }).catch(_fail).then(function () {
             if (ncId)
                 _openNc({ id: ncId });
         });
     };
-    // Remediation: the corrective measures, existing ones and/or a new one
-    // created through the module's own measure modal. ct_modal is a single
-    // overlay, so "+ New measure" snapshots the selection, lets the module
-    // open its modal, then reopens this one with the new measure selected.
-    var _remedNc = null;
-    function _remediationModal(nc, selected) {
-        var modal = _modal();
-        if (!modal || !_opts)
+    // Corrective measures are added from the record itself. + opens the
+    // module's own measure modal (ct_modal is a single overlay, so the record
+    // closes and reopens afterwards); "attach" offers the existing measures.
+    // Linking the first measure moves the record to in_remediation.
+    function _linkMeasures(nc, ids) {
+        if (!_opts || !_opts.remediationNc)
             return;
-        _remedNc = nc;
-        var options = _opts.measureOptions ? _opts.measureOptions() : [];
+        _opts.remediationNc(nc.id, ids).then(function () { return _reload(); })
+            .then(function () { _openNc({ id: nc.id }); })
+            .catch(function (e) { _fail(e); _openNc({ id: nc.id }); });
+    }
+    window._ctNcAddMeasure = function () {
+        if (!_opts || !_opts.createMeasure || !_detailNcId)
+            return;
+        var nc = _ncRows.filter(function (r) { return r.id === _detailNcId; })[0];
+        if (!nc)
+            return;
+        var modal = _modal();
+        if (modal)
+            modal.close();
+        _opts.createMeasure({ title: nc.title, description: nc.description || "" }).then(function (created) {
+            if (!created) {
+                _openNc({ id: nc.id });
+                return;
+            }
+            _linkMeasures(nc, (nc.measure_ids || []).concat([created.value]));
+        });
+    };
+    window._ctNcAttachMeasures = function () {
+        var modal = _modal();
+        if (!modal || !_opts || !_detailNcId)
+            return;
+        var nc = _ncRows.filter(function (r) { return r.id === _detailNcId; })[0];
+        if (!nc)
+            return;
+        var linked = nc.measure_ids || [];
+        var options = (_opts.measureOptions ? _opts.measureOptions() : []).filter(function (o) { return linked.indexOf(o.value) < 0; });
         var h = '<div class="fs-sm ct-mb-3"><strong>' + esc(nc.reference) + '</strong> — ' + esc(nc.title) + '</div>';
-        h += '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("nc.remediation_help")) + '</div>';
-        if (_opts.createMeasure) {
-            h += '<div class="ct-mb-3"><button class="ct-btn" data-variant="primary" data-click="_ctNcNewMeasure">' + _icon("plus", 14) + ' ' + esc(t("nc.new_measure")) + '</button></div>';
-        }
-        if (options.length) {
-            h += _field(t("nc.f.measures_existing"), _measureSelect("ct-nc-measures", _opts, selected));
-        }
-        else if (!_opts.createMeasure) {
-            h += '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("nc.no_measures")) + '</div>';
-        }
-        modal.open({ title: t("nc.remediation_title"), body: h, size: "md", buttons: [
+        h += '<div id="ct-nc-measures" class="ct-checklist">';
+        options.forEach(function (o) {
+            h += '<label class="ct-block ct-mb-1 fs-sm"><input type="checkbox" name="ct-nc-measures" value="' + esc(o.value) + '" /> ' + esc(o.label)
+                + (o.statusLabel ? ' <span class="ct-badge" data-size="sm" data-tone="' + (o.done ? 'low' : 'medium') + '">' + esc(o.statusLabel) + '</span>' : '')
+                + '</label>';
+        });
+        h += '</div>';
+        modal.open({ title: t("nc.attach_measures"), body: h, size: "md", buttons: [
                 { id: "cancel", label: t("nc.cancel") },
-                { id: "ok", label: t("nc.act_remediation_submit"), primary: true, result: function () {
+                { id: "ok", label: t("nc.attach_submit"), primary: true, result: function () {
                         var ids = _multi("ct-nc-measures");
                         if (!ids.length) {
                             showStatus(t("nc.err_measures"), true);
@@ -541,26 +626,11 @@
                         return { ids: ids };
                     } },
             ] }).then(function (r) {
-            if (!r || !_opts)
+            if (!r) {
+                _openNc({ id: nc.id });
                 return;
-            if (r.__new)
-                return; // reopened by _ctNcNewMeasure
-            _opts.remediationNc(nc.id, r.ids).then(_reload).catch(_fail);
-        });
-    }
-    window._ctNcNewMeasure = function () {
-        if (!_opts || !_opts.createMeasure || !_remedNc)
-            return;
-        var nc = _remedNc;
-        var keep = _multi("ct-nc-measures");
-        var modal = _modal();
-        // Close this modal with a marker the .then() above ignores, then hand over.
-        if (modal)
-            modal.close();
-        _opts.createMeasure({ title: nc.title, description: nc.description || "" }).then(function (created) {
-            if (created && keep.indexOf(created.value) < 0)
-                keep.push(created.value);
-            _remediationModal(nc, keep);
+            }
+            _linkMeasures(nc, linked.concat(r.ids));
         });
     };
     function _qualifyNc(nc) {
@@ -631,16 +701,18 @@
             var prev = _derRows.filter(function (r) { return r.id === d.renews_id; })[0];
             h += _row(t("der.renews"), prev ? prev.reference : String(d.renews_id));
         }
+        if (d.module_url)
+            h = '<div class="ct-mb-2 fs-sm"><a href="' + esc(d.module_url) + '">' + esc(t("nc.open_in_module", { module: d.module_name || d.module || "" })) + ' ↗</a></div>' + h;
         var buttons = [{ id: "close", label: t("nc.close") }];
         if (d.subject_type !== "nonconformity" && d.subject_type !== "none" && _opts.openSubject)
             buttons.push({ id: "open_subject", label: _openLabel(d.subject_type), result: "open_subject" });
-        if (d.status === "pending_approval" && admin) {
+        if (d.status === "pending_approval" && admin && _opts.decideDer) {
             buttons.push({ id: "reject", label: t("der.act_reject"), danger: true, result: "reject" });
             buttons.push({ id: "approve", label: t("der.act_approve"), primary: true, result: "approve" });
         }
-        if (d.status === "approved" && admin)
+        if (d.status === "approved" && admin && _opts.revokeDer)
             buttons.push({ id: "revoke", label: t("der.act_revoke"), danger: true, result: "revoke" });
-        if (d.status === "expired" || d.status === "revoked")
+        if ((d.status === "expired" || d.status === "revoked") && _opts.createDer)
             buttons.push({ id: "renew", label: t("der.act_renew"), result: "renew" });
         modal.open({ title: d.reference, body: h, size: "md", buttons: buttons }).then(function (r) {
             if (!r || !_opts)
@@ -671,6 +743,10 @@
         });
     }
     function _settings() {
+        if (_opts && _opts.openSettings) {
+            _opts.openSettings();
+            return;
+        }
         var modal = _modal();
         if (!modal || !_opts || !_opts.getSettings || !_opts.saveSettings)
             return;
@@ -701,6 +777,7 @@
             _ncFilter = status;
         _draw();
     };
+    window._ctNcModuleFilter = function (module) { _moduleFilter = module || ""; _draw(); };
     window._ctNcOpen = _openNc;
     window._ctDerOpen = _openDer;
     window._ctNcDeclare = function () { if (_opts)
@@ -875,6 +952,14 @@ _registerTranslations("fr", {
     "nc.col_source": "Source",
     "nc.col_observed": "Observée le",
     "nc.col_status": "Statut",
+    "nc.col_module": "Module",
+    "nc.all_modules": "Tous les modules",
+    "nc.col_treatment": "Traitement",
+    "nc.treatment.measure": "Mesure",
+    "nc.treatment.derogation": "Dérogation",
+    "nc.treatment.none": "Aucun",
+    "nc.f.module": "Module de rattachement",
+    "nc.open_in_module": "Ouvrir dans {module}",
     "nc.declared_by": "Déclarée par",
     "nc.qualified_by": "Qualifiée par",
     "nc.rejection_note": "Motif de rejet",
@@ -885,24 +970,21 @@ _registerTranslations("fr", {
     "nc.open_subject.control": "Voir l'exigence dans le référentiel",
     "nc.act_qualify": "Qualifier",
     "nc.act_reject": "Rejeter",
-    "nc.act_remediation": "Passer en remédiation",
     "nc.act_close": "Clôturer",
     "nc.qualify_help": "La qualification confirme la non-conformité et fixe sa gravité ; elle passe alors « ouverte ».",
     "nc.reject_note_label": "Motif du rejet (obligatoire)",
     "nc.err_title": "Le titre doit faire au moins 3 caractères.",
     "nc.errors_intro": "Avant de valider, compléter :",
     "nc.required_hint": "Les champs marqués * sont obligatoires.",
-    "nc.f.measures_existing": "Ou rattacher des mesures existantes",
     "nc.edit_measure": "Modifier",
     "nc.close_blocked": "Clôture possible quand toutes les mesures sont terminées ({n} restante(s)).",
     "nc.err_note": "Le texte doit faire au moins 3 caractères.",
     "nc.no_measures": "Aucune mesure disponible dans ce module.",
     "nc.search_person": "Rechercher une personne...",
     "nc.f.measures": "Mesures correctives",
-    "nc.act_measures": "Mesures correctives",
-    "nc.remediation_title": "Remédiation — mesures correctives",
-    "nc.remediation_help": "Une non-conformité en remédiation est portée par au moins une mesure du plan d'action : choisir des mesures existantes ou en créer une.",
-    "nc.act_remediation_submit": "Enregistrer la remédiation",
+    "nc.attach_measures": "Rattacher des mesures existantes",
+    "nc.attach_submit": "Rattacher",
+    "nc.no_measure_yet": "Aucune mesure corrective : la non-conformité passe en remédiation dès la première.",
     "nc.new_measure": "Nouvelle mesure",
     "nc.err_measures": "Au moins une mesure corrective est requise.",
     "nc.settings_title": "Paramètres des dérogations",
@@ -1008,6 +1090,14 @@ _registerTranslations("en", {
     "nc.col_source": "Source",
     "nc.col_observed": "Observed on",
     "nc.col_status": "Status",
+    "nc.col_module": "Module",
+    "nc.all_modules": "All modules",
+    "nc.col_treatment": "Treatment",
+    "nc.treatment.measure": "Measure",
+    "nc.treatment.derogation": "Derogation",
+    "nc.treatment.none": "None",
+    "nc.f.module": "Owning module",
+    "nc.open_in_module": "Open in {module}",
     "nc.declared_by": "Declared by",
     "nc.qualified_by": "Qualified by",
     "nc.rejection_note": "Rejection reason",
@@ -1018,24 +1108,21 @@ _registerTranslations("en", {
     "nc.open_subject.control": "See the requirement in its framework",
     "nc.act_qualify": "Qualify",
     "nc.act_reject": "Reject",
-    "nc.act_remediation": "Start remediation",
     "nc.act_close": "Close the non-conformity",
     "nc.qualify_help": "Qualifying confirms the non-conformity and sets its severity; it then becomes \"open\".",
     "nc.reject_note_label": "Rejection reason (required)",
     "nc.err_title": "The title needs at least 3 characters.",
     "nc.errors_intro": "Before submitting, complete:",
     "nc.required_hint": "Fields marked * are required.",
-    "nc.f.measures_existing": "Or attach existing measures",
     "nc.edit_measure": "Edit",
     "nc.close_blocked": "Closing is possible once every measure is done ({n} left).",
     "nc.err_note": "The text needs at least 3 characters.",
     "nc.no_measures": "No measure available in this module.",
     "nc.search_person": "Search a person...",
     "nc.f.measures": "Corrective measures",
-    "nc.act_measures": "Corrective measures",
-    "nc.remediation_title": "Remediation — corrective measures",
-    "nc.remediation_help": "A non-conformity in remediation is carried by at least one measure of the action plan: pick existing measures or create one.",
-    "nc.act_remediation_submit": "Save remediation",
+    "nc.attach_measures": "Attach existing measures",
+    "nc.attach_submit": "Attach",
+    "nc.no_measure_yet": "No corrective measure yet: the non-conformity enters remediation with the first one.",
     "nc.new_measure": "New measure",
     "nc.err_measures": "At least one corrective measure is required.",
     "nc.settings_title": "Derogation settings",

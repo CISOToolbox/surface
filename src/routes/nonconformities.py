@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import Measure, Derogation, Finding, Nonconformity
-from src.nonconformity_common import make_router
+from src.nonconformity_common import make_internal_router, make_router
 
 
 class FindingHook:
@@ -67,3 +67,10 @@ class FindingHook:
 
 FINDING_HOOK = FindingHook()
 router = make_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",))
+
+# Pilot's view of the register (service token): the same operations, relayed
+# with the Pilot user as actor. The token check is the module's own.
+from src.routes.internal import _check_service_token  # noqa: E402
+
+internal_router = make_internal_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",),
+                                       check_service_token=_check_service_token)
