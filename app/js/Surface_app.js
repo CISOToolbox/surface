@@ -2245,6 +2245,8 @@ window.AI_APP_CONFIG = {
         h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (crit > 0 ? ' data-tone="critical"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["critical"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.critical")) + '</div><div class="ct-kpi-value">' + crit + '</div></div></div>';
         h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (high > 0 ? ' data-tone="high"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["high"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.high")) + '</div><div class="ct-kpi-value">' + high + '</div></div></div>';
         h += '<div class="ct-kpi ct-clickable" data-emphasis="value" data-tone="info" data-click="_dashGotoRecent"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("dash.new_24h")) + '</div><div class="ct-kpi-value">' + recent24.length + '</div></div></div>';
+        // FEAT-45 — under derogation: its own category, neither open nor handled.
+        h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (stats.byStatus.derogated > 0 ? ' data-tone="neutral"' : '') + ' data-click="selectPanel" data-args=\'["nonconformities"]\' title="' + esc(t("dash.derogated_help")) + '"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("status.derogated")) + '</div><div class="ct-kpi-value">' + stats.byStatus.derogated + '</div></div></div>';
         h += '</div>';
         h += '</div>';
         // RIGHT CARD — top 3 exposed hosts
@@ -2999,9 +3001,9 @@ window.AI_APP_CONFIG = {
         return {
             listNc: function (status) { return SurfaceAPI.listNonconformities(status); },
             createNc: function (body) { return SurfaceAPI.createNonconformity(body); },
+            patchNc: function (id, body) { return SurfaceAPI.patchNonconformity(id, body); },
             qualifyNc: function (id, body) { return SurfaceAPI.qualifyNonconformity(id, body); },
             rejectNc: function (id, note) { return SurfaceAPI.rejectNonconformity(id, note); },
-            remediationNc: function (id, ids) { return SurfaceAPI.remediationNonconformity(id, ids); },
             closeNc: function (id, evidence) { return SurfaceAPI.closeNonconformity(id, evidence); },
             listDer: function (filters) { return SurfaceAPI.listDerogations(filters); },
             createDer: function (body) { return SurfaceAPI.createDerogation(body); },
@@ -3010,53 +3012,52 @@ window.AI_APP_CONFIG = {
             getSettings: function () { return SurfaceAPI.nonconformitySettings(); },
             saveSettings: function (days) { return SurfaceAPI.saveNonconformitySettings(days); },
             isAdmin: function () { return !!(window._currentUser && window._currentUser.role === "admin"); },
+            actor: function () { var u = window._currentUser; return (u && (u.name || u.email)) || ""; },
             subjectTypes: ["finding"],
             directoryUrl: "api/directory",
-            measureOptions: function () {
-                return _measures.map(function (m) {
-                    var st = m.statut || "a_faire";
-                    return { value: m.id, label: m.id + " " + (m.title || m.description || "").substring(0, 60),
-                        status: st, statusLabel: t("measures.status." + st) || st, done: st === "termine" };
-                });
+            // The findings still to be handled: a record's objects, a derogation's
+            // subject. A finding opens in its own modal.
+            items: {
+                options: function () {
+                    var out = [];
+                    for (var i = 0; i < _findings.length; i++) {
+                        var f = _findings[i];
+                        if (f.status !== "new" && f.status !== "to_fix")
+                            continue;
+                        out.push({ id: f.id, label: _findingTitle(f) + (f.target ? " · " + f.target : "") });
+                    }
+                    return out;
+                },
+                open: function (id) { _panel = "findings"; window._openFinding(id); },
             },
-            openMeasure: function (id) { return window._editSurfaceMeasureRow({ id: id }); },
-            // A derogation before any non-conformity: on a finding still to be handled.
-            subjectSearch: function (q) {
-                var out = [];
-                for (var i = 0; i < _findings.length && out.length < 100; i++) {
-                    var f = _findings[i];
-                    if (f.status !== "new" && f.status !== "to_fix")
-                        continue;
-                    var label = _findingTitle(f) + (f.target ? " · " + f.target : "");
-                    if (q && label.toLowerCase().indexOf(q) < 0)
-                        continue;
-                    out.push({ value: f.id, label: label });
-                }
-                return out;
+            // The action plan's measures: a record's corrective measures, created
+            // in the measure modal (a measure on its own, no finding), edited there.
+            measures: {
+                options: function () {
+                    return _measures.map(function (m) {
+                        var st = m.statut || "a_faire";
+                        return { id: m.id, label: m.id + " " + (m.title || m.description || "").substring(0, 60), statusLabel: t("measures.status." + st) || st, done: st === "termine" };
+                    });
+                },
+                create: function (draft) {
+                    return ct_measure_modal.open({ title: draft.title, description: draft.description }, {
+                        title: t("measures.new_title"),
+                        hideFields: ["type", "statut"],
+                        titleRequired: true,
+                        ownerPicker: { pickerId: "surface-nc-measure-owner", directoryUrl: "api/directory" }
+                    }).then(function (data) {
+                        if (!data || data.__deleted)
+                            return null;
+                        return SurfaceAPI.createMeasure({ title: data.title, description: data.description || "",
+                            responsable: data.responsable || "", echeance: data.echeance || "" })
+                            .then(function (m) {
+                            _measures.push(m);
+                            return { id: m.id, label: m.id + " " + (m.title || "").substring(0, 60) };
+                        }).catch(function (e) { showStatus(e.message || t("common.error"), true); return null; });
+                    });
+                },
+                open: function (id) { return window._editSurfaceMeasureRow({ id: id }); },
             },
-            // Corrective measure of a non-conformity: the module's measure modal,
-            // then a measure on its own (no finding) in the action plan.
-            createMeasure: function (prefill) {
-                return ct_measure_modal.open({ title: prefill.title, description: prefill.description }, {
-                    title: t("measures.new_title"),
-                    hideFields: ["type", "statut"],
-                    titleRequired: true,
-                    ownerPicker: { pickerId: "surface-nc-measure-owner", directoryUrl: "api/directory" }
-                }).then(function (data) {
-                    if (!data || data.__deleted)
-                        return null;
-                    return SurfaceAPI.createMeasure({ title: data.title, description: data.description || "",
-                        responsable: data.responsable || "", echeance: data.echeance || "" })
-                        .then(function (m) {
-                        _measures.push(m);
-                        return { value: m.id, label: m.id + " " + (m.title || "").substring(0, 60) };
-                    }).catch(function (e) { showStatus(e.message || t("common.error"), true); return null; });
-                });
-            },
-            openSubject: function (type, id) { if (type === "finding") {
-                _panel = "findings";
-                window._openFinding(id);
-            } },
             onChange: function () { return _loadAndRender(); }
         };
     }

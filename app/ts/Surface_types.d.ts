@@ -262,7 +262,7 @@ interface SurfaceAPIShape {
     createNonconformity(body: Record<string, unknown>): Promise<CtNcRecord>;
     qualifyNonconformity(id: string, body: Record<string, unknown>): Promise<CtNcRecord>;
     rejectNonconformity(id: string, note: string): Promise<CtNcRecord>;
-    remediationNonconformity(id: string, measureIds: string[]): Promise<CtNcRecord>;
+    patchNonconformity(id: string, body: Record<string, unknown>): Promise<CtNcRecord>;
     closeNonconformity(id: string, evidence: string): Promise<CtNcRecord>;
     listDerogations(filters?: Record<string, string>): Promise<{ items: CtDerRecord[]; total: number }>;
     createDerogation(body: Record<string, unknown>): Promise<CtDerRecord>;

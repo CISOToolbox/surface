@@ -63,7 +63,7 @@ window.SurfaceAPI = {
     createNonconformity: function(body) { return _fetch("/nonconformities", { method: "POST", body: body }); },
     qualifyNonconformity: function(id, body) { return _fetch("/nonconformities/" + id + "/qualify", { method: "POST", body: body }); },
     rejectNonconformity: function(id, note) { return _fetch("/nonconformities/" + id + "/reject", { method: "POST", body: { note: note } }); },
-    remediationNonconformity: function(id, measureIds) { return _fetch("/nonconformities/" + id + "/remediation", { method: "POST", body: { measure_ids: measureIds } }); },
+    patchNonconformity: function(id, body) { return _fetch("/nonconformities/" + id, { method: "PATCH", body: body }); },
     closeNonconformity: function(id, evidence) { return _fetch("/nonconformities/" + id + "/close", { method: "POST", body: { closure_evidence: evidence } }); },
     listDerogations: function(filters) {
         var parts: string[] = [];

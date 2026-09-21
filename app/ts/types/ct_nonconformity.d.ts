@@ -3,6 +3,10 @@
 // It is overwritten at every release; a change made here is lost.
 // See CONTRIBUTING.md.
 // -----------------------------------------------------------------------------
+interface CtNcSubject {
+    type: string;
+    id: string;
+}
 interface CtNcRecord {
     id: string;
     reference: string;
@@ -18,6 +22,8 @@ interface CtNcRecord {
     requirement_ref?: string;
     subject_type?: string;
     subject_id?: string;
+    /** Every item the record is about; the pair above is the first one. */
+    subjects?: CtNcSubject[];
     status: string;
     qualified_by?: string;
     qualified_at?: string | null;
@@ -62,13 +68,28 @@ interface CtDerRecord {
     module_name?: string;
     module_url?: string;
 }
-interface CtNcMeasureOption {
-    value: string;
+/** An object of the module a record can be linked to. */
+interface CtNcItemOption {
+    id: string;
     label: string;
-    /** Module status value and its display label; `done` when the measure counts as finished. */
-    status?: string;
+    /** Measures: the module's status label, and whether it counts as finished. */
     statusLabel?: string;
     done?: boolean;
+}
+/** How the module exposes one kind of object to the association field. */
+interface CtNcAssoc {
+    /** Every object the field may pick. */
+    options: () => CtNcItemOption[];
+    /** The module's own creation modal; resolves with the created object, null when cancelled. */
+    create?: (draft: {
+        title: string;
+        description: string;
+        domain: string;
+    }) => Promise<CtNcItemOption | null>;
+    /** The object's own page in the module (opened in a new tab). */
+    href?: (id: string) => string | null;
+    /** Opens the object in the module when it has no page of its own; resolves when done. */
+    open?: (id: string) => Promise<unknown> | void;
 }
 interface CtNcOptions {
     listNc: (status?: string) => Promise<{
@@ -81,17 +102,16 @@ interface CtNcOptions {
      *  module supplies all of them, the console only what it relays
      *  (declaration, decision). */
     createNc?: (body: Record<string, unknown>) => Promise<CtNcRecord>;
+    patchNc?: (id: string, body: Record<string, unknown>) => Promise<CtNcRecord>;
     qualifyNc?: (id: string, body: Record<string, unknown>) => Promise<CtNcRecord>;
     rejectNc?: (id: string, note: string) => Promise<CtNcRecord>;
-    /** Links the corrective measures (at least one) and moves to in_remediation. */
-    remediationNc?: (id: string, measureIds: string[]) => Promise<CtNcRecord>;
     closeNc?: (id: string, evidence: string) => Promise<CtNcRecord>;
     createDer?: (body: Record<string, unknown>) => Promise<CtDerRecord>;
     decideDer?: (id: string, approve: boolean, note: string) => Promise<CtDerRecord>;
     revokeDer?: (id: string, reason: string) => Promise<CtDerRecord>;
     /** Console mode: the modules a declaration can target, and the records'
      *  module column. A declaration then carries `module`. */
-    modules?: CtNcMeasureOption[];
+    modules?: CtNcItemOption[];
     /** Replaces the built-in settings modal (the console edits per module). */
     openSettings?: () => void;
     getSettings?: () => Promise<{
@@ -99,41 +119,47 @@ interface CtNcOptions {
     }>;
     saveSettings?: (days: number) => Promise<unknown>;
     isAdmin: () => boolean;
-    /** Subject types the module can attach a record to (e.g. ["finding"]). */
+    /** The current user as the records name their declarant (the server's actor). */
+    actor?: () => string;
+    /** The kind of item the module links records to (["control"], ["finding"]). */
     subjectTypes: string[];
-    /** Measures of the module (ids + labels): compensating or corrective. */
-    measureOptions?: () => CtNcMeasureOption[];
-    /** Opens the module's measure modal and creates the measure; resolves with
-     *  its option (or null when cancelled). Enables "+ New measure". */
-    createMeasure?: (prefill: {
-        title: string;
-        description: string;
-    }) => Promise<CtNcMeasureOption | null>;
-    /** Opens the module's own edit modal for a measure; resolves when it closes. */
-    openMeasure?: (id: string) => Promise<unknown> | void;
-    /** Module items a derogation can be requested on BEFORE any
-     *  non-conformity (a requirement one knows will not be met, a finding):
-     *  value = subject id, label = what the user recognises. */
-    subjectSearch?: (query: string) => CtNcMeasureOption[];
+    /** The module's items of that kind (a record's objects, a derogation's subject). */
+    items?: CtNcAssoc;
+    /** The module's measures (a record's corrective measures). */
+    measures?: CtNcAssoc;
     /** Directory endpoint for the person pickers (default "api/directory"). */
     directoryUrl?: string;
-    /** Opens the subject in the module (called with subject_type, subject_id). */
-    openSubject?: (subjectType: string, subjectId: string) => void;
     /** Called after every successful write, so the module can refresh; a
      *  returned promise is awaited before the register re-renders. */
     onChange?: () => void | Promise<unknown>;
 }
 interface CtNcPrefill {
+    /** One item, as the module rows pass it; `subjects` is the general form. */
     subject_type?: string;
     subject_id?: string;
     subject_label?: string;
+    subjects?: CtNcSubject[];
+    measure_ids?: string[];
+    /** Labels of objects the module no longer lists (a fixed finding…). */
+    labels?: Record<string, string>;
     title?: string;
     description?: string;
     domain?: string;
     requirement_ref?: string;
     severity?: string;
-    /** Non-conformity the derogation covers (its subject is reused). */
+    source?: string;
+    observed_at?: string;
+    observed_by?: string;
+    evidence?: string[];
+    /** Non-conformity the derogation covers. */
     nonconformity?: CtNcRecord | null;
+    /** Derogation form fields kept across a "+ declare" detour. */
+    justification?: string;
+    risk_owner?: string;
+    approver?: string;
+    valid_from?: string;
+    valid_until?: string;
+    review_at?: string;
 }
 interface CtNonconformityApi {
     declare(opts: CtNcOptions, prefill?: CtNcPrefill): Promise<CtNcRecord | null>;
@@ -150,11 +176,10 @@ interface Window {
     _ctNcDeclare?: () => void;
     _ctNcRequestDer?: () => void;
     _ctNcSettings?: () => void;
-    _ctNcAddMeasure?: () => void;
     _ctNcModuleFilter?: (module: string) => void;
-    _ctNcAttachMeasures?: () => void;
-    _ctNcEditMeasure?: (id: string) => void;
-    _ctDerSearch?: (q: string) => void;
+    _ctNcSourceFilter?: (source: string) => void;
+    _ctNcCreate?: (field: string, query: string) => void;
+    _ctNcOpenItem?: (field: string, id: string) => void;
     _ctDerKind?: (kind: string) => void;
     _ctDerDeclareNc?: () => void;
 }

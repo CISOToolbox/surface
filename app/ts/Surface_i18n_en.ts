@@ -274,6 +274,7 @@ if (typeof _registerTranslations === "function") {
         "dash.title":          "Dashboard",
         "dash.findings_total": "Total findings",
         "dash.false_positive": "False positives",
+        "dash.derogated_help": "Neither open nor handled: accepted for a bounded time",
         "dash.measures_done":  "Remediations done",
         "dash.headline_critical":    "{n} critical finding(s) to triage — immediate attention required",
         "dash.headline_high":        "{n} high-severity finding(s) to triage",

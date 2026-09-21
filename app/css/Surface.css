@@ -706,7 +706,7 @@
 /* ── Alert counts grid ── */
 .dash-banner-counts {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 10px;
 }
 
@@ -952,7 +952,7 @@
 .dash-card-alert .dash-card-head { border-bottom-color: rgba(0, 0, 0, 0.08); }
 .dash-card-alert .dash-banner-counts {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 10px;
 }
 

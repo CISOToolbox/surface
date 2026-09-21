@@ -109,6 +109,10 @@ def define_models(Base: Any) -> tuple[type, type]:
         requirement_ref = Column(String(200), default="")
         subject_type = Column(String(50), default="")
         subject_id = Column(String(200), default="")
+        # Every item the record is about ([{"type", "id"}]): requirements
+        # overlap across frameworks, one gap may concern several. The pair
+        # above keeps the first one, the primary, for what is keyed on one.
+        subjects = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
         status = Column(String(30), nullable=False, default="to_qualify", server_default=text("'to_qualify'"))
         qualified_by = Column(String(255), default="")
         qualified_at = Column(DateTime(timezone=True), nullable=True)
@@ -291,6 +295,36 @@ async def _audit(db: AsyncSession, user: Any, request: Optional[Request], action
 
 # ── serialization ────────────────────────────────────────────────────────
 
+def subjects_of(n: Any) -> list:
+    """The record's items, the legacy single pair as a one-item list."""
+    subs = [x for x in (n.subjects or []) if isinstance(x, dict) and x.get("id")]
+    if not subs and n.subject_id:
+        subs = [{"type": n.subject_type or "", "id": n.subject_id}]
+    return [{"type": str(x.get("type") or ""), "id": str(x.get("id") or "")} for x in subs]
+
+
+def normalize_subjects(subjects: Any, subject_type: str, subject_id: str, kinds: tuple) -> list:
+    """The items a record is about, deduplicated, each of a kind the module
+    attaches records to; the legacy single pair is the one-item form."""
+    raw = list(subjects or [])
+    if not raw and (subject_type or subject_id):
+        raw = [{"type": subject_type, "id": subject_id}]
+    if len(raw) > 50:
+        raise HTTPException(status_code=422, detail="at most 50 subjects per record")
+    out: list = []
+    seen: set = set()
+    for x in raw:
+        st = str(x.get("type") or "").strip() if isinstance(x, dict) else ""
+        sid = str(x.get("id") or "").strip()[:200] if isinstance(x, dict) else ""
+        if st not in kinds or not sid:
+            raise HTTPException(status_code=422, detail=f"each subject needs a type among {', '.join(kinds)} and an id")
+        if (st, sid) in seen:
+            continue
+        seen.add((st, sid))
+        out.append({"type": st, "id": sid})
+    return out
+
+
 def nc_to_dict(n: Any) -> dict:
     return {
         "id": str(n.id), "reference": n.reference, "source": n.source,
@@ -300,6 +334,7 @@ def nc_to_dict(n: Any) -> dict:
         "evidence": n.evidence or [], "domain": n.domain or "",
         "requirement_ref": n.requirement_ref or "",
         "subject_type": n.subject_type or "", "subject_id": n.subject_id or "",
+        "subjects": subjects_of(n),
         "status": n.status, "qualified_by": n.qualified_by or "",
         "qualified_at": n.qualified_at.isoformat() if n.qualified_at else None,
         "rejection_note": n.rejection_note or "",
@@ -347,6 +382,8 @@ class NonconformityCreate(BaseModel):
     requirement_ref: str = ""
     subject_type: str = ""
     subject_id: str = ""
+    # [{"type", "id"}]; the pair above is the one-item form.
+    subjects: list = Field(default_factory=list)
     evidence: list = Field(default_factory=list)
 
 
@@ -361,6 +398,12 @@ class NonconformityPatch(BaseModel):
     requirement_ref: Optional[str] = None
     evidence: Optional[list] = None
     measure_ids: Optional[list] = None
+    # The items the record is about: set, changed or removed (empty list)
+    # while no derogation covers the record; the module validates each item.
+    # `subjects` replaces the list; the pair below is the one-item form.
+    subjects: Optional[list] = None
+    subject_type: Optional[str] = None
+    subject_id: Optional[str] = None
 
 
 class QualifyBody(BaseModel):
@@ -510,10 +553,9 @@ class NcService:
         if body.severity not in NC_SEVERITIES:
             raise HTTPException(status_code=422, detail=f"severity must be one of {', '.join(NC_SEVERITIES)}")
         nc_kinds = tuple(k for k in self.kinds if k not in ("nonconformity", "none"))
-        if body.subject_type and body.subject_type not in nc_kinds:
-            raise HTTPException(status_code=422, detail=f"subject_type must be one of {', '.join(nc_kinds)}")
-        if body.subject_type:
-            await self.subject_label(db, body.subject_type, body.subject_id)
+        subjects = normalize_subjects(body.subjects, body.subject_type, body.subject_id, nc_kinds)
+        for sub in subjects:
+            await self.subject_label(db, sub["type"], sub["id"])     # 404 / 409 from the module's hook
         observed = _as_date(body.observed_at) or date.today()
         if observed > date.today():
             raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
@@ -524,12 +566,12 @@ class NcService:
             title=body.title.strip()[:500], description=body.description[:5000],
             severity=body.severity, evidence=body.evidence[:50],
             domain=body.domain[:100], requirement_ref=body.requirement_ref[:200],
-            subject_type=body.subject_type, subject_id=body.subject_id[:200],
-            status="to_qualify",
+            subject_type=subjects[0]["type"] if subjects else "", subject_id=subjects[0]["id"] if subjects else "",
+            subjects=subjects, status="to_qualify",
         )
         await commit_with_reference(db, nc, self.Nonconformity, "NC")
         await _audit(db, user, request, "nonconformity.declared", nc.reference,
-                     {"severity": nc.severity, "source": nc.source, "subject": f"{nc.subject_type}:{nc.subject_id}"},
+                     {"severity": nc.severity, "source": nc.source, "subjects": [f"{x['type']}:{x['id']}" for x in subjects]},
                      actor=actor)
         await db.commit()
         await db.refresh(nc)
@@ -568,6 +610,15 @@ class NcService:
         await db.commit()
         await db.refresh(d)
         return der_to_dict(d)
+
+
+async def declared_counts(db: AsyncSession, Nonconformity: Any) -> dict:
+    """{to_qualify, open, derogated} of the declared non-conformities, for the
+    stats envelope (a derogated record joins the module's derogated items)."""
+    rows = (await db.execute(select(Nonconformity.status, func.count()).group_by(Nonconformity.status))).all()
+    by = {status: int(n) for status, n in rows}
+    return {"to_qualify": by.get("to_qualify", 0), "open": by.get("open", 0) + by.get("in_remediation", 0),
+            "derogated": by.get("derogated", 0)}
 
 
 def nc_treatment(nc: Any) -> str:
@@ -711,6 +762,25 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
             data["observed_at"] = observed
         if "evidence" in data:
             data["evidence"] = [str(e)[:1000] for e in (data["evidence"] or [])][:50]
+        if "subjects" in data or "subject_type" in data or "subject_id" in data:
+            nc_kinds = tuple(k for k in kinds if k not in ("nonconformity", "none"))
+            wanted = normalize_subjects(data.pop("subjects", None), str(data.pop("subject_type", "") or ""),
+                                        str(data.pop("subject_id", "") or ""), nc_kinds)
+            current = subjects_of(nc)
+            if wanted != current:
+                # Requested or granted on this record, the derogation was about its subjects.
+                covered = nc.derogation_id or await db.scalar(
+                    select(func.count()).select_from(Derogation).where(
+                        Derogation.subject_type == "nonconformity", Derogation.subject_id == str(nc.id),
+                        Derogation.status.in_(["pending_approval", "approved"])))
+                if covered:
+                    raise HTTPException(status_code=409, detail="a derogation covers the non-conformity: its subjects cannot change")
+                for sub in wanted:
+                    if sub not in current:
+                        await _subject_label(db, sub["type"], sub["id"])      # 404 / 409 from the module's hook
+                data["subjects"] = wanted
+                data["subject_type"] = wanted[0]["type"] if wanted else ""
+                data["subject_id"] = wanted[0]["id"] if wanted else ""
         if "measure_ids" in data:
             ids = []
             for m in data["measure_ids"] or []:
@@ -723,6 +793,8 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
             if missing:
                 raise HTTPException(status_code=422, detail=f"unknown measure(s) {', '.join(missing)}")
             data["measure_ids"] = ids
+            if ids and nc.status == "open":          # the first corrective measure starts the remediation
+                data["status"] = "in_remediation"
         caps = {"title": 500, "description": 5000, "observed_by": 255, "domain": 100, "requirement_ref": 200}
         for field, value in data.items():
             setattr(nc, field, value[:caps.get(field, 5000)] if isinstance(value, str) else value)
@@ -952,7 +1024,7 @@ async def revoke_for_subject(db: AsyncSession, Derogation: Any, subject_type: st
 
 
 __all__ = [
-    "commit_with_reference", "make_internal_router", "NcService", "nc_treatment", "InternalDecision", "InternalDeclaration",
+    "commit_with_reference", "make_internal_router", "NcService", "nc_treatment", "InternalDecision", "InternalDeclaration", "declared_counts",
     "NC_SOURCES", "NC_SEVERITIES", "NC_STATUSES", "NC_TRANSITIONS",
     "DER_STATUSES", "DER_TRANSITIONS", "DEFAULT_MAX_DAYS", "MAX_DAYS_SETTING",
     "define_models", "check_transition", "validate_derogation_request", "next_reference",

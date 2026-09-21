@@ -269,6 +269,7 @@ if (typeof _registerTranslations === "function") {
         "dash.title": "Tableau de bord",
         "dash.findings_total": "Findings totaux",
         "dash.false_positive": "Faux positifs",
+        "dash.derogated_help": "Ni ouverts ni traités : acceptés pour une durée bornée",
         "dash.measures_done": "Remédiations terminées",
         "dash.headline_critical": "{n} finding(s) critiques à traiter — attention immédiate requise",
         "dash.headline_high": "{n} finding(s) haute sévérité à traiter",

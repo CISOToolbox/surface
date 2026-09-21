@@ -248,7 +248,18 @@ async def test_patch_keeps_the_server_rules(db):
     with pytest.raises(HTTPException) as e:
         await patch_nc(n["id"], NonconformityPatch(title="x"), user=None, db=db)
     assert e.value.status_code == 422
-    assert "subject_type" not in NonconformityPatch.model_fields
+    # the subject is an association: validated by the module, changed or removed at will
+    with pytest.raises(HTTPException) as e:
+        await patch_nc(n["id"], NonconformityPatch(subject_type="finding", subject_id=str(uuid.uuid4())), user=None, db=db)
+    assert e.value.status_code == 404
+    f = await _finding(db)
+    r = await patch_nc(n["id"], NonconformityPatch(subject_type="finding", subject_id=str(f.id)), user=None, db=db)
+    assert r["subject_id"] == str(f.id)
+    f2 = await _finding(db)
+    r = await patch_nc(n["id"], NonconformityPatch(subject_type="finding", subject_id=str(f2.id)), user=None, db=db)
+    assert r["subject_id"] == str(f2.id)
+    r = await patch_nc(n["id"], NonconformityPatch(subject_type="", subject_id=""), user=None, db=db)
+    assert r["subject_id"] == "" and r["subject_type"] == ""
     r = await patch_nc(n["id"], NonconformityPatch(evidence=[f"e{i}" for i in range(80)]), user=None, db=db)
     assert len(r["evidence"]) == 50
 
@@ -477,3 +488,66 @@ async def test_internal_router_lists_relays_and_guards(db):
     ders = await ep("internal_derogations")(req(), db=db)
     assert ders["total"] == 1 and ders["items"][0]["status"] == "approved"
     assert all(c == "tok" for c in calls[1:])
+
+
+# ── posture: the envelope's register block ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_stats_envelope_counts_the_register_as_its_own_category(db):
+    """A derogated finding is neither open nor handled: it is counted in the
+    `nonconformities` block, next to the declared records."""
+    from src.nonconformity_common import DerogationCreate, DecisionBody, NonconformityCreate, QualifyBody
+    from src.routes.internal import internal_stats
+    f = await _finding(db)                              # to_fix
+    await _finding(db, status="new")
+    d = await _endpoint("request_derogation")(DerogationCreate(**_der_body(f.id)), _req(), user=None, db=db)
+    await _endpoint("decide_derogation")(d["id"], DecisionBody(approve=True), _req(), user=None, db=db)
+    n1 = await _endpoint("declare_nonconformity")(NonconformityCreate(title="Declared, waiting"), _req(), user=None, db=db)
+    n2 = await _endpoint("declare_nonconformity")(NonconformityCreate(title="Declared, open"), _req(), user=None, db=db)
+    await _endpoint("qualify_nonconformity")(n2["id"], QualifyBody(), user=None, db=db)
+    n3 = await _endpoint("declare_nonconformity")(NonconformityCreate(title="Declared, then derogated"), _req(), user=None, db=db)
+    d3 = await _endpoint("request_derogation")(DerogationCreate(**_der_body(n3["id"], subject_type="nonconformity")), _req(), user=None, db=db)
+    await _endpoint("decide_derogation")(d3["id"], DecisionBody(approve=True), _req(), user=None, db=db)
+    db.expunge_all()
+    sreq = Request({"type": "http", "method": "GET", "path": "/api/internal/stats", "query_string": b"",
+                    "headers": [(b"x-service-token", os.environ["SERVICE_TOKEN"].encode())], "client": ("127.0.0.1", 1)})
+    stats = await internal_stats(sreq, db)
+    block = stats["nonconformities"]
+    # the derogated finding and the derogated record share the category
+    assert block == {"derogated": 2, "detected_open": 1, "with_measure": 0, "to_qualify": 1, "open": 1}
+    # the derogated finding weighs on none of the open counters…
+    assert stats["new_findings"] == 1 and stats["to_fix_findings"] == 0 and stats["high_findings"] == 1
+    # …but a derogation never greens the score: two high findings, derogated or not
+    assert stats["posture"]["score"] == 94
+
+
+@pytest.mark.asyncio
+async def test_a_record_may_concern_several_findings(db):
+    """One declared gap may cover several findings; the first is the primary."""
+    from src.nonconformity_common import NonconformityCreate, NonconformityPatch
+    f1, f2 = await _finding(db), await _finding(db)
+    n = await _endpoint("declare_nonconformity")(
+        NonconformityCreate(title="Exposed admin ports", subjects=[{"type": "finding", "id": str(f1.id)}, {"type": "finding", "id": str(f2.id)}]),
+        _req(), user=None, db=db)
+    assert [x["id"] for x in n["subjects"]] == [str(f1.id), str(f2.id)] and n["subject_id"] == str(f1.id)
+    r = await _endpoint("patch_nonconformity")(n["id"], NonconformityPatch(subjects=[{"type": "finding", "id": str(f2.id)}]), user=None, db=db)
+    assert r["subjects"] == [{"type": "finding", "id": str(f2.id)}] and r["subject_id"] == str(f2.id)
+
+
+@pytest.mark.asyncio
+async def test_the_first_corrective_measure_starts_the_remediation(db):
+    """The measures are linked through the record's form (PATCH): the first
+    one moves an open record to remediation, later ones just replace the list."""
+    from src.models import Measure
+    from src.nonconformity_common import NonconformityCreate, NonconformityPatch, QualifyBody
+    db.add(Measure(id="MES-P2", title="Close the admin port", statut="a_faire"))
+    await db.commit()
+    n = await _endpoint("declare_nonconformity")(NonconformityCreate(title="Admin port exposed"), _req(), user=None, db=db)
+    r = await _endpoint("patch_nonconformity")(n["id"], NonconformityPatch(measure_ids=["MES-P2"]), user=None, db=db)
+    assert r["status"] == "to_qualify" and r["measure_ids"] == ["MES-P2"]     # not qualified yet: no remediation
+    await _endpoint("qualify_nonconformity")(n["id"], QualifyBody(), user=None, db=db)
+    r = await _endpoint("patch_nonconformity")(n["id"], NonconformityPatch(measure_ids=["MES-P2"]), user=None, db=db)
+    assert r["status"] == "in_remediation"
+    with pytest.raises(HTTPException) as e:
+        await _endpoint("patch_nonconformity")(n["id"], NonconformityPatch(measure_ids=[]), user=None, db=db)
+    assert e.value.status_code == 422
