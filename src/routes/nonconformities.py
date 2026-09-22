@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import Measure, Derogation, Finding, Nonconformity
 from src.nonconformity_common import make_internal_router, make_router
+from src.auth import SURFACE_ROLES, require_min_role
 
 
 class FindingHook:
-    async def exists(self, db: AsyncSession, subject_type: str, subject_id: str) -> Optional[str]:
+    async def exists(self, db: AsyncSession, subject_type: str, subject_id: str, project_id: str = "") -> Optional[str]:
         if subject_type != "finding":
             return None
         try:
@@ -54,19 +55,20 @@ class FindingHook:
         f.triage_notes = ((f.triage_notes or "") + f"\n[Derogation {derogation.reference} {reason}]").strip()
 
 
-    async def missing_measures(self, db: AsyncSession, ids: list) -> list:
+    async def missing_measures(self, db: AsyncSession, ids: list, project_id: str = "") -> list:
         rows = (await db.execute(select(Measure.id).where(Measure.id.in_(ids)))).scalars().all()
         found = set(rows)
         return [i for i in ids if i not in found]
 
 
-    async def measure_states(self, db: AsyncSession, ids: list) -> dict:
+    async def measure_states(self, db: AsyncSession, ids: list, project_id: str = "") -> dict:
         rows = (await db.execute(select(Measure.id, Measure.statut).where(Measure.id.in_(ids)))).all()
         return {r[0]: r[1] for r in rows}
 
 
 FINDING_HOOK = FindingHook()
-router = make_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",))
+router = make_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",),
+                     require_writer=lambda u: require_min_role(u, "triager", SURFACE_ROLES))
 
 # Pilot's view of the register (service token): the same operations, relayed
 # with the Pilot user as actor. The token check is the module's own.

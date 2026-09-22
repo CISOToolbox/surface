@@ -44,6 +44,8 @@
     var _derFilter = "";
     var _moduleFilter = "";
     var _sourceFilter = "";
+    var _severityFilter = "";
+    var _ageFilter = 0; // minimum age in days since observation (0 = any)
     function _tone(kind, status) {
         var m = kind === "der" ? _DER_TONES : _NC_TONES;
         return m[status] || "neutral";
@@ -55,14 +57,41 @@
     function _sevBadge(sev) {
         return '<span class="ct-badge" data-tone="' + esc(_SEV_TONES[sev] || "neutral") + '">' + esc(t("nc.severity." + sev)) + '</span>';
     }
+    // What the user may do here, read from the MODULE role (window._moduleRole,
+    // filled from /auth/role) — the same role the server's gates test. The
+    // account's global role says nothing about this module. Auth disabled
+    // answers "admin", so the sentinel keeps full access.
+    function _moduleRole() { return window._moduleRole || ""; }
+    function _isAdmin() {
+        if (_opts && _opts.isAdmin)
+            return _opts.isAdmin();
+        var r = _moduleRole(); // exactly what require_admin tests
+        return r === "admin" || r === "control"; // both admin-equivalent roles
+    }
+    function _canWrite() {
+        if (_opts && _opts.canWrite)
+            return _opts.canWrite();
+        var r = _moduleRole();
+        return !!r && r !== "viewer" && r !== "reader";
+    }
     function _modal() {
         return (window.ct_modal && typeof window.ct_modal.open === "function") ? window.ct_modal : null;
     }
-    function _fail(e) {
+    // The API layer prefixes "API <code>: {"detail":"…"}" — surface the detail alone.
+    function _detail(e) {
         var msg = (e && e.message) ? String(e.message) : t("nc.error");
-        // The API layer prefixes "API <code>: {"detail":"…"}" — surface the detail alone.
         var m = /"detail"\s*:\s*"([^"]+)"/.exec(msg);
-        showStatus(m ? m[1] : msg, true);
+        return m ? m[1] : msg;
+    }
+    function _fail(e) { showStatus(_detail(e), true); }
+    // A refusal shown in the form itself (the form reopened with its fields kept).
+    function _showServerError(msg) {
+        var box = document.getElementById("ct-form-errors");
+        if (box) {
+            box.innerHTML = esc(msg);
+            box.hidden = false;
+            box.scrollIntoView({ block: "nearest" });
+        }
     }
     function _today() { return new Date().toISOString().slice(0, 10); }
     function _val(id) {
@@ -265,7 +294,8 @@
         return { title: _val("ct-nc-title"), description: _val("ct-nc-desc"), domain: _val("ct-nc-domain"),
             severity: _val("ct-nc-sev"), source: _val("ct-nc-source"), observed_at: _val("ct-nc-observed"),
             observed_by: _person("ct-nc-observer"), evidence: _lines("ct-nc-evidence"),
-            subjects: ids.map(function (id) { return { type: kind, id: id }; }), measure_ids: measureIds, labels: labels };
+            subjects: ids.map(function (id) { return { type: kind, id: id }; }), measure_ids: measureIds, labels: labels,
+            module: _val("ct-nc-module") };
     }
     // Edit sends what changed, nothing else (the server refuses a subject
     // change under a live derogation: an unchanged one must not trip it).
@@ -296,6 +326,7 @@
             return;
         }
         var seq = ++_formSeq;
+        var lastState = null; // the fields as submitted, kept on a refusal
         _formOpts = opts;
         _formCtx = { mode: mode, nc: nc, resolve: resolve };
         var kind = opts.subjectTypes[0] || "";
@@ -308,7 +339,7 @@
         var h = _errorsBox();
         if (mode === "create" && opts.modules && opts.modules.length) {
             var ms = '<select id="ct-nc-module" class="w-full">';
-            opts.modules.forEach(function (m) { ms += '<option value="' + esc(m.id) + '">' + esc(m.label) + '</option>'; });
+            opts.modules.forEach(function (m) { ms += '<option value="' + esc(m.id) + '"' + (p.module === m.id ? ' selected' : '') + '>' + esc(m.label) + '</option>'; });
             h += _field(t("nc.f.module"), ms + '</select>', true);
         }
         h += _field(t("nc.f.title"), _input("ct-nc-title", p.title || "", "text", ' maxlength="500"'), true);
@@ -342,7 +373,11 @@
         h += '<div class="fs-xs ct-muted">' + (mode === "create" ? esc(t("nc.declare_help")) + ' ' : '') + esc(t("nc.required_hint")) + '</div>';
         modal.open({
             title: mode === "create" ? t("nc.declare_title") : t("nc.edit_title") + " — " + nc.reference, body: h, size: "md",
-            onOpen: function () { _mountPickers(opts, ["ct-nc-observer"], { "ct-nc-observer": p.observed_by || "" }); },
+            onOpen: function () {
+                _mountPickers(opts, ["ct-nc-observer"], { "ct-nc-observer": p.observed_by || "" });
+                if (p.error)
+                    _showServerError(p.error);
+            },
             buttons: [
                 { id: "cancel", label: t("nc.cancel") },
                 { id: "save", label: mode === "create" ? t("nc.declare_submit") : t("nc.save"), primary: true, result: function () {
@@ -350,6 +385,7 @@
                         if (title.length < 3)
                             return _showErrors([{ id: "ct-nc-title", label: t("nc.err_title") }], t("nc.errors_intro"));
                         var st = _formState();
+                        lastState = st;
                         var subs = st.subjects || [];
                         var out = {
                             title: title, description: st.description, source: st.source, severity: st.severity,
@@ -382,7 +418,13 @@
                 if (opts.onChange)
                     opts.onChange();
                 resolve(rec);
-            }).catch(function (e) { _fail(e); resolve(null); });
+            }).catch(function (e) {
+                // Refused: the same form again, fields kept, the server's reason inline.
+                var keep = lastState || {};
+                keep.error = _detail(e);
+                keep.requirement_ref = p.requirement_ref;
+                _openForm(opts, mode, keep, nc, resolve);
+            });
         });
     }
     // "+ create" in a field of the form: the module's modal, then the same
@@ -422,7 +464,32 @@
     var _derSeq = 0;
     var _derKind = "";
     function requestDerogation(opts, prefill) {
-        return new Promise(function (resolve) { _openDerForm(opts, prefill || {}, resolve); });
+        var p = prefill || {};
+        return new Promise(function (resolve) {
+            // An item already covered (requested or approved) says so instead
+            // of opening a form the server would refuse.
+            var subjectType = p.nonconformity ? "nonconformity" : (p.subject_type || "");
+            var subjectId = p.nonconformity ? p.nonconformity.id : (p.subject_id || "");
+            if (!subjectId || subjectType === "none") {
+                _openDerForm(opts, p, resolve);
+                return;
+            }
+            opts.listDer({ subject_type: subjectType, subject_id: subjectId }).then(function (res) {
+                var live = ((res && res.items) || []).filter(function (d) { return d.status === "pending_approval" || d.status === "approved"; })[0];
+                if (live) {
+                    // The button opens the derogation that exists: in place when the
+                    // register is on screen, through its deep link otherwise.
+                    showStatus(t("der.already", { ref: live.reference, status: t("der.status." + live.status) }));
+                    if (_container && _opts && _derRows.some(function (d) { return d.id === live.id; }))
+                        _openDer({ id: live.id });
+                    else
+                        location.assign("?der=" + encodeURIComponent(live.id) + "#nonconformities");
+                    resolve(null);
+                    return;
+                }
+                _openDerForm(opts, p, resolve);
+            }).catch(function () { _openDerForm(opts, p, resolve); });
+        });
     }
     function _derKinds(opts) {
         var kinds = [];
@@ -442,7 +509,7 @@
             return '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("der.free_help")) + '</div>';
         var isNc = kind === "nonconformity";
         var options = isNc ? _openNcOptions() : opts.items.options();
-        var canCreate = isNc ? !!opts.createNc : !!(opts.items && opts.items.create);
+        var canCreate = _canWrite() && (isNc ? !!opts.createNc : !!(opts.items && opts.items.create));
         var pickTitle = function (ids) {
             var title = document.getElementById("ct-der-title");
             if (title && !title.value && ids[0])
@@ -483,6 +550,7 @@
             return;
         }
         var seq = ++_derSeq;
+        var lastState = null; // the fields as submitted, kept on a refusal
         _derOpts = opts;
         _derResolve = resolve;
         var kinds = _derKinds(opts);
@@ -508,11 +576,16 @@
         h += '<div class="fs-xs ct-muted">' + esc(t("der.request_help")) + ' ' + esc(t("nc.required_hint")) + '</div>';
         modal.open({
             title: t("der.request_title"), body: h, size: "md",
-            onOpen: function () { _mountPickers(opts, ["ct-der-owner", "ct-der-approver"], { "ct-der-owner": p.risk_owner || "", "ct-der-approver": p.approver || "" }); },
+            onOpen: function () {
+                _mountPickers(opts, ["ct-der-owner", "ct-der-approver"], { "ct-der-owner": p.risk_owner || "", "ct-der-approver": p.approver || "" });
+                if (p.error)
+                    _showServerError(p.error);
+            },
             buttons: [
                 { id: "cancel", label: t("nc.cancel") },
                 { id: "save", label: t("der.request_submit"), primary: true, result: function () {
                         var st = _derState();
+                        lastState = st;
                         var problems = [];
                         if (st.subject_type !== "none" && !st.subject_id)
                             problems.push({ id: "ct-der-subject", label: t("der.err_subject") });
@@ -550,7 +623,14 @@
                 if (opts.onChange)
                     opts.onChange();
                 resolve(d);
-            }).catch(function (e) { _fail(e); resolve(null); });
+            }).catch(function (e) {
+                // Refused: the same form again, fields kept, the server's reason inline.
+                var keep = lastState || {};
+                keep.error = _detail(e);
+                if (keep.subject_type === "nonconformity" && keep.subject_id)
+                    keep.nonconformity = _ncRows.filter(function (r) { return r.id === keep.subject_id; })[0] || null;
+                _openDerForm(opts, keep, resolve);
+            });
         });
     }
     window._ctDerKind = function (kind) {
@@ -633,11 +713,24 @@
     function renderPanel(container, opts) {
         _load(container, opts).then(_openFromQuery);
     }
+    // The module role arrives after a couple of round trips; a register drawn
+    // before it must be drawn again, or an administrator sits in front of a
+    // read-only page (and a viewer in front of buttons the server refuses).
+    document.addEventListener("ct-role-ready", function () { if (_container && _opts)
+        _draw(); });
     function _reload() {
         var changed = (_opts && _opts.onChange) ? _opts.onChange() : undefined;
         return Promise.resolve(changed).then(function () {
             return (_container && _opts) ? _load(_container, _opts) : undefined;
         });
+    }
+    // Days since the observation (the declaration date when unknown).
+    function _ageDays(r) {
+        var from = r.observed_at || (r.created_at || "").slice(0, 10);
+        if (!from)
+            return 0;
+        var ms = Date.now() - new Date(from + "T00:00:00").getTime();
+        return ms > 0 ? Math.floor(ms / 86400000) : 0;
     }
     function _pills(kind, statuses, current, rows) {
         var h = '<div class="ct-filters ct-mb-3">';
@@ -653,13 +746,15 @@
     function _draw() {
         if (!_container || !_opts)
             return;
-        var admin = _opts.isAdmin();
+        var admin = _isAdmin();
         var h = '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-3">';
         h += '<h2 class="ct-ink ct-flex-1 ct-m-0">' + esc(t("nc.panel_title")) + '</h2>';
-        if (_opts.createNc)
-            h += '<button class="ct-btn" data-write data-variant="primary" data-click="_ctNcDeclare">' + _icon("plus", 14) + ' ' + esc(t("nc.declare_btn")) + '</button>';
-        if (_opts.createDer)
-            h += '<button class="ct-btn" data-write data-click="_ctNcRequestDer">' + esc(t("der.request_btn")) + '</button>';
+        // Write actions appear only for an account the server would let write.
+        var canWrite = _canWrite();
+        if (_opts.createNc && canWrite)
+            h += '<button class="ct-btn" data-variant="primary" data-click="_ctNcDeclare">' + _icon("plus", 14) + ' ' + esc(t("nc.declare_btn")) + '</button>';
+        if (_opts.createDer && canWrite)
+            h += '<button class="ct-btn" data-click="_ctNcRequestDer">' + esc(t("der.request_btn")) + '</button>';
         if (admin && (_opts.getSettings || _opts.openSettings))
             h += '<button class="ct-btn" data-click="_ctNcSettings" title="' + esc(t("nc.settings_title")) + '">' + _icon("settings", 14) + '</button>';
         var withModule = !!(_opts.modules && _opts.modules.length);
@@ -681,7 +776,24 @@
                 + esc(src ? t("nc.source." + src) : t("nc.all")) + ' (' + n + ')</button>';
         });
         h += '</div>';
-        var ncRows = _ncRows.filter(function (r) { return (!_ncFilter || r.status === _ncFilter) && (!_moduleFilter || r.module === _moduleFilter) && (!_sourceFilter || r.source === _sourceFilter); });
+        // Criticality and age: the second and third readings of the register.
+        h += '<div class="ct-filters ct-mb-3"><span class="fs-xs ct-muted">' + esc(t("nc.by_severity")) + '</span>';
+        [""].concat(NC_SEVERITIES.slice().reverse()).forEach(function (sev) {
+            var n = sev ? _ncRows.filter(function (r) { return r.severity === sev; }).length : _ncRows.length;
+            h += '<button class="ct-btn" data-size="xs"' + (_severityFilter === sev ? ' data-variant="primary"' : '') + ' data-click="_ctNcSeverityFilter" data-args=\'' + _da(sev) + '\'>'
+                + esc(sev ? t("nc.severity." + sev) : t("nc.all")) + ' (' + n + ')</button>';
+        });
+        h += '<span class="fs-xs ct-muted ct-ml-2">' + esc(t("nc.by_age")) + '</span>';
+        [0, 30, 90].forEach(function (days) {
+            var n = days ? _ncRows.filter(function (r) { return _ageDays(r) >= days; }).length : _ncRows.length;
+            h += '<button class="ct-btn" data-size="xs"' + (_ageFilter === days ? ' data-variant="primary"' : '') + ' data-click="_ctNcAgeFilter" data-args=\'' + _da(String(days)) + '\'>'
+                + esc(days ? t("nc.age_over", { n: days }) : t("nc.all")) + ' (' + n + ')</button>';
+        });
+        h += '</div>';
+        var ncRows = _ncRows.filter(function (r) {
+            return (!_ncFilter || r.status === _ncFilter) && (!_moduleFilter || r.module === _moduleFilter) && (!_sourceFilter || r.source === _sourceFilter)
+                && (!_severityFilter || r.severity === _severityFilter) && (!_ageFilter || _ageDays(r) >= _ageFilter);
+        });
         h += window.ct_table.render({
             rows: ncRows, rowKey: "id", onRowClick: "_ctNcOpen",
             emptyHtml: '<div class="ct-muted">' + esc(t("nc.empty")) + '</div>',
@@ -734,7 +846,7 @@
         if (!nc)
             return;
         _detailNcId = nc.id;
-        var admin = _opts.isAdmin();
+        var admin = _isAdmin();
         var s = nc.status;
         var subs = _subjectsOf(nc);
         var kind = _opts.subjectTypes[0] || "";
@@ -776,14 +888,14 @@
         // an administrator, or by its declarant before qualification (the server's rule).
         var me = _opts.actor ? _opts.actor() : "";
         var mine = s === "to_qualify" && (!me || !nc.declared_by || nc.declared_by === me);
-        if (_opts.patchNc && s !== "closed" && s !== "rejected" && (admin || mine))
+        if (_opts.patchNc && _canWrite() && s !== "closed" && s !== "rejected" && (admin || mine))
             buttons.push({ id: "edit", label: t("nc.edit_btn"), result: "edit" });
         if (s === "to_qualify" && admin && _opts.qualifyNc) {
             if (_opts.rejectNc)
                 buttons.push({ id: "reject", label: t("nc.act_reject"), danger: true, result: "reject" });
             buttons.push({ id: "qualify", label: t("nc.act_qualify"), primary: true, result: "qualify" });
         }
-        if ((s === "open" || s === "in_remediation") && _opts.createDer)
+        if ((s === "open" || s === "in_remediation") && _opts.createDer && _canWrite())
             buttons.push({ id: "derog", label: t("der.request_btn"), result: "derog" });
         if ((s === "open" || s === "in_remediation" || s === "derogated") && admin && _opts.closeNc && !pending.length)
             buttons.push({ id: "closeNc", label: t("nc.act_close"), primary: true, result: "closeNc" });
@@ -873,7 +985,7 @@
         var d = _derRows.filter(function (r) { return r.id === row.id; })[0];
         if (!d)
             return;
-        var admin = _opts.isAdmin();
+        var admin = _isAdmin();
         var h = '<div class="ct-mb-3">' + _badge("der", d.status) + '</div>';
         h += _row(t("der.f.title"), d.title || "");
         h += _row(t("nc.f.subject"), _derSubjectHtml(d), true);
@@ -965,6 +1077,8 @@
     };
     window._ctNcModuleFilter = function (module) { _moduleFilter = module || ""; _draw(); };
     window._ctNcSourceFilter = function (source) { _sourceFilter = source || ""; _draw(); };
+    window._ctNcSeverityFilter = function (severity) { _severityFilter = severity || ""; _draw(); };
+    window._ctNcAgeFilter = function (days) { _ageFilter = parseInt(days, 10) || 0; _draw(); };
     window._ctNcOpen = _openNc;
     window._ctDerOpen = _openDer;
     window._ctNcDeclare = function () { if (_opts)
@@ -978,6 +1092,8 @@
         declare: declare,
         requestDerogation: requestDerogation,
         renderPanel: renderPanel,
+        canWrite: function () { return _canWrite(); },
+        isAdmin: function () { return _isAdmin(); },
         badge: function (kind, status) { return _badge(kind, status); },
         tone: function (kind, status) { return _tone(kind, status); },
     };
@@ -988,9 +1104,11 @@ _registerTranslations("fr", {
     "nc.f.items": "Objets concernés",
     "nc.f.items.control": "Exigences concernées",
     "nc.f.items.finding": "Constats concernés",
+    "nc.f.items.review_entry": "Anomalies concernées",
     "nc.f.subject": "Objet",
     "nc.f.subject.control": "Exigence",
     "nc.f.subject.finding": "Constat",
+    "nc.f.subject.review_entry": "Anomalie d'habilitation",
     "nc.f.subject.nonconformity": "Non-conformité",
     "nc.create": "Créer",
     "nc.create.control": "Créer un contrôle",
@@ -1014,8 +1132,9 @@ _registerTranslations("fr", {
     "nc.declare_help": "La déclaration est enregistrée « à qualifier » : un administrateur la qualifie (ou la rejette) avant tout suivi.",
     "nc.declared": "Non-conformité {ref} déclarée",
     "nc.empty": "Aucune non-conformité.",
-    "nc.subject_type.finding": "Constat de surface",
+    "nc.subject_type.finding": "Constat",
     "nc.subject_type.control": "Exigence",
+    "nc.subject_type.review_entry": "Anomalie d'habilitation",
     "nc.subject_type.nonconformity": "Non-conformité",
     "nc.subject_type.none": "Aucun objet (dérogation libre)",
     "nc.f.title": "Titre",
@@ -1050,6 +1169,9 @@ _registerTranslations("fr", {
     "nc.col_module": "Module",
     "nc.all_modules": "Tous les modules",
     "nc.by_source": "Par source :",
+    "nc.by_severity": "Par criticité :",
+    "nc.by_age": "Ancienneté :",
+    "nc.age_over": "> {n} j",
     "nc.edit_btn": "Modifier",
     "nc.edit_title": "Modifier la non-conformité",
     "nc.updated": "Non-conformité {ref} mise à jour",
@@ -1090,6 +1212,7 @@ _registerTranslations("fr", {
     "der.empty": "Aucune dérogation.",
     "der.free_help": "Dérogation libre, sans objet rattaché : le titre et la justification décrivent l'écart accepté.",
     "der.err_subject": "Choisir l'objet de la dérogation.",
+    "der.already": "Une dérogation couvre déjà cet objet : {ref} ({status}).",
     "der.f.title": "Titre",
     "der.f.justification": "Justification (contexte, risque accepté)",
     "der.f.risk_owner": "Porteur du risque",
@@ -1127,9 +1250,11 @@ _registerTranslations("en", {
     "nc.f.items": "Items concerned",
     "nc.f.items.control": "Requirements concerned",
     "nc.f.items.finding": "Findings concerned",
+    "nc.f.items.review_entry": "Anomalies concerned",
     "nc.f.subject": "Subject",
     "nc.f.subject.control": "Requirement",
     "nc.f.subject.finding": "Finding",
+    "nc.f.subject.review_entry": "Entitlement anomaly",
     "nc.f.subject.nonconformity": "Non-conformity",
     "nc.create": "Create",
     "nc.create.control": "Create a control",
@@ -1153,8 +1278,9 @@ _registerTranslations("en", {
     "nc.declare_help": "The declaration is recorded \"to qualify\": an administrator qualifies (or rejects) it before any follow-up.",
     "nc.declared": "Non-conformity {ref} declared",
     "nc.empty": "No non-conformity.",
-    "nc.subject_type.finding": "Surface finding",
+    "nc.subject_type.finding": "Finding",
     "nc.subject_type.control": "Requirement",
+    "nc.subject_type.review_entry": "Entitlement anomaly",
     "nc.subject_type.nonconformity": "Non-conformity",
     "nc.subject_type.none": "No subject (free derogation)",
     "nc.f.title": "Title",
@@ -1189,6 +1315,9 @@ _registerTranslations("en", {
     "nc.col_module": "Module",
     "nc.all_modules": "All modules",
     "nc.by_source": "By source:",
+    "nc.by_severity": "By criticality:",
+    "nc.by_age": "Age:",
+    "nc.age_over": "> {n} d",
     "nc.edit_btn": "Edit",
     "nc.edit_title": "Edit the non-conformity",
     "nc.updated": "Non-conformity {ref} updated",
@@ -1229,6 +1358,7 @@ _registerTranslations("en", {
     "der.empty": "No derogation.",
     "der.free_help": "Free derogation, attached to nothing: the title and the justification describe the accepted deviation.",
     "der.err_subject": "Choose the subject of the derogation.",
+    "der.already": "A derogation already covers this item: {ref} ({status}).",
     "der.f.title": "Title",
     "der.f.justification": "Justification (context, accepted risk)",
     "der.f.risk_owner": "Risk owner",

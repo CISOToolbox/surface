@@ -218,7 +218,9 @@
                 + esc(_t("fd.triage_reset", "Réinitialiser")) + '</button>';
         }
         if (opts.derogationHandler && (f.status === "new" || f.status === "to_fix")) {
-            h += '<button class="ct-btn" data-write data-click="' + esc(opts.derogationHandler) + '">'
+            // No data-write here: the caller decides, with the module role the
+            // server's gate reads (a Surface or AppSec triager may request one).
+            h += '<button class="ct-btn" data-click="' + esc(opts.derogationHandler) + '">'
                 + _icn("shield", 14) + ' ' + esc(_t("der.request_btn", "Request a derogation")) + '</button>';
         }
         if (opts.aiEnabled && opts.aiHandler) {

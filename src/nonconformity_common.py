@@ -46,7 +46,7 @@ from typing import Any, Optional, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, Date, DateTime, Index, String, Text, func, select, text
+from sqlalchemy import Column, Date, DateTime, Index, String, Text, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +107,10 @@ def define_models(Base: Any) -> tuple[type, type]:
         evidence = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
         domain = Column(String(100), default="")
         requirement_ref = Column(String(200), default="")
+        # The project the record belongs to, in the modules that have projects
+        # (Compliance, Access). Empty elsewhere, and on the records the console
+        # declares: those are module-level and everyone who reads the module sees them.
+        project_id = Column(String(64), default="", server_default="")
         subject_type = Column(String(50), default="")
         subject_id = Column(String(200), default="")
         # Every item the record is about ([{"type", "id"}]): requirements
@@ -132,6 +136,7 @@ def define_models(Base: Any) -> tuple[type, type]:
         reference = Column(String(20), nullable=False, unique=True)
         subject_type = Column(String(50), nullable=False)
         subject_id = Column(String(200), nullable=False)
+        project_id = Column(String(64), default="", server_default="")
         subject_label = Column(String(500), default="")
         title = Column(String(500), nullable=False)
         justification = Column(Text, nullable=False)
@@ -248,13 +253,30 @@ async def max_derogation_days(db: AsyncSession) -> int:
 
 # ── module hook ──────────────────────────────────────────────────────────
 
+class ProjectScope(Protocol):
+    """How a module with projects gates its register. Modules without projects
+    (Surface, AppSec) pass none and nothing is filtered."""
+
+    async def readable(self, db: AsyncSession, user: Any) -> list:
+        """Ids of the projects `user` may read. A record with no project is
+        module-level (declared from the console) and stays visible to all."""
+        ...
+
+    async def writable(self, db: AsyncSession, user: Any, project_id: str) -> None:
+        """Raise 403/404 unless `user` may write in that project."""
+        ...
+
+
 class SubjectHook(Protocol):
     """What the module does with the item a derogation covers."""
 
-    async def exists(self, db: AsyncSession, subject_type: str, subject_id: str) -> Optional[str]:
+    async def exists(self, db: AsyncSession, subject_type: str, subject_id: str,
+                     project_id: str = "") -> Optional[str]:
         """The subject's label when it exists, ``None`` otherwise. A module may
         raise an HTTPException (409) for an item that exists but cannot be
-        derogated in its current state."""
+        derogated in its current state. `project_id` is the project the record
+        belongs to: a module with projects resolves the item INSIDE it, so a
+        record never reaches across into another project's items."""
 
     async def apply(self, db: AsyncSession, derogation: Any) -> None:
         """The subject enters its 'derogated' state."""
@@ -262,15 +284,17 @@ class SubjectHook(Protocol):
     async def release(self, db: AsyncSession, derogation: Any, reason: str) -> None:
         """The subject leaves 'derogated' (expiry, revocation) → back to 'to fix'."""
 
-    async def missing_measures(self, db: AsyncSession, ids: list) -> list:
+    async def missing_measures(self, db: AsyncSession, ids: list, project_id: str = "") -> list:
         """Ids among `ids` that name no measure of the module (a remediation
-        only links measures that exist). Modules without a measure store
+        only links measures that exist), resolved inside the record's project
+        where the module has projects. Modules without a measure store
         return `ids` unchanged."""
         ...
 
-    async def measure_states(self, db: AsyncSession, ids: list) -> dict:
+    async def measure_states(self, db: AsyncSession, ids: list, project_id: str = "") -> dict:
         """{id: status} of the module's measures among `ids`, the status being
-        the module's own value ("termine" means done). Missing ids are absent."""
+        the module's own value ("termine" means done), resolved inside the
+        record's project. Missing ids are absent."""
         ...
 
 
@@ -334,6 +358,7 @@ def nc_to_dict(n: Any) -> dict:
         "evidence": n.evidence or [], "domain": n.domain or "",
         "requirement_ref": n.requirement_ref or "",
         "subject_type": n.subject_type or "", "subject_id": n.subject_id or "",
+        "project_id": getattr(n, "project_id", "") or "",
         "subjects": subjects_of(n),
         "status": n.status, "qualified_by": n.qualified_by or "",
         "qualified_at": n.qualified_at.isoformat() if n.qualified_at else None,
@@ -350,6 +375,7 @@ def nc_to_dict(n: Any) -> dict:
 def der_to_dict(d: Any) -> dict:
     return {
         "id": str(d.id), "reference": d.reference,
+        "project_id": getattr(d, "project_id", "") or "",
         "subject_type": d.subject_type, "subject_id": d.subject_id,
         "subject_label": d.subject_label or "",
         "title": d.title, "justification": d.justification,
@@ -380,6 +406,7 @@ class NonconformityCreate(BaseModel):
     observed_by: str = ""
     domain: str = ""
     requirement_ref: str = ""
+    project_id: str = ""
     subject_type: str = ""
     subject_id: str = ""
     # [{"type", "id"}]; the pair above is the one-item form.
@@ -425,6 +452,7 @@ class CloseBody(BaseModel):
 
 
 class DerogationCreate(BaseModel):
+    project_id: str = ""
     subject_type: str
     subject_id: str
     title: str = ""
@@ -531,15 +559,20 @@ class NcService:
             raise HTTPException(status_code=404, detail="Derogation not found")
         return row
 
-    async def subject_label(self, db: AsyncSession, subject_type: str, subject_id: str) -> str:
+    async def subject_label(self, db: AsyncSession, subject_type: str, subject_id: str,
+                            project_id: str = "") -> str:
         if subject_type == "none":
             return ""
         if subject_type == "nonconformity":
             nc = await self.nc(db, subject_id)
+            # Project first: a record of another project must not even say what
+            # state it is in.
+            if (getattr(nc, "project_id", "") or "") != (project_id or ""):
+                raise HTTPException(status_code=404, detail=f"nonconformity '{subject_id}' not found")
             if nc.status not in ("to_qualify", "open", "in_remediation"):
                 raise HTTPException(status_code=409, detail=f"non-conformity is '{nc.status}', not open")
             return f"{nc.reference} — {nc.title}"
-        label = await self.hook.exists(db, subject_type, subject_id)
+        label = await self.hook.exists(db, subject_type, subject_id, project_id)
         if label is None:
             raise HTTPException(status_code=404, detail=f"{subject_type} '{subject_id}' not found")
         return label
@@ -555,7 +588,7 @@ class NcService:
         nc_kinds = tuple(k for k in self.kinds if k not in ("nonconformity", "none"))
         subjects = normalize_subjects(body.subjects, body.subject_type, body.subject_id, nc_kinds)
         for sub in subjects:
-            await self.subject_label(db, sub["type"], sub["id"])     # 404 / 409 from the module's hook
+            await self.subject_label(db, sub["type"], sub["id"], body.project_id or "")   # 404 / 409 from the hook
         observed = _as_date(body.observed_at) or date.today()
         if observed > date.today():
             raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
@@ -567,7 +600,7 @@ class NcService:
             severity=body.severity, evidence=body.evidence[:50],
             domain=body.domain[:100], requirement_ref=body.requirement_ref[:200],
             subject_type=subjects[0]["type"] if subjects else "", subject_id=subjects[0]["id"] if subjects else "",
-            subjects=subjects, status="to_qualify",
+            subjects=subjects, project_id=(getattr(body, "project_id", "") or "")[:64], status="to_qualify",
         )
         await commit_with_reference(db, nc, self.Nonconformity, "NC")
         await _audit(db, user, request, "nonconformity.declared", nc.reference,
@@ -602,7 +635,7 @@ class NcService:
             elif d.subject_type != "none":
                 # The subject may have moved on since the request (a finding
                 # fixed meanwhile): approving would resurrect it.
-                if await self.hook.exists(db, d.subject_type, d.subject_id) is None:
+                if await self.hook.exists(db, d.subject_type, d.subject_id, getattr(d, "project_id", "") or "") is None:
                     raise HTTPException(status_code=409, detail="the subject is no longer open: nothing to derogate")
                 await self.hook.apply(db, d)
         await _audit(db, user, request, "derogation." + new, d.reference,
@@ -665,6 +698,7 @@ def make_internal_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
     async def internal_derogations(request: Request, status: Optional[str] = None,
                                    db: AsyncSession = Depends(get_db)):
         check_service_token(request)
+        # The console is cross-project by design: it sees every record.
         q = select(Derogation).order_by(Derogation.created_at.desc())
         if status:
             q = q.where(Derogation.status == status)
@@ -701,11 +735,65 @@ def make_internal_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
 
 
 def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
-                subject_types: tuple[str, ...]) -> APIRouter:
+                subject_types: tuple[str, ...], require_writer: Any = None,
+                project_scope: Any = None) -> APIRouter:
     """The module mounts this once. ``subject_types`` are the kinds a
     derogation may cover in this module ('finding', 'control'…); the
     kind 'nonconformity' is always accepted."""
-    from src.auth import get_current_user, require_admin
+    from src.auth import get_current_user
+    from src.auth_common import ADMIN_MODULE_ROLES, get_module_role
+
+    def require_admin(user: Any) -> None:
+        """Who decides in the register: the module's administrator, and the
+        internal-controls team the shared vocabulary calls admin-equivalent.
+        Deliberately wider than `auth.require_admin`, which guards the module's
+        administration (accounts, connector secrets, AI keys)."""
+        if user is None:
+            return
+        if get_module_role(user) not in ADMIN_MODULE_ROLES:
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+    async def _in_scope(db: AsyncSession, user: Any, row: Any, write: bool = False) -> None:
+        """A record of another project is none of this user's business: 404 on
+        read (it does not exist for them), 403 on write. No project (declared
+        from the console) stays module-level."""
+        if project_scope is None:
+            return
+        pid = getattr(row, "project_id", "") or ""
+        if not pid:
+            return
+        if write:
+            await project_scope.writable(db, user, pid)
+            return
+        if pid not in (await project_scope.readable(db, user)):
+            raise HTTPException(status_code=404, detail="not found")
+
+    def _scoped(q: Any, model: Any, allowed: Optional[list]) -> Any:
+        if allowed is None:
+            return q
+        return q.where(or_(model.project_id.in_(allowed), model.project_id == "", model.project_id.is_(None)))
+
+    async def _writer_in(db: AsyncSession, user: Any, project_id: str) -> str:
+        """A write lands in a project the user may edit. Where the module has
+        projects, a user-authored record names one: only the console (service
+        token, internal router) and the no-auth posture mint the module-level
+        records that everyone reads."""
+        pid = (project_id or "")[:64]
+        if project_scope is None:
+            return ""
+        if not pid:
+            if user is None:            # auth disabled: the module is one context
+                return ""
+            raise HTTPException(status_code=422, detail="project_id is required")
+        await project_scope.writable(db, user, pid)
+        return pid
+
+    def _writer(user: Any) -> None:
+        """Declaring, requesting a derogation and linking measures are writes:
+        a read-only account is refused, with the module's own ladder (a Surface
+        or AppSec triager writes; elsewhere an editor does)."""
+        if require_writer is not None:
+            require_writer(user)
     from src.database import get_db
 
     router = APIRouter(prefix="/api", tags=["nonconformities"])
@@ -720,28 +808,37 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
 
     # -- non-conformities --------------------------------------------------
     @router.get("/nonconformities")
-    async def list_nonconformities(status: Optional[str] = None,
+    async def list_nonconformities(status: Optional[str] = None, project_id: Optional[str] = None,
                                    user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         q = select(Nonconformity).order_by(Nonconformity.created_at.desc())
         if status:
             q = q.where(Nonconformity.status == status)
-        rows = (await db.execute(q)).scalars().all()
+        allowed = await project_scope.readable(db, user) if project_scope is not None else None
+        if project_id and allowed is not None:
+            allowed = [p for p in allowed if p == project_id]
+        rows = (await db.execute(_scoped(q, Nonconformity, allowed))).scalars().all()
         return {"items": [nc_to_dict(r) for r in rows], "total": len(rows)}
 
     @router.post("/nonconformities", status_code=201)
     async def declare_nonconformity(body: NonconformityCreate, request: Request,
                                     user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+        _writer(user)
+        body.project_id = await _writer_in(db, user, body.project_id)
         return await svc.declare(db, body, _actor(user), user, request)
 
     @router.get("/nonconformities/{nc_id}")
     async def get_nonconformity(nc_id: str, user=Depends(get_current_user),
                                 db: AsyncSession = Depends(get_db)):
-        return nc_to_dict(await _nc(db, nc_id))
+        nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc)
+        return nc_to_dict(nc)
 
     @router.patch("/nonconformities/{nc_id}")
     async def patch_nonconformity(nc_id: str, body: NonconformityPatch,
                                   user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+        _writer(user)
         nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc, write=True)
         if nc.status in ("closed", "rejected"):
             raise HTTPException(status_code=409, detail=f"non-conformity is '{nc.status}'")
         # Before qualification the declarant may still correct the record;
@@ -777,7 +874,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                     raise HTTPException(status_code=409, detail="a derogation covers the non-conformity: its subjects cannot change")
                 for sub in wanted:
                     if sub not in current:
-                        await _subject_label(db, sub["type"], sub["id"])      # 404 / 409 from the module's hook
+                        await _subject_label(db, sub["type"], sub["id"], getattr(nc, "project_id", "") or "")
                 data["subjects"] = wanted
                 data["subject_type"] = wanted[0]["type"] if wanted else ""
                 data["subject_id"] = wanted[0]["id"] if wanted else ""
@@ -789,7 +886,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                     ids.append(m)
             if nc.status == "in_remediation" and not ids:
                 raise HTTPException(status_code=422, detail="remediation: at least one corrective measure is required")
-            missing = await hook.missing_measures(db, ids) if ids else []
+            missing = await hook.missing_measures(db, ids, getattr(nc, "project_id", "") or "") if ids else []
             if missing:
                 raise HTTPException(status_code=422, detail=f"unknown measure(s) {', '.join(missing)}")
             data["measure_ids"] = ids
@@ -809,6 +906,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                                     user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc, write=True)
         check_transition("nonconformity", nc.status, "open")
         if body.severity:
             if body.severity not in NC_SEVERITIES:
@@ -832,6 +930,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                                    user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc, write=True)
         check_transition("nonconformity", nc.status, "rejected")
         if not body.note.strip():
             raise HTTPException(status_code=422, detail="a rejection needs a note")
@@ -851,7 +950,9 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
         """The non-conformity is in remediation: at least one corrective
         measure of the module is linked, and every id must exist. Also the
         way to change the linked measures while in remediation."""
+        _writer(user)
         nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc, write=True)
         if nc.status != "in_remediation":
             check_transition("nonconformity", nc.status, "in_remediation")
         ids = []
@@ -861,7 +962,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                 ids.append(m)
         if not ids:
             raise HTTPException(status_code=422, detail="remediation: at least one corrective measure is required")
-        missing = await hook.missing_measures(db, ids)
+        missing = await hook.missing_measures(db, ids, getattr(nc, "project_id", "") or "")
         if missing:
             raise HTTPException(status_code=422, detail=f"remediation: unknown measure(s) {', '.join(missing)}")
         nc.measure_ids = ids
@@ -876,10 +977,11 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                                   user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         nc = await _nc(db, nc_id)
+        await _in_scope(db, user, nc, write=True)
         check_transition("nonconformity", nc.status, "closed")
         # Closing means the remediation is done: every linked measure is.
         if nc.measure_ids:
-            states = await hook.measure_states(db, list(nc.measure_ids))
+            states = await hook.measure_states(db, list(nc.measure_ids), getattr(nc, "project_id", "") or "")
             pending = [m for m in nc.measure_ids if states.get(m) != "termine"]
             if pending:
                 raise HTTPException(status_code=409,
@@ -897,8 +999,11 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
     # -- derogations ---------------------------------------------------------
     @router.get("/derogations")
     async def list_derogations(status: Optional[str] = None, subject_type: Optional[str] = None,
-                               subject_id: Optional[str] = None,
+                               subject_id: Optional[str] = None, project_id: Optional[str] = None,
                                user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+        allowed = await project_scope.readable(db, user) if project_scope is not None else None
+        if project_id and allowed is not None:
+            allowed = [p for p in allowed if p == project_id]
         q = select(Derogation).order_by(Derogation.created_at.desc())
         if status:
             q = q.where(Derogation.status == status)
@@ -906,24 +1011,30 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
             q = q.where(Derogation.subject_type == subject_type)
         if subject_id:
             q = q.where(Derogation.subject_id == subject_id)
-        rows = (await db.execute(q)).scalars().all()
+        rows = (await db.execute(_scoped(q, Derogation, allowed))).scalars().all()
         return {"items": [der_to_dict(r) for r in rows], "total": len(rows)}
 
     @router.post("/derogations", status_code=201)
     async def request_derogation(body: DerogationCreate, request: Request,
                                  user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+        _writer(user)
+        body.project_id = await _writer_in(db, user, body.project_id)
         if body.subject_type not in kinds:
             raise HTTPException(status_code=422, detail=f"subject_type must be one of {', '.join(kinds)}")
         dates = validate_derogation_request(body.model_dump(), await max_derogation_days(db))
         # A live derogation on the subject is the first thing to say: once
         # approved, the subject is no longer "open", and a 404 would hide it.
-        pending = 0 if body.subject_type == "none" else await db.scalar(
-            select(func.count()).select_from(Derogation).where(
-                Derogation.subject_type == body.subject_type, Derogation.subject_id == body.subject_id,
-                Derogation.status.in_(["pending_approval", "approved"])))
+        # One live derogation per subject — within the project, since the same
+        # item key (a requirement's `framework:ref`) exists in every project.
+        pending_q = select(func.count()).select_from(Derogation).where(
+            Derogation.subject_type == body.subject_type, Derogation.subject_id == body.subject_id,
+            Derogation.status.in_(["pending_approval", "approved"]))
+        if project_scope is not None:
+            pending_q = pending_q.where(Derogation.project_id == (body.project_id or ""))
+        pending = 0 if body.subject_type == "none" else await db.scalar(pending_q)
         if pending:
             raise HTTPException(status_code=409, detail="this subject already has a pending or approved derogation")
-        label = await _subject_label(db, body.subject_type, body.subject_id)
+        label = await _subject_label(db, body.subject_type, body.subject_id, body.project_id or "")
         renews = None
         if body.renews_id:
             prev = await _der(db, body.renews_id)
@@ -933,7 +1044,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
         d = Derogation(
             id=uuid.uuid4(), reference=await next_reference(db, Derogation, "DER"),
             subject_type=body.subject_type, subject_id=("" if body.subject_type == "none" else body.subject_id)[:200],
-            subject_label=label[:500],
+            subject_label=label[:500], project_id=(getattr(body, "project_id", "") or "")[:64],
             title=body.title.strip()[:500], justification=body.justification.strip()[:10000],
             risk_owner=body.risk_owner.strip()[:255], approver=body.approver.strip()[:255],
             compensating_measure_ids=[str(m)[:64] for m in body.compensating_measure_ids][:100],
@@ -950,13 +1061,16 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
     @router.get("/derogations/{der_id}")
     async def get_derogation(der_id: str, user=Depends(get_current_user),
                              db: AsyncSession = Depends(get_db)):
-        return der_to_dict(await _der(db, der_id))
+        d = await _der(db, der_id)
+        await _in_scope(db, user, d, write=False)
+        return der_to_dict(d)
 
     @router.post("/derogations/{der_id}/decision")
     async def decide_derogation(der_id: str, body: DecisionBody, request: Request,
                                 user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         d = await _der(db, der_id)
+        await _in_scope(db, user, d, write=True)
         return await svc.decide(db, d, body.approve, body.note, _actor(user), user, request)
 
     @router.post("/derogations/{der_id}/revoke")
@@ -964,6 +1078,7 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
                                 user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         require_admin(user)
         d = await _der(db, der_id)
+        await _in_scope(db, user, d, write=True)
         check_transition("derogation", d.status, "revoked")
         d.status = "revoked"
         d.revoked_reason = body.reason[:5000]

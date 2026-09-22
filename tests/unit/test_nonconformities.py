@@ -551,3 +551,56 @@ async def test_the_first_corrective_measure_starts_the_remediation(db):
     with pytest.raises(HTTPException) as e:
         await _endpoint("patch_nonconformity")(n["id"], NonconformityPatch(measure_ids=[]), user=None, db=db)
     assert e.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_the_register_refuses_a_read_only_account_and_reserves_the_decisions_to_an_admin(db):
+    """Who may do what: a viewer reads only; a triager declares and requests;
+    qualification, rejection, closure and every derogation decision are the
+    module administrator's. The gates read the MODULE role, not the account's."""
+    from types import SimpleNamespace
+    from src.nonconformity_common import (DecisionBody, DerogationCreate, NonconformityCreate,
+                                          NonconformityPatch, NoteBody, QualifyBody, RemediationBody, SettingsBody)
+    viewer = SimpleNamespace(name="Vera Viewer", email="vera@medsecure.example", role="admin", _module_role="viewer")
+    triager = SimpleNamespace(name="Tom Triager", email="tom@medsecure.example", role="user", _module_role="triager")
+    admin = SimpleNamespace(name="Ada Admin", email="ada@medsecure.example", role="user", _module_role="admin")
+    f = await _finding(db)
+
+    declare = _endpoint("declare_nonconformity")
+    # the account's global role ("admin" here) grants nothing in the module
+    with pytest.raises(HTTPException) as e:
+        await declare(NonconformityCreate(title="Declared by a viewer"), _req(), user=viewer, db=db)
+    assert e.value.status_code == 403
+    nc = await declare(NonconformityCreate(title="Declared by a triager"), _req(), user=triager, db=db)
+    assert nc["declared_by"] == "Tom Triager"
+
+    request_der = _endpoint("request_derogation")
+    with pytest.raises(HTTPException) as e:
+        await request_der(DerogationCreate(**_der_body(f.id)), _req(), user=viewer, db=db)
+    assert e.value.status_code == 403
+    d = await request_der(DerogationCreate(**_der_body(f.id)), _req(), user=triager, db=db)
+
+    # decisions: administrator only, whatever the account's global role says
+    for user in (viewer, triager):
+        with pytest.raises(HTTPException) as e:
+            await _endpoint("qualify_nonconformity")(nc["id"], QualifyBody(), user=user, db=db)
+        assert e.value.status_code == 403
+        with pytest.raises(HTTPException) as e:
+            await _endpoint("decide_derogation")(d["id"], DecisionBody(approve=True), _req(), user=user, db=db)
+        assert e.value.status_code == 403
+        with pytest.raises(HTTPException) as e:
+            await _endpoint("put_settings")(SettingsBody(max_derogation_days=30), user=user, db=db)
+        assert e.value.status_code == 403
+    await _endpoint("qualify_nonconformity")(nc["id"], QualifyBody(), user=admin, db=db)
+    with pytest.raises(HTTPException) as e:
+        await _endpoint("reject_nonconformity")(nc["id"], NoteBody(note="no"), user=triager, db=db)
+    assert e.value.status_code == 403
+
+    # the declarant edits their own record only while it awaits qualification
+    with pytest.raises(HTTPException) as e:
+        await _endpoint("patch_nonconformity")(nc["id"], NonconformityPatch(title="Reworded by the declarant"), user=triager, db=db)
+    assert e.value.status_code == 403
+    # remediation is a write: refused to a viewer
+    with pytest.raises(HTTPException) as e:
+        await _endpoint("nonconformity_in_remediation")(nc["id"], RemediationBody(measure_ids=["MES-P1"]), user=viewer, db=db)
+    assert e.value.status_code == 403

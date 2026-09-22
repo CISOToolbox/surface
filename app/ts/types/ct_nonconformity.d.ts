@@ -118,7 +118,9 @@ interface CtNcOptions {
         max_derogation_days: number;
     }>;
     saveSettings?: (days: number) => Promise<unknown>;
-    isAdmin: () => boolean;
+    /** Overrides the default reading of the module role (Pilot: the console role). */
+    isAdmin?: () => boolean;
+    canWrite?: () => boolean;
     /** The current user as the records name their declarant (the server's actor). */
     actor?: () => string;
     /** The kind of item the module links records to (["control"], ["finding"]). */
@@ -151,8 +153,12 @@ interface CtNcPrefill {
     observed_at?: string;
     observed_by?: string;
     evidence?: string[];
+    /** Console mode: the module a relayed declaration targets. */
+    module?: string;
     /** Non-conformity the derogation covers. */
     nonconformity?: CtNcRecord | null;
+    /** A server refusal to show inline when the form reopens with its fields kept. */
+    error?: string;
     /** Derogation form fields kept across a "+ declare" detour. */
     justification?: string;
     risk_owner?: string;
@@ -165,6 +171,9 @@ interface CtNonconformityApi {
     declare(opts: CtNcOptions, prefill?: CtNcPrefill): Promise<CtNcRecord | null>;
     requestDerogation(opts: CtNcOptions, prefill?: CtNcPrefill): Promise<CtDerRecord | null>;
     renderPanel(container: HTMLElement, opts: CtNcOptions): void;
+    /** What the module role allows, the rule the register itself applies. */
+    canWrite(): boolean;
+    isAdmin(): boolean;
     badge(kind: "nc" | "der", status: string): string;
     tone(kind: "nc" | "der", status: string): string;
 }
@@ -178,6 +187,8 @@ interface Window {
     _ctNcSettings?: () => void;
     _ctNcModuleFilter?: (module: string) => void;
     _ctNcSourceFilter?: (source: string) => void;
+    _ctNcSeverityFilter?: (severity: string) => void;
+    _ctNcAgeFilter?: (days: string) => void;
     _ctNcCreate?: (field: string, query: string) => void;
     _ctNcOpenItem?: (field: string, id: string) => void;
     _ctDerKind?: (kind: string) => void;

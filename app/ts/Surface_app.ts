@@ -320,6 +320,11 @@ function _loadAndRender() {
     return Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { renderPanel(); });
 }
 
+// The module role lands after a couple of round trips: whatever was drawn
+// before it (a deep link, a finding detail) is drawn again with the right
+// actions instead of staying read-only.
+document.addEventListener("ct-role-ready", function() { renderPanel(); });
+
 function renderPanel() {
     var c = document.getElementById("content");
     if (!c) return;
@@ -2932,7 +2937,8 @@ function _renderFindingDetail(c: HTMLElement) {
         aiEnabled: !!(window._aiIsEnabled && window._aiIsEnabled()),
         aiHandler: "_aiTriageFinding",
         deleteHandler: "_deleteFindingDetail",
-        derogationHandler: "_requestDerogationDetail",
+        // Offered only to an account the server would let request one.
+        derogationHandler: ct_nonconformity.canWrite() ? "_requestDerogationDetail" : undefined,
         linkedMeasure: linked || undefined,
         cardClass: "surface-card"
     });
@@ -2955,7 +2961,6 @@ function _ncOptions(): CtNcOptions {
         revokeDer: function(id, reason) { return SurfaceAPI.revokeDerogation(id, reason); },
         getSettings: function() { return SurfaceAPI.nonconformitySettings(); },
         saveSettings: function(days) { return SurfaceAPI.saveNonconformitySettings(days); },
-        isAdmin: function() { return !!(window._currentUser && window._currentUser.role === "admin"); },
         actor: function() { var u = window._currentUser; return (u && (u.name || u.email)) || ""; },
         subjectTypes: ["finding"],
         directoryUrl: "api/directory",

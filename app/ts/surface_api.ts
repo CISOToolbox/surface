@@ -135,7 +135,9 @@ window._appInitCallback = function() {
 // ─── Toolbar user pill (name + admin + logout) ──────────────────
 function _initAuth(): void {
     fetch("auth/providers").then(function(r) { return r.json(); }).then(function(data) {
-        if (!data.auth_enabled) return;
+        // No auth = full access, the server's own contract: publish the role
+        // the gates would read, so the UI offers what the API accepts.
+        if (!data.auth_enabled) { window._moduleRole = "admin"; document.dispatchEvent(new CustomEvent("ct-role-ready")); return; }
         fetch("auth/me", { credentials: "same-origin" }).then(function(r) {
             if (!r.ok) { var _rp = window.location.pathname.replace(/[^/]*$/, ""); window.location.href = "/login.html?redirect=" + encodeURIComponent(_rp); return; }
             return r.json();
@@ -157,6 +159,7 @@ function _initAuth(): void {
             }).then(function(roleInfo: { role?: string }) {
                 var role = roleInfo.role || "";
                 window._moduleRole = role;
+                document.dispatchEvent(new CustomEvent("ct-role-ready"));
                 if (role) document.body.classList.add("ct-role-" + role);
                 if (user.role === "admin") document.body.classList.add("ct-role-admin");
             }).catch(function() {});
