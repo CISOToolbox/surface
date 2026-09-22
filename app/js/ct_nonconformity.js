@@ -452,7 +452,8 @@
             }
             _openForm(opts, ctx.mode, keep, ctx.nc, ctx.resolve);
         };
-        a.create({ title: keep.title || query || "", description: keep.description || "", domain: keep.domain || "" }).then(back)
+        a.create({ title: keep.title || query || "", description: keep.description || "", domain: keep.domain || "",
+            subjects: (keep.subjects || []).map(function (x) { return x.id; }) }).then(back)
             .catch(function (e) { _fail(e); back(null); });
     };
     // ── The derogation form ──────────────────────────────────────────
@@ -875,9 +876,16 @@
             h += _row(t("nc.closure_evidence"), nc.closure_evidence);
         var measureIds = nc.measure_ids || [];
         var pending = measureIds.filter(function (id) { return !_optionOf("measures", id).done; });
-        if (measureIds.length) {
-            h += _row(t("nc.f.measures"), _linkedItems("measures", measureIds), true);
-            if (pending.length && (s === "in_remediation" || s === "open" || s === "derogated")) {
+        if (_opts.measures) {
+            // Always shown, even empty: the remediation is part of the record.
+            // A reader must see that it is missing instead of guessing the
+            // field exists; linking one goes through the record's form, like
+            // every other link.
+            h += _row(t("nc.f.measures"), measureIds.length ? _linkedItems("measures", measureIds) : "—", measureIds.length > 0);
+            if (!measureIds.length && s === "to_qualify") {
+                h += '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("nc.measures_after_qualify")) + '</div>';
+            }
+            else if (pending.length && (s === "in_remediation" || s === "open" || s === "derogated")) {
                 h += '<div class="fs-xs ct-muted ct-mb-2">' + esc(t("nc.close_blocked", { n: pending.length })) + '</div>';
             }
         }
@@ -1105,16 +1113,19 @@ _registerTranslations("fr", {
     "nc.f.items.control": "Exigences concernées",
     "nc.f.items.finding": "Constats concernés",
     "nc.f.items.review_entry": "Anomalies concernées",
+    "nc.f.items.vendor": "Tiers concernés",
     "nc.f.subject": "Objet",
     "nc.f.subject.control": "Exigence",
     "nc.f.subject.finding": "Constat",
     "nc.f.subject.review_entry": "Anomalie d'habilitation",
+    "nc.f.subject.vendor": "Tiers",
     "nc.f.subject.nonconformity": "Non-conformité",
     "nc.create": "Créer",
     "nc.create.control": "Créer un contrôle",
     "nc.create.finding": "Créer un constat",
     "nc.create.measure": "Créer une mesure",
     "nc.create.nonconformity": "Déclarer une non-conformité",
+    "nc.create.vendor": "Créer le tiers",
     "der.f.subject_kind": "Objet de la dérogation",
     "nav.nonconformities": "Non-conformités",
     "nc.cancel": "Annuler",
@@ -1135,6 +1146,7 @@ _registerTranslations("fr", {
     "nc.subject_type.finding": "Constat",
     "nc.subject_type.control": "Exigence",
     "nc.subject_type.review_entry": "Anomalie d'habilitation",
+    "nc.subject_type.vendor": "Tiers",
     "nc.subject_type.nonconformity": "Non-conformité",
     "nc.subject_type.none": "Aucun objet (dérogation libre)",
     "nc.f.title": "Titre",
@@ -1195,6 +1207,7 @@ _registerTranslations("fr", {
     "nc.errors_intro": "Avant de valider, compléter :",
     "nc.required_hint": "Les champs marqués * sont obligatoires.",
     "nc.close_blocked": "Clôture possible quand toutes les mesures sont terminées ({n} restante(s)).",
+    "nc.measures_after_qualify": "Les mesures correctives se rattachent après la qualification.",
     "nc.err_note": "Le texte doit faire au moins 3 caractères.",
     "nc.search_person": "Rechercher une personne...",
     "nc.f.measures": "Mesures correctives",
@@ -1251,16 +1264,19 @@ _registerTranslations("en", {
     "nc.f.items.control": "Requirements concerned",
     "nc.f.items.finding": "Findings concerned",
     "nc.f.items.review_entry": "Anomalies concerned",
+    "nc.f.items.vendor": "Third parties concerned",
     "nc.f.subject": "Subject",
     "nc.f.subject.control": "Requirement",
     "nc.f.subject.finding": "Finding",
     "nc.f.subject.review_entry": "Entitlement anomaly",
+    "nc.f.subject.vendor": "Third party",
     "nc.f.subject.nonconformity": "Non-conformity",
     "nc.create": "Create",
     "nc.create.control": "Create a control",
     "nc.create.finding": "Create a finding",
     "nc.create.measure": "Create a measure",
     "nc.create.nonconformity": "Declare a non-conformity",
+    "nc.create.vendor": "Create the third party",
     "der.f.subject_kind": "Subject of the derogation",
     "nav.nonconformities": "Non-conformities",
     "nc.cancel": "Cancel",
@@ -1281,6 +1297,7 @@ _registerTranslations("en", {
     "nc.subject_type.finding": "Finding",
     "nc.subject_type.control": "Requirement",
     "nc.subject_type.review_entry": "Entitlement anomaly",
+    "nc.subject_type.vendor": "Third party",
     "nc.subject_type.nonconformity": "Non-conformity",
     "nc.subject_type.none": "No subject (free derogation)",
     "nc.f.title": "Title",
@@ -1341,6 +1358,7 @@ _registerTranslations("en", {
     "nc.errors_intro": "Before submitting, complete:",
     "nc.required_hint": "Fields marked * are required.",
     "nc.close_blocked": "Closing is possible once every measure is done ({n} left).",
+    "nc.measures_after_qualify": "Corrective measures are linked once the record is qualified.",
     "nc.err_note": "The text needs at least 3 characters.",
     "nc.search_person": "Search a person...",
     "nc.f.measures": "Corrective measures",

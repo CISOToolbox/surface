@@ -80,11 +80,15 @@ interface CtNcItemOption {
 interface CtNcAssoc {
     /** Every object the field may pick. */
     options: () => CtNcItemOption[];
-    /** The module's own creation modal; resolves with the created object, null when cancelled. */
+    /** The module's own creation modal; resolves with the created object, null
+     *  when cancelled. `subjects` carries the objects already picked in the
+     *  form, so a module can create where it belongs (a measure on the third
+     *  party the record is about). */
     create?: (draft: {
         title: string;
         description: string;
         domain: string;
+        subjects?: string[];
     }) => Promise<CtNcItemOption | null>;
     /** The object's own page in the module (opened in a new tab). */
     href?: (id: string) => string | null;
