@@ -81,7 +81,7 @@ var ct_notifprefs = {
                     opts.modules.forEach(function (mid) {
                         var on = !(p.modules || []).length || (p.modules || []).indexOf(mid) >= 0;
                         h += '<label class="ct-text-meta ct-flex ct-items-center ct-gap-1">'
-                            + '<input type="checkbox" class="ct-notifprefs-mod" value="' + esc(mid) + '"' + (on ? " checked" : "") + '> ' + esc(mid) + '</label>';
+                            + '<input type="checkbox" data-notifprefs-mod value="' + esc(mid) + '"' + (on ? " checked" : "") + '> ' + esc(mid) + '</label>';
                     });
                     h += '</div></div>';
                 }
@@ -132,9 +132,9 @@ var ct_notifprefs = {
                     out.include_overdue = _npChecked("np-overdue");
                     if (_npHas("np-scope"))
                         out.scope = _npVal("np-scope");
-                    if (document.querySelectorAll(".ct-notifprefs-mod").length) {
+                    if (document.querySelectorAll("[data-notifprefs-mod]").length) {
                         var mods = [];
-                        var checks = document.querySelectorAll(".ct-notifprefs-mod");
+                        var checks = document.querySelectorAll("[data-notifprefs-mod]");
                         for (var i = 0; i < checks.length; i++) {
                             if (checks[i].checked)
                                 mods.push(checks[i].value);
