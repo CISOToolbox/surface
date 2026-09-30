@@ -7,7 +7,7 @@ pydantic==2.12.5
 httpx==0.28.1
 python-multipart==0.0.31
 authlib==1.6.12
-PyJWT[crypto]==2.14.0
+PyJWT[crypto]==2.15.0
 dnspython==2.7.0
 # FEAT-23: domain permutation engine for typosquatting monitoring (core dnstwist,
 # no extras → no extra deps; permutation Fuzzer only). Pinned, >14d (cooldown).
