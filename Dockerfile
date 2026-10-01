@@ -17,8 +17,12 @@
 FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS builder
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# requirements-lock.txt holds every package the image installs, transitives
+# included, each at one version with its hashes: the build installs exactly
+# what was resolved, never a newer release (requirements.txt lists what the
+# module asks for; the lock is regenerated from it).
+COPY requirements-lock.txt .
+RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirements-lock.txt
 
 # ── Stage 2: hardened runtime ────────────────────────────────────
 FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
@@ -63,24 +67,21 @@ COPY --chown=surface:surface app/ app/
 COPY --chown=surface:surface addons/core/ addons/core/
 COPY --chown=surface:surface addons/generic/ addons/generic/
 
-# Each generic add-on declares and carries its own dependencies. Same three
-# steps as Dockerfile.addons, in the same order — requirements.txt BEFORE
-# install.sh, because the screenshot add-on's install.sh calls the `playwright`
-# entry point its requirements.txt installs.
+# Each generic add-on declares and carries its own dependencies:
 #   1) system packages (Chromium runtime libs, libsmbclient…)
-#   2) Python deps
+#   2) Python deps — resolved into requirements-lock.txt and installed in the
+#      builder stage, already under /usr/local here. That is what lets the
+#      screenshot add-on's install.sh call the `playwright` entry point.
 #   3) install.sh — heavy binaries fetched at build (nuclei + its templates,
 #      the Playwright Chromium download). Nothing is fetched at runtime.
+# Dockerfile.addons runs the same steps for a client's custom add-ons, which
+# are not in the lock and install their own requirements.txt.
 RUN APT_PKGS="$(cat $(find /app/addons -name apt-packages.txt) 2>/dev/null \
         | grep -vE '^\s*#|^\s*$' | sort -u | tr '\n' ' ')" \
     && if [ -n "$APT_PKGS" ]; then \
          apt-get update && apt-get install -y --no-install-recommends $APT_PKGS \
          && rm -rf /var/lib/apt/lists/*; \
        fi \
-    && for r in $(find /app/addons -name requirements.txt | sort); do \
-         echo "── add-on deps: $r ──"; \
-         pip install --no-cache-dir -r "$r" || exit 1; \
-       done \
     && for s in $(find /app/addons -name install.sh | sort); do \
          echo "── add-on install: $s ──"; sh "$s"; \
        done \

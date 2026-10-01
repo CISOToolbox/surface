@@ -1,8 +1,9 @@
 #!/bin/sh
-# Download the Playwright Chromium build into /ms-playwright. Run by
-# Dockerfile.addons during the client-image overlay (as root), AFTER pip
-# installs playwright (requirements.txt). So Chromium (~250 MB) exists only in
-# images that include the screenshot add-on.
+# Download the Playwright Chromium build into /ms-playwright. Run at image
+# build (as root), once playwright is installed: from the image's
+# requirements-lock.txt in the base image, from this add-on's requirements.txt
+# when Dockerfile.addons layers it. So Chromium (~250 MB) exists only in images
+# that include the screenshot add-on.
 set -e
 export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 playwright install chromium
