@@ -15,7 +15,11 @@ USER root
 COPY .client-addons/ /app/addons/
 # 1) drop excluded core scanners; 2) install each add-on's system packages
 #    (apt-packages.txt, e.g. libsmbclient, or the Chromium runtime libs for the
-#    screenshot add-on); 3) install each add-on's Python deps (requirements.txt);
+#    screenshot add-on); 3) install each add-on's Python deps: from its
+#    requirements-lock.txt with hashes (lock it with
+#    BASE_LOCK=<this image's requirements-lock.txt> tests/lock-deps.sh <add-on>),
+#    or, without a lock, only if the image already holds them (--no-index;
+#    a URL, a direct reference or a pip option requires a lock);
 # 4) run each add-on's install.sh — heavy/optional binaries that are NOT in the
 #    lean base ship WITH their add-on (e.g. the nuclei binary+templates, the
 #    Playwright Chromium download), so they exist only when the add-on is
@@ -26,7 +30,17 @@ RUN for d in ${EXCLUDE_CORE}; do rm -rf "/app/addons/core/$d"; done \
          apt-get update && apt-get install -y --no-install-recommends $APT_PKGS \
          && rm -rf /var/lib/apt/lists/*; \
        fi \
-    && find /app/addons -name requirements.txt -exec pip install --no-cache-dir -r {} \; \
+    && find /app/addons \( -name requirements.txt -o -name requirements-lock.txt \) -exec dirname {} \; \
+       | sort -u | while IFS= read -r d; do \
+         if [ -f "$d/requirements-lock.txt" ]; then \
+           pip install --no-cache-dir --require-hashes -r "$d/requirements-lock.txt" || exit 1; \
+         elif grep -vE '^[[:space:]]*(#|$)' "$d/requirements.txt" | grep -qE '://|@|^[[:space:]]*-'; then \
+           echo "add-on $d: a direct reference or a pip option needs a requirements-lock.txt (tests/lock-deps.sh)"; exit 1; \
+         else \
+           pip install --no-cache-dir --no-index -r "$d/requirements.txt" \
+             || { echo "add-on $d needs packages the image lacks: add its requirements-lock.txt (tests/lock-deps.sh)"; exit 1; }; \
+         fi; \
+       done \
     && for s in $(find /app/addons -name install.sh | sort); do echo "── add-on install: $s ──"; sh "$s"; done \
     && find /app/addons -type d -name bin -exec sh -c 'chmod +x "$1"/* 2>/dev/null || true' _ {} \; \
     && chown -R surface:surface /app/addons
