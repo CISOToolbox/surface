@@ -3,6 +3,12 @@
 Every release has its section here, written at release time from the
 changes since the previous one and published as the GitHub release notes.
 
+## 1.5.1 — 2026-10-03
+
+### Fixed
+
+- nuclei 3.11.1 (was 3.8.0); the release zip and the templates archive are checked against their official sha256 before extraction, which is done with the safe `data` filter.
+
 ## 1.5.0 — 2026-10-03
 
 ### Added
