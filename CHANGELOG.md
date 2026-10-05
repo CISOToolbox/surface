@@ -3,6 +3,12 @@
 Every release has its section here, written at release time from the
 changes since the previous one and published as the GitHub release notes.
 
+## 1.5.2 — 2026-10-05
+
+### Fixed
+
+- Nuclei templates v10.4.9, every template compiles
+
 ## 1.5.1 — 2026-10-03
 
 ### Fixed
