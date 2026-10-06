@@ -102,6 +102,38 @@
         var id = _fieldId(f.key);
         var lbl = esc(f.label || f.key);
         var val = f.value == null ? "" : f.value;
+        // Filterable single-select: a plain text input that filters a dropdown
+        // of options (same shape as Compliance's "lier…" search-select, not the
+        // tag/chip ctRefSelect). A hidden input carries the value, so _readExtra
+        // reads it like any other field. The display input shows the current
+        // label. The dropdown is fixed (escapes a scrollable modal body).
+        if (f.type === "refselect") {
+            _ctmSsWire();
+            var refOpts = (f.options || []).map(function (opt) {
+                var o = opt;
+                var ov = o.value !== undefined ? o.value : opt;
+                return { id: String(ov), label: String(o.label !== undefined ? o.label : ov) };
+            });
+            var curLabel = "";
+            for (var ci = 0; ci < refOpts.length; ci++) {
+                if (refOpts[ci].id === String(val)) {
+                    curLabel = refOpts[ci].label;
+                    break;
+                }
+            }
+            var ssOpts = refOpts.map(function (o) {
+                return '<div class="ctm-ss-opt" data-value="' + esc(o.id) + '" data-click="_ctmSsSelect" data-args=\''
+                    + _da(id, o.id, o.label) + '\'>' + esc(o.label) + '</div>';
+            }).join("");
+            return '<div class="ct-measure-ref-field"><span class="ct-measure-ref-label">' + lbl + '</span>'
+                + '<div class="ctm-ss" id="' + id + '-ss">'
+                + '<input type="hidden" id="' + id + '" value="' + esc(String(val)) + '">'
+                + '<input class="ctm-ss-input" id="' + id + '-disp" autocomplete="off" placeholder="'
+                + esc(f.placeholder || "") + '" value="' + esc(curLabel) + '"'
+                + ' data-click="_ctmSsOpen" data-input="_ctmSsFilter" data-args=\'' + _da(id) + '\' data-pass-value>'
+                + '<div class="ctm-ss-drop" id="' + id + '-drop">' + ssOpts + '</div>'
+                + '</div></div>';
+        }
         var h = '<label>' + lbl;
         if (f.type === "textarea") {
             h += '<textarea id="' + id + '" rows="' + (f.rows || 2) + '">' + esc(val) + '</textarea>';
@@ -132,6 +164,8 @@
     function _readExtra(f) {
         if (f.type === "html")
             return undefined;
+        // refselect carries its value in a hidden input with the field id, so
+        // it is read by the default getElementById(...).value path below.
         var el = document.getElementById(_fieldId(f.key));
         if (!el)
             return undefined;
@@ -139,6 +173,96 @@
             return !!el.checked;
         return el.value;
     }
+    // ── refselect runtime (filterable search-select) ───────────────
+    // Position the fixed dropdown under its input, flipping up with no room
+    // below (coordinates are computed geometry, hence inline styles).
+    function _ctmSsPosition(uid) {
+        var anchor = document.getElementById(uid + "-disp");
+        var drop = document.getElementById(uid + "-drop");
+        if (!anchor || !drop)
+            return;
+        var r = anchor.getBoundingClientRect();
+        drop.style.left = Math.round(r.left) + "px";
+        drop.style.width = Math.round(r.width) + "px";
+        var hgt = Math.min(drop.scrollHeight || 220, 220);
+        if (window.innerHeight - r.bottom < hgt + 8 && r.top > hgt + 8) {
+            drop.style.top = Math.round(r.top - hgt) + "px";
+        }
+        else {
+            drop.style.top = Math.round(r.bottom) + "px";
+        }
+    }
+    // On close without a pick, restore the input to the selected option's
+    // label — the input doubles as the search box, so a typed filter would
+    // otherwise linger and misrepresent the value actually stored.
+    function _ctmSsRestoreDisplay(drop) {
+        var wrap = drop.closest(".ctm-ss");
+        if (!wrap)
+            return;
+        var hid = wrap.querySelector("input[type=hidden]");
+        var disp = wrap.querySelector(".ctm-ss-input");
+        if (!hid || !disp)
+            return;
+        var hidVal = hid.value;
+        var lbl = "";
+        drop.querySelectorAll(".ctm-ss-opt").forEach(function (o) {
+            if (o.getAttribute("data-value") === hidVal)
+                lbl = o.textContent || "";
+        });
+        disp.value = lbl;
+    }
+    var _ctmSsWired = false;
+    function _ctmSsWire() {
+        if (_ctmSsWired)
+            return;
+        _ctmSsWired = true;
+        // Close any open search-select on an outside click.
+        document.addEventListener("click", function (e) {
+            var t = e.target;
+            if (t && t.closest && t.closest(".ctm-ss"))
+                return;
+            document.querySelectorAll(".ctm-ss-drop.open").forEach(function (d) {
+                d.classList.remove("open");
+                _ctmSsRestoreDisplay(d);
+            });
+        });
+    }
+    window._ctmSsOpen = function (uid) {
+        var d = document.getElementById(uid + "-drop");
+        if (!d)
+            return;
+        d.querySelectorAll(".ctm-ss-opt").forEach(function (o) { o.style.display = ""; });
+        // Add .open BEFORE positioning: a display:none dropdown has
+        // scrollHeight 0, which would make the flip-up branch misplace it.
+        d.classList.add("open");
+        _ctmSsPosition(uid);
+        // Select the shown label so the first keystroke filters from scratch.
+        var disp = document.getElementById(uid + "-disp");
+        if (disp)
+            disp.select();
+    };
+    window._ctmSsFilter = function (uid, val) {
+        var d = document.getElementById(uid + "-drop");
+        if (!d)
+            return;
+        d.classList.add("open");
+        var q = (val || "").toLowerCase();
+        d.querySelectorAll(".ctm-ss-opt").forEach(function (o) {
+            o.style.display = (!q || (o.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";
+        });
+        _ctmSsPosition(uid);
+    };
+    window._ctmSsSelect = function (uid, value, label) {
+        var hid = document.getElementById(uid);
+        if (hid)
+            hid.value = value;
+        var disp = document.getElementById(uid + "-disp");
+        if (disp)
+            disp.value = label;
+        var d = document.getElementById(uid + "-drop");
+        if (d)
+            d.classList.remove("open");
+    };
     // ──────────────────────────────────────────────────────────────
     // Public entry point — deferred Promise that survives sub-modals
     // ──────────────────────────────────────────────────────────────

@@ -74,7 +74,7 @@
 interface CtMeasureExtraField {
     key: string;
     label?: string;
-    type?: "text" | "textarea" | "select" | "date" | "checkbox" | "html";
+    type?: "text" | "textarea" | "select" | "refselect" | "date" | "checkbox" | "html";
     value?: any;
     /** Option list: objects {value,label} or bare primitives. */
     options?: Array<{
@@ -82,6 +82,8 @@ interface CtMeasureExtraField {
         label?: unknown;
     } | string | number>;
     rows?: number;
+    /** `refselect` only: search-box placeholder. */
+    placeholder?: string;
 }
 interface CtMeasureOption {
     value: string;
