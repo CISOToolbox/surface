@@ -54,6 +54,7 @@ SURFACE_SCANNERS = {
         "returns_discovered": False,  # True if callable returns (findings, [discovered_hosts])
         "wants_config": True,         # callable gets (value, asset_config)
         "wants_prior_findings": False,# callable gets (value, prior_findings)
+        "runs_after": [],             # scanners to run first when enabled with it
         "doc": _DOC,                  # optional in-app help — see §5
     },
 }
@@ -63,7 +64,13 @@ SURFACE_DEFAULT_SCANNERS = {"file_share": ["<name>"]}  # default scanners per ki
 **Calling conventions** (resolved in `src/scanners.py:_run_scanners_inner`):
 - default: `callable(value)`
 - `wants_prior_findings`: `callable(value, prior_findings)`
+- `wants_prior_findings` + `wants_config`: `callable(value, prior_findings, asset_config)`
 - `wants_config`: `callable(value, asset_config)`  ← config is `MonitoredAsset.config` (JSONB)
+
+`prior_findings` is what the scanners run before it emitted on the same target
+in this scan. A scanner that chains off another one names it in `runs_after`
+(e.g. `ct_logs` → `["typosquatting"]`): when both are enabled, the dispatcher
+runs the named scanner first, whatever order the asset lists them in.
 
 A scanner returns a `list[dict]` of findings (or `(findings, discovered)` when
 `returns_discovered`). Each finding dict: `scanner, type, severity, title,

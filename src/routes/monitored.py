@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.crypto import encrypt_secret
 from src.database import async_session, get_db
-from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
+from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
@@ -495,6 +495,12 @@ async def _run_manual_scan(
             job.status = "completed"
         await db.commit()
 
+        # FEAT-35 — a manual scan alerts like a scheduled one: a finding it
+        # inserts is no longer "new" for the next scheduled run. Never raises.
+        if job.status == "completed" and job.findings_count > 0:
+            from src.surface_notify import notify_scan_new_findings
+            await notify_scan_new_findings(db, job_id, value, alert_keys(counts))
+
 
 @router.post("/{asset_id}/scan")
 async def scan_asset(
@@ -573,7 +579,7 @@ async def scan_all(
 
     sem = asyncio.Semaphore(3)
 
-    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str], stealth: bool, config: dict) -> tuple[uuid.UUID, str, dict | None, str | None]:
+    async def _scan_one(asset_id: uuid.UUID, kind: str, value: str, enabled_scanners: list[str], stealth: bool, config: dict) -> tuple[uuid.UUID, str, dict | None, str | None, bool]:
         """Run the configured scanners on one asset in a dedicated DB
         session (SQLAlchemy async sessions are not coroutine-safe)."""
         async with sem:
@@ -586,31 +592,46 @@ async def scan_all(
                     findings, _discovered = await asyncio.to_thread(
                         run_enabled_scanners, kind, value, scanners, stealth, config or {}, sink)
             except Exception as e:
-                return asset_id, value, None, str(e)
+                return asset_id, value, None, str(e), False
             try:
                 async with async_session() as own_db:
                     asset = await own_db.get(MonitoredAsset, asset_id)
-                    findings, _state = apply_scanner_state(asset, findings)
+                    findings, state = apply_scanner_state(asset, findings)
                     counts = await insert_many(own_db, findings)
                     if sink_counts:
                         merge_counts(counts, sink_counts)
                     if asset is not None:
                         asset.last_scan_at = datetime.now(timezone.utc)
                     await own_db.commit()
-                return asset_id, value, counts, None
+                # A partial scan (capped share) does not alert, as in the
+                # scheduler and the single-asset scan.
+                return asset_id, value, counts, None, bool(state and state.get("partial"))
             except Exception as e:
-                return asset_id, value, None, f"persist: {e}"
+                return asset_id, value, None, f"persist: {e}", False
 
     results = await asyncio.gather(*(
         _scan_one(a.id, a.kind, a.value, list(a.enabled_scanners or []), bool(a.stealth_mode), dict(a.config or {}))
         for a in assets
     ))
-    for _, value, counts, err in results:
+    for _, value, counts, err, _partial in results:
         if err is not None:
             errors.append({"value": value, "error": err})
             continue
         total_findings += (counts or {}).get("inserted", 0) + (counts or {}).get("reopened", 0)
         scanned += 1
+    # FEAT-35 — one alert for the whole run, carrying the findings its assets
+    # inserted or reopened; the label names the assets that brought some.
+    keys: list[str] = []
+    found: list[str] = []
+    for _, v, c, err, partial in results:
+        k = alert_keys(c or {}) if err is None and not partial else []
+        if k:
+            keys.extend(k)
+            found.append(v)
+    if keys:
+        from src.surface_notify import notify_scan_new_findings
+        label = ", ".join(found[:3]) + (f" (+{len(found) - 3})" if len(found) > 3 else "")
+        await notify_scan_new_findings(db, uuid.uuid4(), label, keys)
     return {"scanned": scanned, "findings_created": total_findings, "errors": errors}
 
 

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from src.database import async_session
-from src.findings_dedup import apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
+from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, is_excluded
 from src.scanners import (CONNECTOR_REGISTRY, DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY,
                           resolve_first_ip, run_enabled_scanners)
@@ -207,7 +207,7 @@ async def _scan_one(asset_id) -> None:
         # Never raises (guarded inside).
         if job.status == "completed" and effective > 0:
             from src.surface_notify import notify_scan_new_findings
-            await notify_scan_new_findings(db, job_id, value, job.started_at)
+            await notify_scan_new_findings(db, job_id, value, alert_keys(dedup_counts))
         # New attack surface auto-enrolled — journaled (routine scans are not).
         if new_hosts_added:
             from src.audit_common import log_write

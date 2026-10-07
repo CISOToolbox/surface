@@ -149,8 +149,14 @@ async def _aggregate_report(db: AsyncSession) -> dict[str, Any]:
     assets_total = sum(kind_counts.values())
 
     # --- top 10 hosts by active-finding severity, bounded by LIMIT ---
-    # Group by the host portion of target, capped to the first ':' for port.
-    host_expr = func.split_part(Finding.target, ":", 1).label("host")
+    # Group by the host a finding names in its evidence, else the host portion
+    # of target (capped to the first ':' for port): a finding whose target is
+    # opaque (connector, per-certificate) but names its host must not become
+    # a pseudo host.
+    host_expr = func.coalesce(
+        func.nullif(Finding.evidence["hostname"].as_string(), ""),
+        func.split_part(Finding.target, ":", 1),
+    ).label("host")
     crit_expr = func.sum(case((Finding.severity == "critical", 1), else_=0)).label("crit")
     high_expr = func.sum(case((Finding.severity == "high", 1), else_=0)).label("high")
     med_expr = func.sum(case((Finding.severity == "medium", 1), else_=0)).label("med")

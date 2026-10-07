@@ -18,7 +18,6 @@ import html as _html
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -191,18 +190,29 @@ async def _journal_and_send(db: AsyncSession, recipient: str, period_key: str,
 
 # ── the alert (called at scan completion) ────────────────────────────────
 
+_KEYS_PER_QUERY = 5000
+
 async def notify_scan_new_findings(db: AsyncSession, job_id, target: str,
-                                   started_at: datetime | None) -> None:
-    """Email every subscriber about findings first seen by this run,
-    filtered by their severity floor. Never raises."""
+                                   keys: list[str]) -> None:
+    """Email every subscriber about the findings this run inserted or
+    reopened (``keys``: their dedup keys, from ``findings_dedup.alert_keys``),
+    filtered by their severity floor. Selecting by key, not by creation time,
+    keeps another scan or a connector running meanwhile out of this alert.
+    Never raises."""
     try:
-        since = started_at or datetime.now(timezone.utc)
-        new_rows = (await db.execute(
-            select(Finding).where(
-                Finding.status == "new",
-                Finding.created_at >= since,
-            )
-        )).scalars().all()
+        if not keys:
+            return
+        # Chunked: a large run (first SMB pass, Scan all) can carry more keys
+        # than PostgreSQL's 32767 bind parameters per statement.
+        uniq = sorted(set(keys))
+        new_rows: list[Finding] = []
+        for i in range(0, len(uniq), _KEYS_PER_QUERY):
+            new_rows.extend((await db.execute(
+                select(Finding).where(
+                    Finding.status == "new",
+                    Finding.dedup_key.in_(uniq[i:i + _KEYS_PER_QUERY]),
+                )
+            )).scalars().all())
         if not new_rows:
             return
         for sub in await list_subscribers(db):

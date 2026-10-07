@@ -198,7 +198,8 @@ DEFAULT_SCANNERS_BY_KIND = {
 # under the dirs in SURFACE_ADDON_PATHS (+ /app/addons), scanned recursively,
 # may expose:
 #   SURFACE_SCANNERS = { "<name>": {label, kinds, callable, returns_discovered,
-#                                   [wants_config], [wants_prior_findings]} }
+#                                   [wants_config], [wants_prior_findings],
+#                                   [runs_after]} }
 #   SURFACE_DEFAULT_SCANNERS = { "<kind>": ["<name>", ...] }   # optional
 # Entries are merged into SCANNER_REGISTRY / DEFAULT_SCANNERS_BY_KIND. A file
 # whose dependency is missing is skipped (logged), never fatal.
@@ -283,11 +284,30 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: boo
     if not enabled:
         enabled = DEFAULT_SCANNERS_BY_KIND.get(kind, [])
 
+    enabled = _order_by_dependencies(enabled)
     _STEALTH_CTX.on = bool(stealth)
     try:
         return _run_scanners_inner(kind, value, enabled, findings, discovered, config or {}, sink)
     finally:
         _STEALTH_CTX.on = False
+
+
+def _order_by_dependencies(enabled: list[str]) -> list[str]:
+    """Move every enabled scanner named in another's ``runs_after`` ahead of it.
+
+    A chaining scanner (e.g. ct_logs reading this run's typosquat_domain
+    findings) must see its producer's output whatever order the user picked.
+    Scanners without a dependency keep their relative order; an unknown or
+    disabled dependency is ignored.
+    """
+    out = list(enabled)
+    for name in enabled:
+        meta = SCANNER_REGISTRY.get(name) or {}
+        for dep in meta.get("runs_after", ()):
+            if dep in out and out.index(dep) > out.index(name):
+                out.remove(dep)
+                out.insert(out.index(name), dep)
+    return out
 
 
 def _run_scanners_inner(kind: str, value: str, enabled: list[str],
@@ -316,6 +336,8 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
                 # Streaming scanner: gets the per-scanner config + the sink and
                 # persists incrementally. Returns only non-sunk findings.
                 result = meta["callable"](value, config or {}, sink)
+            elif meta.get("wants_prior_findings") and meta.get("wants_config"):
+                result = meta["callable"](value, list(findings), config or {})
             elif meta.get("wants_prior_findings"):
                 # Pass a snapshot of everything emitted so far on this scope
                 # so the scanner can chain off it (e.g. cve_lookup reads

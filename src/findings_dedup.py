@@ -147,31 +147,32 @@ async def insert_many(db: AsyncSession, finding_dicts: list[dict[str, Any]]) -> 
             .where(Finding.dedup_key.in_(keys))
         )
 
+    def _record(action: str, fd: dict[str, Any]) -> None:
+        counts[action] = counts.get(action, 0) + 1
+        lst = {"inserted": "added", "reopened": "reopened_l"}.get(action)
+        if lst:
+            counts[lst].append({
+                "title": fd.get("title", "")[:140],
+                "severity": fd.get("severity", ""),
+                "scanner": fd.get("scanner", ""),
+                "target": fd.get("target", ""),
+                # What the run's alert selects on (alert_keys): the findings
+                # THIS run inserted or reopened, never another run's.
+                "dedup_key": compute_dedup_key(fd.get("scanner", ""), fd.get("type", ""),
+                                               fd.get("target", "") or fd.get("title", "")),
+            })
+
     for fd in finding_dicts:
         try:
             action = await insert_or_dedupe(db, fd)
             await db.flush()
-            counts[action] = counts.get(action, 0) + 1
-            if action == "inserted":
-                counts["added"].append({
-                    "title": fd.get("title", "")[:140],
-                    "severity": fd.get("severity", ""),
-                    "scanner": fd.get("scanner", ""),
-                    "target": fd.get("target", ""),
-                })
-            elif action == "reopened":
-                counts["reopened_l"].append({
-                    "title": fd.get("title", "")[:140],
-                    "severity": fd.get("severity", ""),
-                    "scanner": fd.get("scanner", ""),
-                    "target": fd.get("target", ""),
-                })
+            _record(action, fd)
         except IntegrityError:
             await db.rollback()
             try:
                 action = await insert_or_dedupe(db, fd)
                 await db.flush()
-                counts[action] = counts.get(action, 0) + 1
+                _record(action, fd)
             except Exception:
                 logger.exception("dedup retry failed for %s", fd.get("title"))
         except Exception:
@@ -268,6 +269,13 @@ def merge_counts(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(v, list):
             base.setdefault(k, []).extend(v)
     return base
+
+
+def alert_keys(counts: dict[str, Any]) -> list[str]:
+    """Dedup keys of the findings a run inserted or reopened — the content of
+    its new-findings alert (FEAT-35)."""
+    return [x["dedup_key"] for k in ("added", "reopened_l")
+            for x in (counts.get(k) or []) if x.get("dedup_key")]
 
 
 def diff_summary(counts: dict[str, Any]) -> dict[str, Any]:

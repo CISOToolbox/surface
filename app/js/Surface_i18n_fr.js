@@ -76,7 +76,7 @@ if (typeof _registerTranslations === "function") {
             '<h3>1. Découverte passive (sans toucher la cible)</h3>' +
             '<p>Surface exploite plusieurs sources publiques pour recenser les actifs sans générer le moindre trafic vers la cible :</p>' +
             '<ul>' +
-            '<li><strong>Certificate Transparency (crt.sh)</strong> — chaque certificat TLS émis publiquement depuis 2018 est enregistré dans CT. Le scanner <code>ct_logs</code> interroge crt.sh pour extraire tous les hostnames ayant eu un certificat.</li>' +
+            '<li><strong>Certificate Transparency (crt.sh)</strong> — chaque certificat TLS émis publiquement depuis 2018 est enregistré dans CT. Le scanner <code>ct_logs</code> interroge crt.sh pour extraire tous les hostnames ayant eu un certificat. Il surveille aussi les lookalikes repérés par le scanner de typosquatting dans le même scan : chaque certificat émis sur l\'un d\'eux dans la fenêtre (30 jours par défaut, réglable par domaine) lève un finding élevé, donc une alerte.</li>' +
             '<li><strong>SAN pivoting</strong> — lors du scan TLS d\'un host, les Subject Alternative Names du certificat révèlent des siblings partageant le même certificat.</li>' +
             '<li><strong>Email records</strong> — l\'analyse MX/SPF/DMARC/DKIM révèle les providers mail utilisés et la posture email du domaine.</li>' +
             '</ul>' +
@@ -495,6 +495,8 @@ if (typeof _registerTranslations === "function") {
         "finding.ct_discovery.desc": "Les logs Certificate Transparency (crt.sh) ont identifié {count} hostnames pour {target}. Ils sont ajoutés aux assets surveillés.",
         "finding.ct_error.title": "CT logs : crt.sh injoignable pour {target}",
         "finding.ct_error.desc": "La requête crt.sh a échoué. crt.sh est parfois lent ou ponctuellement indisponible — réessayer plus tard.",
+        "finding.ct_typosquat_cert.title": "Certificat émis sur le domaine lookalike {lookalike}",
+        "finding.ct_typosquat_cert.desc": "Un certificat a été émis le {issued_on} pour {names_list}, lookalike de {original} repéré par le scanner de typosquatting (émetteur : {issuer}). Risque : un certificat valide est souvent la dernière étape avant la mise en ligne d'un site d'hameçonnage ou d'une usurpation de marque.",
         "finding.host_discovered.title": "Nouvel host découvert sur {cidr} : {address}",
         "finding.host_discovered.desc": "Un host est joignable sur {address}. Il a été ajouté aux hosts surveillés.",
         "finding.discovery_summary.title": "Découverte sur {cidr} : {discovered_count} host(s) actif(s)",
@@ -716,6 +718,8 @@ if (typeof _registerTranslations === "function") {
         "mon_typo.max_variants": "Variantes générées par passe",
         "mon_typo.use_ct": "Vérifier Certificate Transparency (lookalikes à fort risque)",
         "mon_typo.max_ct": "Max requêtes CT par passe",
+        "mon_typo.ct_window": "Alerter sur les certificats de lookalikes émis depuis (jours)",
+        "mon_typo.ct_window_help": "À garder au moins égale à l'intervalle entre deux scans, sinon les certificats émis entre-temps échappent à la surveillance.",
         "hosts.groups": "groupe(s) IP",
         "hosts.aliases": "{n} alias :",
         "hosts.resolved_ip_tooltip": "IP résolue au dernier scan — les hostnames avec la même IP sont regroupés",

@@ -1422,6 +1422,7 @@ function _ensureMonitoredModal() {
                     '<div id="monitored-scanners" class="scanner-checklist"></div>' +
                     '<div class="surface-field-help">' + esc(t("mon_modal.scanners_help")) + '</div>' +
                 '</div>' +
+                '<div id="monitored-typo"></div>' +
                 // File-share (SMB) options — shown only for kind=file_share.
                 '<div id="monitored-fileshare" class="ct-hidden">' +
                     '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_user")) + '</label>' +
@@ -1472,6 +1473,7 @@ function _ensureMonitoredModal() {
         r.addEventListener("change", function() {
             _updateMonitoredKindHelp();
             _renderScannerChecklist(null);
+            _renderMonitoredTypo();
             _toggleFileShareConfig();
         });
     });
@@ -1515,6 +1517,19 @@ function _renderScannerChecklist(currentSelection: string[] | null) {
     container.innerHTML = h;
 }
 
+// Typosquatting tuning in the monitored-asset dialog: domains only, seeded
+// from the asset being edited (defaults for a new one).
+function _renderMonitoredTypo() {
+    var slot = document.getElementById("monitored-typo");
+    var ov = document.getElementById("monitored-overlay");
+    if (!slot || !ov) return;
+    var sel = document.querySelector('input[name="monitored-kind"]:checked') as HTMLInputElement | null;
+    var a = _editingMonitoredId ? _monitored.find(function(x) { return x.id === _editingMonitoredId; }) : null;
+    slot.innerHTML = sel && sel.value === "domain"
+        ? _typoConfigHtml(((a && a.config) || {}) as Record<string, any>) : "";
+    _bindTypoConfig(ov, "#monitored-scanners");
+}
+
 function _updateMonitoredKindHelp() {
     var sel = document.querySelector('input[name="monitored-kind"]:checked') as HTMLInputElement | null;
     var k = sel ? sel.value : "domain";
@@ -1552,6 +1567,7 @@ window._newMonitoredDialog = function() {
     document.getElementById("monitored-error")!.style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(null);
+    _renderMonitoredTypo();
     _toggleFileShareConfig();
     ov.hidden = false;
     setTimeout(function() {
@@ -1564,6 +1580,82 @@ window._newMonitoredDialog = function() {
 // from the bulk-action bar on the Surveillance page. Patches just the
 // `enabled_scanners` field so the user doesn't have to navigate the full
 // monitored asset modal for the most common adjustment.
+// FEAT-23 / FEAT-55 — typosquatting tuning of a domain, shared by the scanners
+// dialog and the monitored-asset dialog. Reads/writes the asset.config keys
+// the typosquatting and ct_logs scanners honour. Fields are found by their
+// data-typo attribute inside the dialog, never by id: both dialogs stay in the
+// DOM once opened.
+var _TYPO_DEFAULTS: Record<string, number | boolean> = {
+    typosquat_max_variants: 80, typosquat_use_ct: true, typosquat_max_ct: 40, ct_typosquat_window_days: 30,
+};
+
+function _typoConfigHtml(cfg: Record<string, any>): string {
+    var v = function(k: string) { return cfg[k] != null ? cfg[k] : _TYPO_DEFAULTS[k]; };
+    var num = function(k: string, label: string, min: number, max: number, help?: string) {
+        return '<div class="ct-field"><label class="surface-field-lbl">' + esc(label) + '</label>' +
+            '<input type="number" class="ct-input" data-typo="' + k + '" min="' + min + '" max="' + max + '" value="' + esc(String(v(k))) + '">' +
+            (help ? '<div class="surface-field-help">' + esc(help) + '</div>' : '') + '</div>';
+    };
+    return '<div class="ct-field ct-mt-3 ct-mb-3 ct-hidden" data-typo-config>' +
+        '<label class="surface-field-lbl">' + esc(t("mon_typo.title")) + '</label>' +
+        '<div class="ct-form-grid">' +
+            num("typosquat_max_variants", t("mon_typo.max_variants"), 1, 500) +
+            num("typosquat_max_ct", t("mon_typo.max_ct"), 0, 200) +
+            '<div class="ct-field ct-col-span-2"><label class="surface-checkbox">' +
+                '<input type="checkbox" data-typo="typosquat_use_ct"' + (v("typosquat_use_ct") ? " checked" : "") + '> ' +
+                '<span>' + esc(t("mon_typo.use_ct")) + '</span></label></div>' +
+            '<div class="ct-col-span-2" data-typo-ct>' +
+                num("ct_typosquat_window_days", t("mon_typo.ct_window"), 1, 365, t("mon_typo.ct_window_help")) +
+            '</div>' +
+        '</div>' +
+    '</div>';
+}
+
+// Shows the block only while typosquatting is ticked in `listSel`, and the CT
+// window only while ct_logs is ticked too (ct_logs carries that alert).
+function _bindTypoConfig(root: HTMLElement, listSel: string) {
+    var sync = function() {
+        var box = root.querySelector<HTMLElement>("[data-typo-config]");
+        if (!box) return;
+        var on = function(name: string) {
+            var cb = root.querySelector<HTMLInputElement>(listSel + ' input[type=checkbox][value="' + name + '"]');
+            return !!(cb && cb.checked);
+        };
+        box.classList.toggle("ct-hidden", !on("typosquatting"));
+        var ct = box.querySelector<HTMLElement>("[data-typo-ct]");
+        if (ct) ct.classList.toggle("ct-hidden", !on("ct_logs"));
+    };
+    var list = root.querySelector<HTMLElement>(listSel);
+    if (list && !list.dataset.typoBound) {
+        list.dataset.typoBound = "1";
+        list.addEventListener("change", sync);
+    }
+    sync();
+}
+
+// The block's values, clamped like the scanners clamp them; null when the
+// dialog carries no block (not a single domain) or hides it (typosquatting
+// unticked): a hidden setting is not written.
+function _readTypoConfig(root: HTMLElement): Record<string, any> | null {
+    var box = root.querySelector<HTMLElement>("[data-typo-config]");
+    if (!box || box.classList.contains("ct-hidden")) return null;
+    var n = function(k: string, min: number, max: number) {
+        var el = box!.querySelector<HTMLInputElement>('[data-typo="' + k + '"]');
+        var x = el ? parseInt(el.value, 10) : NaN;
+        return isNaN(x) ? _TYPO_DEFAULTS[k] : Math.max(min, Math.min(x, max));
+    };
+    var useCt = box.querySelector<HTMLInputElement>('[data-typo="typosquat_use_ct"]');
+    var out: Record<string, any> = {
+        typosquat_max_variants: n("typosquat_max_variants", 1, 500),
+        typosquat_use_ct: !!(useCt && useCt.checked),
+        typosquat_max_ct: n("typosquat_max_ct", 0, 200),
+    };
+    // The CT window belongs to ct_logs: written only while it shows.
+    var ct = box.querySelector<HTMLElement>("[data-typo-ct]");
+    if (ct && !ct.classList.contains("ct-hidden")) out.ct_typosquat_window_days = n("ct_typosquat_window_days", 1, 365);
+    return out;
+}
+
 window._editScannersDialog = function(idOrIds) {
     var ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
     var assets = _monitored.filter(function(a) { return ids.indexOf(a.id) >= 0; });
@@ -1595,37 +1687,14 @@ window._editScannersDialog = function(idOrIds) {
     } else {
         listH = '<div class="surface-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
     }
-    // FEAT-23: per-domain typosquatting tuning (single domain asset only).
-    // Reads/writes the typosquat_* keys of asset.config that the scanner honours.
+    // FEAT-23 / FEAT-55: per-domain typosquatting tuning (single domain only).
     var showTypo = ids.length === 1 && kind === "domain";
-    var typoH = "";
-    if (showTypo) {
-        var tc: Record<string, any> = (first.config as Record<string, any>) || {};
-        var mv = tc.typosquat_max_variants != null ? tc.typosquat_max_variants : 80;
-        var useCt = tc.typosquat_use_ct != null ? !!tc.typosquat_use_ct : true;
-        var maxCt = tc.typosquat_max_ct != null ? tc.typosquat_max_ct : 40;
-        typoH =
-            '<div class="surface-field-help ct-mt-3 ct-strong">' + esc(t("mon_typo.title")) + '</div>' +
-            '<div id="typo-config" class="ct-flex ct-body ct-gap-2 ct-mt-1">' +
-                '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
-                    '<span class="ct-flex-1">' + esc(t("mon_typo.max_variants")) + '</span>' +
-                    '<input type="number" id="typo-max-variants" min="1" max="500" value="' + esc(String(mv)) + '" class="ct-w-90">' +
-                '</label>' +
-                '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
-                    '<input type="checkbox" id="typo-use-ct"' + (useCt ? " checked" : "") + '>' +
-                    '<span>' + esc(t("mon_typo.use_ct")) + '</span>' +
-                '</label>' +
-                '<label class="ct-flex ct-items-center ct-gap-2 ct-text-meta">' +
-                    '<span class="ct-flex-1">' + esc(t("mon_typo.max_ct")) + '</span>' +
-                    '<input type="number" id="typo-max-ct" min="0" max="200" value="' + esc(String(maxCt)) + '" class="ct-w-90">' +
-                '</label>' +
-            '</div>';
-    }
+    var typoH = showTypo ? _typoConfigHtml((first.config as Record<string, any>) || {}) : "";
     var subtitle = ids.length > 1
         ? t("hosts.bulk_scanners_subtitle").replace("{n}", String(ids.length))
         : esc(first.value);
     ov.innerHTML =
-        '<div class="ct-modal" style="width:520px">' +
+        '<div class="ct-modal">' +
             '<div class="ct-modal-header"><span>' + esc(t("hosts.configure_scans")) + ' — ' + subtitle + '</span><button class="surface-modal-close" data-click="_closeScannersDialog">' + _icon("x", 18) + '</button></div>' +
             '<div class="ct-modal-body">' +
                 '<div id="scanners-list" data-ids=\'' + _da.apply(null, ids) + '\'>' + listH + '</div>' +
@@ -1638,6 +1707,7 @@ window._editScannersDialog = function(idOrIds) {
         '</div>';
     // Stash the ids on the modal so the save handler knows what to patch
     ov.dataset.ids = JSON.stringify(ids);
+    _bindTypoConfig(ov, "#scanners-list");
     ov.hidden = false;
 };
 
@@ -1654,19 +1724,12 @@ window._saveScannersDialog = function() {
     ov.querySelectorAll<HTMLInputElement>("#scanners-list input[type=checkbox]:checked").forEach(function(cb) {
         picked.push(cb.value);
     });
-    // FEAT-23: persist the per-domain typosquatting tuning (single domain only).
-    var typoVarEl = document.getElementById("typo-max-variants") as HTMLInputElement | null;
+    // FEAT-23 / FEAT-55: persist the per-domain typosquatting tuning (single domain only).
     var typoConfig: Record<string, any> | null = null;
-    if (typoVarEl && ids.length === 1) {
-        var mv = parseInt(typoVarEl.value, 10);
-        var maxCt = parseInt((document.getElementById("typo-max-ct") as HTMLInputElement).value, 10);
-        var useCt = (document.getElementById("typo-use-ct") as HTMLInputElement).checked;
+    var typo = _readTypoConfig(ov);
+    if (typo && ids.length === 1) {
         var asset = _monitored.find(function(a) { return a.id === ids[0]; });
-        typoConfig = Object.assign({}, (asset && (asset as Record<string, any>).config) || {}, {
-            typosquat_max_variants: isNaN(mv) ? 80 : Math.max(1, Math.min(mv, 500)),
-            typosquat_use_ct: useCt,
-            typosquat_max_ct: isNaN(maxCt) ? 40 : Math.max(0, Math.min(maxCt, 200)),
-        });
+        typoConfig = Object.assign({}, (asset && (asset as Record<string, any>).config) || {}, typo);
     }
     Promise.all(ids.map(function(id) {
         var patch: Record<string, unknown> = { enabled_scanners: picked };
@@ -1711,6 +1774,7 @@ window._editMonitoredDialog = function(id) {
     document.getElementById("monitored-error")!.style.display = "none";
     _updateMonitoredKindHelp();
     _renderScannerChecklist(a.enabled_scanners || null);
+    _renderMonitoredTypo();
     _toggleFileShareConfig();
     ov.hidden = false;
 };
@@ -1742,6 +1806,14 @@ window._saveMonitored = function() {
         stealth_mode: (document.getElementById("monitored-stealth") as HTMLInputElement).checked,
         config: {},
     };
+    // The PATCH replaces config: start from the asset's current one so a save
+    // from this dialog never wipes scanner settings it does not show.
+    var _editing = _editingMonitoredId ? _monitored.find(function(x) { return x.id === _editingMonitoredId; }) : null;
+    if (_editing && _editing.kind === data.kind) data.config = Object.assign({}, _editing.config || {});
+    if (data.kind === "domain") {
+        var _typo = _readTypoConfig(document.getElementById("monitored-overlay")!);
+        if (_typo) data.config = Object.assign({}, data.config, _typo);
+    }
     // File-share options → config (only when relevant; harmless otherwise).
     if (data.kind === "file_share") {
         var rx = ((document.getElementById("monitored-fs-regex") as HTMLTextAreaElement).value || "")
