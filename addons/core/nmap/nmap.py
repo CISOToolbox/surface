@@ -29,7 +29,7 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
     if not nmap_path:
         return [{
             "scanner": "nmap", "type": "error", "severity": "info",
-            "title": "nmap binary not found", "description": "Le binaire nmap est introuvable sur le serveur Surface.",
+            "title": "nmap binary not found", "description": "The nmap binary was not found on the Surface server.",
             "target": target, "evidence": {},
         }]
 
@@ -52,20 +52,20 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
         # it doesn't bump dashboard severity counters or trigger alerts.
         return [{
             "scanner": "nmap", "type": "scanner_timeout", "severity": "info",
-            "title": f"Scan nmap timeout pour {target}",
-            "description": f"Le scan a depasse {timeout}s.", "target": target, "evidence": {},
+            "title": f"nmap scan timed out for {target}",
+            "description": f"The scan exceeded {timeout}s.", "target": target, "evidence": {},
         }]
     except Exception as e:
         return [{
             "scanner": "nmap", "type": "scanner_error", "severity": "info",
-            "title": f"Scan nmap echoue pour {target}",
+            "title": f"nmap scan failed for {target}",
             "description": str(e), "target": target, "evidence": {},
         }]
 
     if proc.returncode not in (0, None):
         return [{
             "scanner": "nmap", "type": "scanner_error", "severity": "info",
-            "title": f"nmap exit {proc.returncode} pour {target}",
+            "title": f"nmap exit {proc.returncode} for {target}",
             "description": (proc.stderr.decode(errors="replace") or "")[:500],
             "target": target, "evidence": {},
         }]
@@ -78,6 +78,6 @@ SURFACE_SCANNERS = {
         "callable": lambda t: scan_host_ports(t, profile="quick"), "returns_discovered": False},
     "nmap_standard": {"label": "Nmap (top 1000 + service detection)", "kinds": {"host"},
         "callable": lambda t: scan_host_ports(t, profile="standard"), "returns_discovered": False},
-    "nmap_deep": {"label": "Nmap (tous les ports + détection services)", "kinds": {"host", "ip_range"},
+    "nmap_deep": {"label": "Nmap (all ports + service detection)", "kinds": {"host", "ip_range"},
         "callable": lambda t: scan_host_ports(t, profile="deep"), "returns_discovered": False},
 }

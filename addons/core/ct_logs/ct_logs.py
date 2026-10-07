@@ -79,11 +79,11 @@ def scan_domain_ct_logs(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
     if data is None:
         findings.append({
             "scanner": "ct_logs", "type": "ct_error", "severity": "info",
-            "title": f"CT logs : crt.sh injoignable pour {domain}",
+            "title": f"CT logs: crt.sh unreachable for {domain}",
             "description": (
-                f"La requete crt.sh a echoue apres 3 tentatives : {last_error}. "
-                f"crt.sh est connu pour etre lent ou ponctuellement indisponible — "
-                f"reessayer plus tard via une nouvelle execution du scanner."
+                f"The crt.sh request failed after 3 attempts: {last_error}. "
+                f"crt.sh is known to be slow or occasionally unavailable — "
+                f"retry later via a new run of the scanner."
             ),
             "target": domain, "evidence": {"error": str(last_error)},
         })
@@ -106,12 +106,12 @@ def scan_domain_ct_logs(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
 
     findings.append({
         "scanner": "ct_logs", "type": "ct_discovery", "severity": "info",
-        "title": f"CT logs : {len(hosts)} sous-domaine(s) decouvert(s) pour {domain}",
+        "title": f"CT logs: {len(hosts)} subdomain(s) discovered for {domain}",
         "description": (
-            f"Le scan des logs Certificate Transparency (crt.sh) a identifie "
-            f"{len(hosts)} hostnames associes au domaine {domain}. "
-            f"Ces hostnames sont automatiquement ajoutes a la liste des assets "
-            f"surveilles (kind=host) et seront scannes selon la frequence par defaut."
+            f"The Certificate Transparency logs scan (crt.sh) identified "
+            f"{len(hosts)} hostnames associated with the domain {domain}. "
+            f"These hostnames are automatically added to the list of monitored "
+            f"assets (kind=host) and will be scanned at the default frequency."
         ),
         "target": domain,
         "evidence": {

@@ -345,11 +345,11 @@ def scan_domain_dns_brute(domain: str) -> tuple[list[dict[str, Any]], list[str]]
         "scanner": "dns_brute",
         "type": "dns_brute_discovery",
         "severity": "info",
-        "title": f"DNS brute-force : {len(hosts)} sous-domaine(s) decouvert(s) pour {domain}",
+        "title": f"DNS brute-force: {len(hosts)} subdomain(s) discovered for {domain}",
         "description": (
-            f"Le scan de brute-force DNS avec {len(words)} mots-cles a identifie "
-            f"{len(hosts)} hostnames qui resolvent sous {domain}. "
-            + ("Wildcard DNS detecte sur " + ", ".join(sorted(wildcard_ips)) + " — les hits pointant uniquement vers ces IPs ont ete filtres." if wildcard_ips else "Pas de wildcard DNS detecte.")
+            f"The DNS brute-force scan using {len(words)} keywords identified "
+            f"{len(hosts)} hostnames resolving under {domain}. "
+            + ("Wildcard DNS detected on " + ", ".join(sorted(wildcard_ips)) + " — hits pointing only to these IPs were filtered out." if wildcard_ips else "No wildcard DNS detected.")
         ),
         "target": domain,
         "evidence": {

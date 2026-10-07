@@ -96,26 +96,31 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     """Fetch the HTTPS root and grade its security headers."""
     import httpx
 
-    _, target = _resolve_safe_target(target)
-    url = f"https://{target}/"
+    # Connect to the IP locked at validation time, not the name: handing the
+    # hostname to httpx let it re-resolve, so the address that was vetted need
+    # not be the one reached (DNS rebinding). The name rides in the Host
+    # header so name-based vhosts still answer.
+    locked_ip, target = _resolve_safe_target(target)
+    _host_hdr = {"Host": target} if locked_ip else {}
+    url = f"https://{locked_ip or target}/"
     try:
         # follow_redirects=False: a redirect target is NOT re-validated by
         # _resolve_safe_target, so following it would be an SSRF bypass (to
         # cloud metadata / loopback / RFC1918). The security headers we grade
         # are those of the canonical URL anyway.
         with httpx.Client(verify=False, follow_redirects=False, timeout=5.0) as client:
-            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
     except Exception:
         return []
 
     grade, strengths, weaknesses = _grade_headers(dict(r.headers))
     sev = {"A": "info", "B": "info", "C": "low", "D": "medium", "F": "high"}[grade]
-    title = f"Security headers grade {grade} sur {target}"
+    title = f"Security headers grade {grade} on {target}"
     desc = f"Grade {grade}.\n\n"
     if strengths:
-        desc += "Points forts :\n- " + "\n- ".join(strengths) + "\n\n"
+        desc += "Strengths:\n- " + "\n- ".join(strengths) + "\n\n"
     if weaknesses:
-        desc += "A corriger :\n- " + "\n- ".join(weaknesses)
+        desc += "To fix:\n- " + "\n- ".join(weaknesses)
     return [{
         "scanner": "security_headers",
         "type": "security_headers_grade",

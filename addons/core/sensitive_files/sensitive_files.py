@@ -63,7 +63,13 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
 
     # Full re-validation via _resolve_safe_target (same allowlist path as
     # _safe_target, with explicit lock of the resolved IP at call time).
-    _, target = _resolve_safe_target(target)
+    # The locked IP is what we connect to: discarding it and handing the
+    # hostname to httpx let the name be re-resolved, so the address that was
+    # vetted need not be the one reached (DNS rebinding). The original name
+    # travels in the Host header so name-based vhosts still answer.
+    locked_ip, target = _resolve_safe_target(target)
+    connect_host = locked_ip or target
+    _host_hdr = {"Host": target} if locked_ip else {}
     findings: list[dict[str, Any]] = []
     schemes = [(443, "https"), (80, "http")]
 
@@ -72,8 +78,8 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
         for port, scheme in schemes:
             try:
-                r = client.get(f"{scheme}://{target}:{port}/",
-                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+                r = client.get(f"{scheme}://{connect_host}:{port}/",
+                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
                 if r.status_code < 500:
                     working = (port, scheme)
                     break
@@ -82,14 +88,14 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     if not working:
         return []
     port, scheme = working
-    base = f"{scheme}://{target}:{port}"
+    base = f"{scheme}://{connect_host}:{port}"
 
     with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
         consecutive_errors = 0
         for path, marker, sev in _SENSITIVE_PATHS:
             try:
                 r = client.get(base + path,
-                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
             except Exception:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
@@ -108,13 +114,13 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
                 "scanner": "sensitive_files",
                 "type": "sensitive_file_exposed",
                 "severity": sev,
-                "title": f"Fichier sensible expose : {path} sur {target}",
+                "title": f"Sensitive file exposed: {path} on {target}",
                 "description": (
-                    f"Le chemin {path} est accessible publiquement sur {base} "
-                    f"(HTTP 200). Contenu caracteristique detecte : {marker or '(aucun)'}. "
-                    f"Retirer ou proteger ce chemin immediatement — il peut "
-                    f"exposer des identifiants, des sources ou la configuration "
-                    f"de l'infrastructure."
+                    f"The path {path} is publicly accessible on {base} "
+                    f"(HTTP 200). Characteristic content detected: {marker or '(none)'}. "
+                    f"Remove or protect this path immediately — it may "
+                    f"expose credentials, source code, or infrastructure "
+                    f"configuration."
                 ),
                 "target": f"{target}:{port}",
                 "evidence": {

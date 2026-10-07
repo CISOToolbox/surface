@@ -170,11 +170,11 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
             expiry = _dt.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=_tz.utc)
             days_left = (expiry - _dt.now(tz=_tz.utc)).days
             if days_left < 0:
-                sev, msg = "critical", f"Le certificat est EXPIRE depuis {-days_left} jour(s)."
+                sev, msg = "critical", f"The certificate has been EXPIRED for {-days_left} day(s)."
             elif days_left < 7:
-                sev, msg = "high", f"Le certificat expire dans {days_left} jour(s)."
+                sev, msg = "high", f"The certificate expires in {days_left} day(s)."
             elif days_left < 30:
-                sev, msg = "medium", f"Le certificat expire dans {days_left} jour(s) — planifier le renouvellement."
+                sev, msg = "medium", f"The certificate expires in {days_left} day(s) — schedule renewal."
             else:
                 sev = None
                 msg = ""
@@ -188,17 +188,17 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
             if sev:
                 findings.append({
                     "scanner": "tls", "type": "tls_expiring", "severity": sev,
-                    "title": f"Certificat TLS de {target} : {msg}",
-                    "description": f"Le certificat expire le {cert['notAfter']}.",
+                    "title": f"TLS certificate of {target}: {msg}",
+                    "description": f"The certificate expires on {cert['notAfter']}.",
                     "target": f"{target}:443", "evidence": ev,
                 })
             else:
                 findings.append({
                     "scanner": "tls", "type": "tls_valid", "severity": "info",
-                    "title": f"Certificat TLS valide pour {target} ({days_left}j restants)",
+                    "title": f"Valid TLS certificate for {target} ({days_left}d remaining)",
                     "description": (
-                        f"Cert valide jusqu'au {cert['notAfter']}. "
-                        f"SAN : {len(sans)} entree(s), dont {len(discovered)} dans le scope."
+                        f"Certificate valid until {cert['notAfter']}. "
+                        f"SAN: {len(sans)} entry(ies), including {len(discovered)} in scope."
                     ),
                     "target": f"{target}:443", "evidence": ev,
                 })
@@ -208,11 +208,11 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
         if discovered:
             findings.append({
                 "scanner": "tls", "type": "tls_san_discovery", "severity": "info",
-                "title": f"TLS SAN : {len(discovered)} hostname(s) decouvert(s) via {target}",
+                "title": f"TLS SAN: {len(discovered)} hostname(s) discovered via {target}",
                 "description": (
-                    f"Le certificat de {target} declare {len(discovered)} "
-                    f"autre(s) hostname(s) dans le meme scope ({_registrable(target)}). "
-                    f"Ils sont automatiquement ajoutes aux assets surveilles."
+                    f"The certificate of {target} declares {len(discovered)} "
+                    f"other hostname(s) in the same scope ({_registrable(target)}). "
+                    f"They are automatically added to the monitored assets."
                 ),
                 "target": f"{target}:443",
                 "evidence": {"discovered_hosts": discovered},
@@ -231,11 +231,11 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                         discovered.append(h)
                 findings.append({
                     "scanner": "tls", "type": "tls_reverse_cert", "severity": "info",
-                    "title": f"Reverse cert : {len(sibling_hosts)} hostname(s) partagent le cert de {target}",
+                    "title": f"Reverse cert: {len(sibling_hosts)} hostname(s) share the certificate of {target}",
                     "description": (
-                        f"crt.sh a identifie {len(sibling_hosts)} autre(s) hostname(s) "
-                        f"emis par le meme issuer/serial. Ils sont ajoutes aux assets "
-                        f"surveilles."
+                        f"crt.sh identified {len(sibling_hosts)} other hostname(s) "
+                        f"issued by the same issuer/serial. They are added to the monitored "
+                        f"assets."
                     ),
                     "target": f"{target}:443",
                     "evidence": {"siblings": sibling_hosts, "source": "crt.sh"},
@@ -267,7 +267,7 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
             findings.append({
                 "scanner": "tls", "type": "tls_error", "severity": "info",
                 "title": f"TLS unreachable on {target}:443",
-                "description": f"Impossible de recuperer le certificat : {err_str}",
+                "description": f"Unable to retrieve the certificate: {err_str}",
                 "target": f"{target}:443", "evidence": {"error": err_str},
             })
             return findings, []
@@ -284,16 +284,16 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
         if expired:
             findings.append({
                 "scanner": "tls", "type": "tls_expired", "severity": "critical",
-                "title": f"Certificat TLS expire sur {target}:443",
-                "description": f"Le certificat a expire le {details.get('not_after')}.",
+                "title": f"TLS certificate expired on {target}:443",
+                "description": f"The certificate expired on {details.get('not_after')}.",
                 "target": f"{target}:443",
                 "evidence": {**details, "san_dns_names": sans, "san_in_scope": discovered, "error": err_str},
             })
         elif not_yet:
             findings.append({
                 "scanner": "tls", "type": "tls_not_yet_valid", "severity": "high",
-                "title": f"Certificat TLS pas encore valide sur {target}:443",
-                "description": f"Le certificat n'est valide qu'a partir du {details.get('not_before')}.",
+                "title": f"TLS certificate not yet valid on {target}:443",
+                "description": f"The certificate is only valid from {details.get('not_before')}.",
                 "target": f"{target}:443",
                 "evidence": {**details, "error": err_str},
             })
@@ -305,10 +305,10 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
             # behaviour `openssl s_client` would produce).
             findings.append({
                 "scanner": "tls", "type": "tls_hostname_mismatch", "severity": "high",
-                "title": f"Certificat TLS ne couvre pas {target}",
+                "title": f"TLS certificate does not cover {target}",
                 "description": (
-                    f"Le certificat presente par {target}:443 ne contient pas ce hostname "
-                    f"dans ses SAN. SAN declares : {', '.join(sans[:10])}"
+                    f"The certificate presented by {target}:443 does not contain this hostname "
+                    f"in its SAN. Declared SAN: {', '.join(sans[:10])}"
                 ),
                 "target": f"{target}:443",
                 "evidence": {**details, "san_dns_names": sans, "san_in_scope": discovered, "error": err_str},
@@ -316,10 +316,10 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
         elif self_signed:
             findings.append({
                 "scanner": "tls", "type": "tls_self_signed", "severity": "medium",
-                "title": f"Certificat TLS self-signed sur {target}:443",
+                "title": f"Self-signed TLS certificate on {target}:443",
                 "description": (
-                    f"Le certificat est auto-signe (subject == issuer). Acceptable pour "
-                    f"un host interne mais pas pour un service expose publiquement."
+                    f"The certificate is self-signed (subject == issuer). Acceptable for "
+                    f"an internal host but not for a publicly exposed service."
                 ),
                 "target": f"{target}:443",
                 "evidence": {**details, "san_dns_names": sans, "error": err_str},
@@ -334,28 +334,28 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                 if days_left < 7:
                     findings.append({
                         "scanner": "tls", "type": "tls_expiring", "severity": "high",
-                        "title": f"Certificat TLS de {target} : expire dans {days_left} jour(s)",
-                        "description": f"Le certificat expire le {details.get('not_after')}.",
+                        "title": f"TLS certificate of {target}: expires in {days_left} day(s)",
+                        "description": f"The certificate expires on {details.get('not_after')}.",
                         "target": f"{target}:443",
                         "evidence": {**details, "san_dns_names": sans},
                     })
                 elif days_left < 30:
                     findings.append({
                         "scanner": "tls", "type": "tls_expiring", "severity": "medium",
-                        "title": f"Certificat TLS de {target} : expire dans {days_left} jour(s)",
-                        "description": f"Le certificat expire le {details.get('not_after')}.",
+                        "title": f"TLS certificate of {target}: expires in {days_left} day(s)",
+                        "description": f"The certificate expires on {details.get('not_after')}.",
                         "target": f"{target}:443",
                         "evidence": {**details, "san_dns_names": sans},
                     })
             findings.append({
                 "scanner": "tls", "type": "tls_unverifiable", "severity": "info",
-                "title": f"Certificat TLS non verifiable sur {target}:443 (CA store limite)",
+                "title": f"Unverifiable TLS certificate on {target}:443 (limited CA store)",
                 "description": (
-                    f"Verification systeme echouee ({err_str}), mais l'analyse directe "
-                    f"du certificat ne montre pas de probleme : le cert n'est pas expire, "
-                    f"couvre bien le hostname, et n'est pas auto-signe. Cette erreur est "
-                    f"probablement due a une chaine de confiance incomplete cote scanner "
-                    f"(CA racine non incluse dans le bundle local). Aucun risque pour la cible."
+                    f"System verification failed ({err_str}), but direct analysis "
+                    f"of the certificate shows no problem: the certificate is not expired, "
+                    f"covers the hostname, and is not self-signed. This error is "
+                    f"probably due to an incomplete trust chain on the scanner side "
+                    f"(root CA not included in the local bundle). No risk to the target."
                 ),
                 "target": f"{target}:443",
                 "evidence": {**details, "san_dns_names": sans, "san_in_scope": discovered, "error": err_str},
@@ -365,5 +365,5 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
         return [], []
 
 
-SURFACE_SCANNERS = {"tls": {"label": "Certificat TLS (+ SAN discovery)",
+SURFACE_SCANNERS = {"tls": {"label": "TLS certificate (+ SAN discovery)",
     "kinds": {"domain", "host"}, "callable": scan_host_tls, "returns_discovered": True}}

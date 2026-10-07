@@ -34,14 +34,14 @@ def scan_iprange_discovery(cidr: str) -> tuple[list[dict[str, Any]], list[str]]:
     except Exception as e:
         return [{
             "scanner": "nmap", "type": "error", "severity": "medium",
-            "title": f"Discovery scan echoue pour {cidr}",
+            "title": f"Discovery scan failed for {cidr}",
             "description": str(e), "target": cidr, "evidence": {},
         }], []
 
     if proc.returncode not in (0, None):
         return [{
             "scanner": "nmap", "type": "error", "severity": "medium",
-            "title": f"nmap exit {proc.returncode} pour {cidr}",
+            "title": f"nmap exit {proc.returncode} for {cidr}",
             "description": (proc.stderr.decode(errors="replace") or "")[:500],
             "target": cidr, "evidence": {},
         }], []
@@ -66,16 +66,16 @@ def scan_iprange_discovery(cidr: str) -> tuple[list[dict[str, Any]], list[str]]:
         discovered.append(addr)
         findings.append({
             "scanner": "discovery", "type": "host_discovered", "severity": "info",
-            "title": f"Nouvel host decouvert sur {cidr} : {addr}" + (f" ({hostname})" if hostname else ""),
-            "description": f"Un host est joignable sur {addr}." + (f" Hostname: {hostname}." if hostname else "") + f"\nIl a ete ajoute automatiquement aux hosts surveilles.",
+            "title": f"New host discovered on {cidr}: {addr}" + (f" ({hostname})" if hostname else ""),
+            "description": f"A host is reachable at {addr}." + (f" Hostname: {hostname}." if hostname else "") + f"\nIt was automatically added to the monitored hosts.",
             "target": addr,
             "evidence": {"cidr": cidr, "address": addr, "hostname": hostname},
         })
 
     findings.append({
         "scanner": "discovery", "type": "discovery_summary", "severity": "info",
-        "title": f"Discovery sur {cidr} : {len(discovered)} host(s) actifs",
-        "description": f"{len(discovered)} hosts repondent au ping sweep sur {cidr}.",
+        "title": f"Discovery on {cidr}: {len(discovered)} active host(s)",
+        "description": f"{len(discovered)} hosts respond to the ping sweep on {cidr}.",
         "target": cidr,
         "evidence": {"cidr": cidr, "discovered": discovered},
     })
