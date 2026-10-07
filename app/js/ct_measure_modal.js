@@ -192,6 +192,30 @@
             drop.style.top = Math.round(r.bottom) + "px";
         }
     }
+    // Keep the open dropdown glued to its input while the modal body (or
+    // window) scrolls or resizes — it is position:fixed, so it would otherwise
+    // stay frozen where it opened. Self-detaches once the dropdown is closed.
+    var _ctmSsRepos = null;
+    function _ctmSsTrack(uid) {
+        _ctmSsUntrack();
+        _ctmSsRepos = function () {
+            var d = document.getElementById(uid + "-drop");
+            if (!d || !d.classList.contains("open")) {
+                _ctmSsUntrack();
+                return;
+            }
+            _ctmSsPosition(uid);
+        };
+        window.addEventListener("scroll", _ctmSsRepos, true);
+        window.addEventListener("resize", _ctmSsRepos);
+    }
+    function _ctmSsUntrack() {
+        if (!_ctmSsRepos)
+            return;
+        window.removeEventListener("scroll", _ctmSsRepos, true);
+        window.removeEventListener("resize", _ctmSsRepos);
+        _ctmSsRepos = null;
+    }
     // On close without a pick, restore the input to the selected option's
     // label — the input doubles as the search box, so a typed filter would
     // otherwise linger and misrepresent the value actually stored.
@@ -225,6 +249,7 @@
                 d.classList.remove("open");
                 _ctmSsRestoreDisplay(d);
             });
+            _ctmSsUntrack();
         });
     }
     window._ctmSsOpen = function (uid) {
@@ -236,6 +261,7 @@
         // scrollHeight 0, which would make the flip-up branch misplace it.
         d.classList.add("open");
         _ctmSsPosition(uid);
+        _ctmSsTrack(uid);
         // Select the shown label so the first keystroke filters from scratch.
         var disp = document.getElementById(uid + "-disp");
         if (disp)
@@ -251,6 +277,7 @@
             o.style.display = (!q || (o.textContent || "").toLowerCase().indexOf(q) >= 0) ? "" : "none";
         });
         _ctmSsPosition(uid);
+        _ctmSsTrack(uid);
     };
     window._ctmSsSelect = function (uid, value, label) {
         var hid = document.getElementById(uid);
@@ -262,6 +289,7 @@
         var d = document.getElementById(uid + "-drop");
         if (d)
             d.classList.remove("open");
+        _ctmSsUntrack();
     };
     // ──────────────────────────────────────────────────────────────
     // Public entry point — deferred Promise that survives sub-modals
