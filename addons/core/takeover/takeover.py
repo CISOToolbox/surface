@@ -365,22 +365,22 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
 
         reasons: list[str] = []
         if fingerprint_hit:
-            reasons.append(f"empreinte '{fingerprint_hit}' detectee dans la reponse HTTP")
+            reasons.append(f"fingerprint '{fingerprint_hit}' detected in the HTTP response")
         if target_nxdomain:
-            reasons.append(f"le target CNAME ({cname}) est en NXDOMAIN (dangling)")
+            reasons.append(f"the CNAME target ({cname}) is NXDOMAIN (dangling)")
 
         findings.append({
             "scanner": "takeover",
             "type": "subdomain_takeover",
             "severity": severity,
-            "title": f"Subdomain takeover possible sur {target} (via {service})",
+            "title": f"Subdomain takeover possible on {target} (via {service})",
             "description": (
-                f"Le sous-domaine {target} pointe via CNAME vers {cname} ({service}), "
-                f"mais la ressource cible est abandonnee : {' ET '.join(reasons)}. "
-                f"Un attaquant peut potentiellement enregistrer cette ressource {service} "
-                f"et servir du contenu sous votre nom de domaine. "
-                f"Remediation : supprimer ou corriger l'enregistrement CNAME pour "
-                f"{target} dans votre DNS autoritaire."
+                f"The subdomain {target} points via CNAME to {cname} ({service}), "
+                f"but the target resource is abandoned: {' AND '.join(reasons)}. "
+                f"An attacker could potentially register this {service} resource "
+                f"and serve content under your domain name. "
+                f"Remediation: remove or fix the CNAME record for "
+                f"{target} in your authoritative DNS."
             ),
             "target": target,
             "evidence": {

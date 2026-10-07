@@ -1,6 +1,7 @@
 """JavaScript bundle secret/endpoint analysis — Surface core add-on."""
 from __future__ import annotations
 
+import re as _re
 from typing import Any
 
 from src.scan_common import (
@@ -56,13 +57,18 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     per unique (pattern, match) tuple across all JS files."""
     import httpx
 
-    _, target = _resolve_safe_target(target)
-    base_url = f"https://{target}/"
+    # Connect to the IP locked at validation time, not the name: handing the
+    # hostname to httpx let it re-resolve, so the address that was vetted need
+    # not be the one reached (DNS rebinding). The name rides in the Host
+    # header so name-based vhosts still answer.
+    locked_ip, target = _resolve_safe_target(target)
+    _host_hdr = {"Host": target} if locked_ip else {}
+    base_url = f"https://{locked_ip or target}/"
     try:
         # follow_redirects=False — a 3xx on the HTML root could otherwise
         # redirect us off-domain before script-src extraction.
         with httpx.Client(verify=False, follow_redirects=False, timeout=5.0) as client:
-            r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+            r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
             if r.status_code != 200:
                 return []
             html = r.text or ""
@@ -132,10 +138,10 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
                     "scanner": "js_analysis",
                     "type": "js_secret_leak",
                     "severity": sev,
-                    "title": f"{label} trouve dans un bundle JS de {target}",
+                    "title": f"{label} found in a JS bundle of {target}",
                     "description": (
-                        f"Un pattern de type '{label}' a ete trouve dans le bundle "
-                        f"JS {url}. Extrait : {masked}"
+                        f"A pattern of type '{label}' was found in the "
+                        f"JS bundle {url}. Excerpt: {masked}"
                     ),
                     "target": target,
                     "evidence": {

@@ -23,8 +23,8 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
     if not mx:
         findings.append({
             "scanner": "email_security", "type": "mx_missing", "severity": "info",
-            "title": f"Aucun MX configure pour {domain}",
-            "description": "Le domaine n'a pas d'enregistrement MX. Aucun mail ne peut etre recu (peut etre intentionnel).",
+            "title": f"No MX configured for {domain}",
+            "description": "The domain has no MX record. No mail can be received (this may be intentional).",
             "target": domain, "evidence": {},
         })
 
@@ -34,8 +34,8 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
     if not spf:
         findings.append({
             "scanner": "email_security", "type": "spf_missing", "severity": "high",
-            "title": f"SPF manquant sur {domain}",
-            "description": "Aucun enregistrement SPF (TXT v=spf1...). N'importe qui peut envoyer des mails au nom de ce domaine. Recommande : 'v=spf1 -all' au minimum.",
+            "title": f"SPF missing on {domain}",
+            "description": "No SPF record (TXT v=spf1...). Anyone can send emails on behalf of this domain. Recommended: 'v=spf1 -all' at minimum.",
             "target": domain, "evidence": {"txt_records": txt},
         })
     else:
@@ -53,15 +53,15 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
         if has_pass_all:
             findings.append({
                 "scanner": "email_security", "type": "spf_weak", "severity": "high",
-                "title": f"SPF trop permissif sur {domain}",
-                "description": f"L'enregistrement SPF accepte tous les emetteurs (+all ou 'all' sans qualifieur). SPF: {spf}",
+                "title": f"SPF too permissive on {domain}",
+                "description": f"The SPF record accepts all senders (+all or 'all' with no qualifier). SPF: {spf}",
                 "target": domain, "evidence": {"spf": spf},
             })
         elif has_neutral:
             findings.append({
                 "scanner": "email_security", "type": "spf_neutral", "severity": "medium",
-                "title": f"SPF en mode neutre (?all) sur {domain}",
-                "description": f"Le SPF est en mode 'neutre', sans politique de rejet. SPF: {spf}",
+                "title": f"SPF in neutral mode (?all) on {domain}",
+                "description": f"The SPF record is in 'neutral' mode, with no reject policy. SPF: {spf}",
                 "target": domain, "evidence": {"spf": spf},
             })
 
@@ -71,16 +71,16 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
     if not dmarc:
         findings.append({
             "scanner": "email_security", "type": "dmarc_missing", "severity": "high",
-            "title": f"DMARC manquant sur {domain}",
-            "description": "Aucun enregistrement DMARC. Recommande au minimum 'v=DMARC1; p=none; rua=mailto:...' pour le monitoring, puis durcir vers p=quarantine ou p=reject.",
+            "title": f"DMARC missing on {domain}",
+            "description": "No DMARC record. Recommended at minimum 'v=DMARC1; p=none; rua=mailto:...' for monitoring, then harden toward p=quarantine or p=reject.",
             "target": domain, "evidence": {},
         })
     else:
         if "p=none" in dmarc:
             findings.append({
                 "scanner": "email_security", "type": "dmarc_weak", "severity": "medium",
-                "title": f"DMARC en mode monitoring (p=none) sur {domain}",
-                "description": f"Le DMARC est en monitoring, pas en application. Apres une periode d'observation, durcir vers quarantine ou reject. DMARC: {dmarc}",
+                "title": f"DMARC in monitoring mode (p=none) on {domain}",
+                "description": f"DMARC is in monitoring mode, not enforcement. After an observation period, harden toward quarantine or reject. DMARC: {dmarc}",
                 "target": domain, "evidence": {"dmarc": dmarc},
             })
 
@@ -94,8 +94,8 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
     if not dkim_found:
         findings.append({
             "scanner": "email_security", "type": "dkim_missing", "severity": "medium",
-            "title": f"DKIM non detecte sur {domain}",
-            "description": "Aucun selecteur DKIM commun (default, google, selector1...) n'a ete trouve. Verifier la configuration DKIM avec votre provider mail.",
+            "title": f"DKIM not detected on {domain}",
+            "description": "No common DKIM selector (default, google, selector1...) was found. Verify the DKIM configuration with your mail provider.",
             "target": domain, "evidence": {"selectors_tried": ["default", "google", "selector1", "selector2", "k1", "mail"]},
         })
 

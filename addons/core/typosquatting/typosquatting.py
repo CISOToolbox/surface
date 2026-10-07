@@ -229,12 +229,12 @@ def scan_domain_typosquatting(domain: str, config: dict | None = None) -> list[d
         findings.append({
             "scanner": "typosquatting", "type": "typosquat_domain",
             "severity": "high" if "ct" in method else "medium",
-            "title": f"Domaine lookalike actif : {perm}",
+            "title": f"Active lookalike domain: {perm}",
             "description": (
-                f"Variante ressemblant a {domain} (classe : {klass}).\n"
-                f"Detection : {', '.join(method)}"
-                + (f" - {ct_hits} certificat(s) en Certificate Transparency" if ct_hits else "")
-                + ".\nRisque : phishing, usurpation de marque, redirection malveillante."
+                f"Variant resembling {domain} (class: {klass}).\n"
+                f"Detection: {', '.join(method)}"
+                + (f" - {ct_hits} certificate(s) in Certificate Transparency" if ct_hits else "")
+                + ".\nRisk: phishing, brand impersonation, malicious redirection."
             ),
             "target": perm,
             "evidence": {
@@ -245,11 +245,11 @@ def scan_domain_typosquatting(domain: str, config: dict | None = None) -> list[d
 
     findings.append({
         "scanner": "typosquatting", "type": "typosquat_summary", "severity": "info",
-        "title": (f"{len(active)} lookalike(s) actif(s) pour {domain}"
-                  if active else f"Aucun lookalike actif pour {domain}"),
+        "title": (f"{len(active)} active lookalike(s) for {domain}"
+                  if active else f"No active lookalike for {domain}"),
         "description": (
-            f"{len(perms)} permutations generees ({engine}), {ct_done} verifiee(s) "
-            f"en Certificate Transparency ; {len(active)} active(s)."
+            f"{len(perms)} permutations generated ({engine}), {ct_done} checked "
+            f"in Certificate Transparency; {len(active)} active."
         ),
         "target": domain,
         "evidence": {

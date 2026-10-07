@@ -118,16 +118,16 @@ def scan_host_tls_grade(target: str) -> list[dict[str, Any]]:
         grade = "B"
 
     sev = {"A": "info", "B": "info", "C": "medium", "D": "high", "F": "critical"}[grade]
-    desc = f"Grade TLS : {grade}\n\nProtocoles supportes : {', '.join(supported) or 'aucun'}\n"
+    desc = f"TLS grade: {grade}\n\nSupported protocols: {', '.join(supported) or 'none'}\n"
     if best_cipher:
-        desc += f"Cipher negocie : {best_cipher} ({best_protocol})\n"
+        desc += f"Negotiated cipher: {best_cipher} ({best_protocol})\n"
     if legacy:
-        desc += f"\n⚠ Versions legacy acceptees : {', '.join(legacy)} — a desactiver."
+        desc += f"\n⚠ Legacy versions accepted: {', '.join(legacy)} — disable them."
     findings.append({
         "scanner": "tls_grade",
         "type": "tls_grade",
         "severity": sev,
-        "title": f"TLS grade {grade} sur {target}",
+        "title": f"TLS grade {grade} on {target}",
         "description": desc,
         "target": f"{target}:443",
         "evidence": {
