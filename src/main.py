@@ -26,19 +26,26 @@ from src.routes.connectors import router as connectors_router
 from src.version_common import version_payload
 
 # Suite-integration routers — only present in the full suite build;
-# silently absent in standalone deployments.
+# silently absent in standalone deployments. Only the missing file itself is
+# tolerated: any other import error in it must still fail the suite.
 try:
     from src.routes.internal import router as internal_router
-except ImportError:
+except ModuleNotFoundError as e:
+    if e.name != "src.routes.internal":
+        raise
     internal_router = None
 
 try:
     from src.routes.directory_proxy import router as directory_proxy_router
-except ImportError:
+except ModuleNotFoundError as e:
+    if e.name != "src.routes.directory_proxy":
+        raise
     directory_proxy_router = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("surface-backend")
+if internal_router is None:
+    logger.info("Standalone build: suite-only routes absent (Pilot provisioning, internal API)")
 
 app = FastAPI(title="Surface Backend", version="0.3.1")
 
@@ -114,7 +121,8 @@ from src.routes.notifications import router as notifications_router
 app.include_router(notifications_router)
 from src.routes.nonconformities import router as nonconformities_router, internal_router as nonconformities_internal_router  # FEAT-45
 app.include_router(nonconformities_router)
-app.include_router(nonconformities_internal_router)
+if nonconformities_internal_router is not None:
+    app.include_router(nonconformities_internal_router)
 if internal_router is not None:
     app.include_router(internal_router)
 if directory_proxy_router is not None:

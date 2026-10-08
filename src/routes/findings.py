@@ -250,9 +250,14 @@ async def triage_finding(
     if new_status == "to_fix":
         measure = (await db.execute(select(Measure).where(Measure.finding_id == finding_id))).scalar_one_or_none()
         if measure:
-            from src.routes.internal import _measure_to_pilot_payload
-            from src.pilot_notify import notify_pilot_measure
-            asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(measure, f)))
+            try:
+                from src.routes.internal import _measure_to_pilot_payload
+            except ModuleNotFoundError as e:   # standalone build: no Pilot to notify
+                if e.name != "src.routes.internal":
+                    raise
+            else:
+                from src.pilot_notify import notify_pilot_measure
+                asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(measure, f)))
     return _to_dict(f)
 
 

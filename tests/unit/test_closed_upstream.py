@@ -19,6 +19,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 MODULE = Path(__file__).resolve().parents[2]
 
 
@@ -49,6 +51,8 @@ def test_status_fits_the_column():
     assert len("closed_upstream") <= int(m.group(1))
 
 
+@pytest.mark.skipif(not (MODULE / "src/routes/internal.py").exists(),
+                    reason="suite-only route, absent from a standalone build")
 def test_it_is_absent_from_the_posture_filter():
     """open_filter is what Pilot's severity counters are built on."""
     src = _source("src/routes/internal.py")

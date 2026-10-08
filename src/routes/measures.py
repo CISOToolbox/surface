@@ -12,6 +12,7 @@ from src.database import get_db
 from src.models import Finding, Measure, User
 from src.schemas import MeasureCreate, MeasureUpdate
 from src.audit import log_action
+from src.pilot_notify import notify_pilot_measure
 
 router = APIRouter(prefix="/api/measures", tags=["measures"])
 
@@ -60,10 +61,11 @@ async def create_measure(
     await db.refresh(m)
     try:
         from src.routes.internal import _measure_to_pilot_payload
-        from src.pilot_notify import notify_pilot_measure
+    except ModuleNotFoundError as e:       # standalone build: no Pilot to notify
+        if e.name != "src.routes.internal":
+            raise
+    else:
         asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(m)))
-    except ImportError:
-        pass
     return _to_dict(m)
 
 
@@ -94,10 +96,14 @@ async def update_measure(
     await log_action(db, user, request, "measure.update", target=m.title[:60] if m.title else "")
     await db.commit()
     await db.refresh(m)
-    from src.routes.internal import _measure_to_pilot_payload
-    from src.pilot_notify import notify_pilot_measure
-    f = await db.get(Finding, m.finding_id) if m.finding_id else None
-    asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(m, f)))
+    try:
+        from src.routes.internal import _measure_to_pilot_payload
+    except ModuleNotFoundError as e:       # standalone build: no Pilot to notify
+        if e.name != "src.routes.internal":
+            raise
+    else:
+        f = await db.get(Finding, m.finding_id) if m.finding_id else None
+        asyncio.ensure_future(notify_pilot_measure(_measure_to_pilot_payload(m, f)))
     return _to_dict(m)
 
 

@@ -71,8 +71,14 @@ router = make_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("fi
                      require_writer=lambda u: require_min_role(u, "triager", SURFACE_ROLES))
 
 # Pilot's view of the register (service token): the same operations, relayed
-# with the Pilot user as actor. The token check is the module's own.
-from src.routes.internal import _check_service_token  # noqa: E402
-
-internal_router = make_internal_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",),
-                                       check_service_token=_check_service_token)
+# with the Pilot user as actor. The token check is the module's own, which a
+# standalone build does not ship: no Pilot, no internal router.
+try:
+    from src.routes.internal import _check_service_token  # noqa: E402
+except ModuleNotFoundError as e:
+    if e.name != "src.routes.internal":
+        raise
+    internal_router = None
+else:
+    internal_router = make_internal_router(Nonconformity, Derogation, FINDING_HOOK, subject_types=("finding",),
+                                           check_service_token=_check_service_token)

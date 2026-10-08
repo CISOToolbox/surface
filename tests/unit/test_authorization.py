@@ -15,6 +15,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 ROUTES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "src", "routes")
 
+# routes/internal.py and routes/directory_proxy.py are suite-only: a
+# standalone build ships without them.
+_suite_only = pytest.mark.skipif(not os.path.exists(os.path.join(ROUTES_DIR, "internal.py")),
+                                 reason="suite-only route, absent from a standalone build")
+
 
 # ── get_module_role ───────────────────────────────────────────────
 
@@ -105,6 +110,7 @@ class TestGetModuleRoleFromJWT:
 
 # ── Internal service token ────────────────────────────────────────
 
+@_suite_only
 class TestInternalServiceToken:
     def test_rejects_missing_token(self, monkeypatch):
         monkeypatch.setenv("SERVICE_TOKEN", "svc-secret")
@@ -181,7 +187,10 @@ EXPECTED_ADMIN_ROUTES = {
 class TestRouteProtection:
     def test_admin_routes_present(self):
         actual = _find_admin_routes()
-        missing = EXPECTED_ADMIN_ROUTES - actual
+        # directory_proxy.py is suite-only; every other expected file must exist.
+        expected = {r for r in EXPECTED_ADMIN_ROUTES
+                    if r[0] != "directory_proxy.py" or os.path.exists(os.path.join(ROUTES_DIR, r[0]))}
+        missing = expected - actual
         assert not missing, f"Routes expected to require admin: {missing}"
 
     def test_write_routes_require_auth(self):
@@ -207,6 +216,7 @@ class TestRouteProtection:
                                 f"{fname}:{node.name} is a write route but lacks get_current_user"
                             )
 
+    @_suite_only
     def test_internal_routes_use_service_token(self):
         """All /internal/ endpoints must call _check_service_token."""
         fpath = os.path.join(ROUTES_DIR, "internal.py")

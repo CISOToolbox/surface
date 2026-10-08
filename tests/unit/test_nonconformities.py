@@ -497,6 +497,8 @@ async def test_stats_envelope_counts_the_register_as_its_own_category(db):
     """A derogated finding is neither open nor handled: it is counted in the
     `nonconformities` block, next to the declared records."""
     from src.nonconformity_common import DerogationCreate, DecisionBody, NonconformityCreate, QualifyBody
+    if not os.path.exists(os.path.join(os.path.dirname(__file__), "..", "..", "src", "routes", "internal.py")):
+        pytest.skip("suite-only route, absent from a standalone build")
     from src.routes.internal import internal_stats
     f = await _finding(db)                              # to_fix
     await _finding(db, status="new")

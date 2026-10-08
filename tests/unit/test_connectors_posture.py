@@ -34,6 +34,10 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 
 from src.models import Base, Finding  # noqa: E402
+
+# /internal/stats is suite-only: a standalone build ships without it.
+if not os.path.exists(os.path.join(os.path.dirname(__file__), "..", "..", "src", "routes", "internal.py")):
+    pytest.skip("suite-only route, absent from a standalone build", allow_module_level=True)
 from src.routes.internal import internal_stats  # noqa: E402
 
 for _t in Base.metadata.tables.values():
