@@ -16,6 +16,7 @@ in `src.scan_common`. See `addons/README.md` for the add-on contract.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Any
 
@@ -99,6 +100,40 @@ def set_nuclei_tuning_cache(overrides: dict[str, int]) -> dict[str, int]:
         base.update(cleaned)
         _nuclei_tuning_cache = base
         return dict(base)
+
+
+def nuclei_templates_dir() -> str:
+    """Where nuclei reads its templates (set by the nuclei add-on)."""
+    return os.environ.get("NUCLEI_TEMPLATES_DIR") or os.path.expanduser("~/nuclei-templates")
+
+
+def nuclei_templates_updatable() -> bool:
+    """Whether ``nuclei -ut`` can write the templates. Not on a read-only
+    root filesystem (the suite's deployment): there nuclei finds them
+    outdated, writes nothing and still exits 0, and the templates come with
+    the image, pinned and checksummed by the add-on's install.sh."""
+    path = nuclei_templates_dir()
+    while not os.path.exists(path) and os.path.dirname(path) != path:
+        path = os.path.dirname(path)  # not created yet: nuclei -ut creates it
+    return os.access(path, os.W_OK)
+
+
+_NUCLEI_UPDATE_DONE = ("successfully updated", "successfully installed", "no new updates found")
+
+
+def nuclei_template_update_succeeded(proc) -> bool:
+    """Whether ``nuclei -ut`` refreshed (or found up to date) the templates.
+    Its exit code does not say: without network, or behind a blocked proxy,
+    it prints its banner and exits 0 having done nothing."""
+    out = ((proc.stdout or b"") + (proc.stderr or b"")).decode(errors="replace").lower()
+    return proc.returncode == 0 and any(marker in out for marker in _NUCLEI_UPDATE_DONE)
+
+
+def nuclei_template_update_command(nuclei_path: str) -> list[str]:
+    """The command that refreshes the nuclei templates (scheduler and admin
+    route). No -disable-update-check: in nuclei 3.x it turns -ut off too, and
+    the command then exits 0 having updated nothing."""
+    return [nuclei_path, "-ut", "-no-color"]
 
 
 # ═══════════════════════════════════════════════════════════════

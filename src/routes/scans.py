@@ -7,6 +7,7 @@ push results via /api/findings/bulk.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import socket
 import ssl
@@ -24,6 +25,7 @@ from src.models import User
 from src.rate_limit import check_scan_quota
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
+logger = logging.getLogger("surface.scans")
 
 
 # ── Quick scan: TCP ports + TLS ────────────────────────────────
@@ -350,7 +352,9 @@ def _nuclei_environment_info(force: bool = False) -> dict[str, Any]:
     except Exception:
         pass
 
-    templates_dir = os.environ.get("NUCLEI_TEMPLATES_DIR") or os.path.expanduser("~/nuclei-templates")
+    from src.scanners import nuclei_templates_dir, nuclei_templates_updatable
+    info["templates_updatable"] = nuclei_templates_updatable()
+    templates_dir = nuclei_templates_dir()
     if os.path.isdir(templates_dir):
         count = 0
         for root, _, files in os.walk(templates_dir):
@@ -436,16 +440,22 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
     import shutil
     import subprocess
 
-    check_scan_quota(str(user.id) if user else "anonymous")
-
     nuclei_path = shutil.which("nuclei")
     if not nuclei_path:
         raise HTTPException(status_code=500, detail="nuclei binary not found in PATH")
 
+    from src.scanners import (nuclei_template_update_command, nuclei_template_update_succeeded,
+                              nuclei_templates_updatable)
+    if not nuclei_templates_updatable():
+        raise HTTPException(status_code=409, detail=(
+            "The nuclei templates are read-only in this deployment: they come with "
+            "the Surface image. Update the image to get newer templates."))
+
+    check_scan_quota(str(user.id) if user else "anonymous")
     try:
         proc = await asyncio.to_thread(
             subprocess.run,
-            [nuclei_path, "-ut", "-disable-update-check", "-no-color"],
+            nuclei_template_update_command(nuclei_path),
             capture_output=True, timeout=180,
         )
     except subprocess.TimeoutExpired:
@@ -453,6 +463,16 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
 
     stdout = proc.stdout.decode(errors="replace")[-2000:]
     stderr = proc.stderr.decode(errors="replace")[-2000:]
+    if not nuclei_template_update_succeeded(proc):
+        # Kept server-side: the output may name the outbound proxy.
+        logger.warning("nuclei -ut did not refresh the templates (rc=%s): %s", proc.returncode, stderr[-500:])
+        if proc.returncode:
+            raise HTTPException(status_code=502, detail=(
+                f"nuclei -ut failed (exit {proc.returncode}): see the Surface logs."))
+        # Exit 0 is not enough: without network nuclei -ut exits 0 having done nothing.
+        raise HTTPException(status_code=502, detail=(
+            "nuclei did not refresh the templates: it could not reach them "
+            "(no network access, or a blocked proxy)."))
 
     # Force-refresh the inventory cache since we just mutated the filesystem.
     info = await asyncio.to_thread(_nuclei_environment_info, True)

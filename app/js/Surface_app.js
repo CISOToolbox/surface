@@ -4757,8 +4757,14 @@ window.AI_APP_CONFIG = {
         h += '<button class="ct-btn ai-btn-close" id="nuclei-reset-btn" data-click="_nucleiResetTuning" title="' + esc(t("nuclei.save_btn")) + '" data-size="xs" data-icon>' + _icon("refresh", 14) + '</button>';
         h += '</div>';
         h += '<div style="border-top:1px solid var(--ct-line);margin:var(--ct-s3) 0;padding-top:10px">';
-        h += '<button class="ct-btn ai-btn-close ct-w-full" data-click="_nucleiUpdateTemplates" id="nuclei-update-btn">' + _icon("refresh", 14) + ' ' + esc(t("nuclei.update_btn")) + '</button>';
-        h += '<div id="nuclei-update-result" class="ct-mt-2 ct-text-label"></div>';
+        if (cfg.templates_updatable === false) {
+            // Read-only deployment: the templates come with the image.
+            h += '<div class="ct-text-label ct-muted">' + esc(t("nuclei.templates_from_image")) + '</div>';
+        }
+        else {
+            h += '<button class="ct-btn ai-btn-close ct-w-full" data-click="_nucleiUpdateTemplates" id="nuclei-update-btn">' + _icon("refresh", 14) + ' ' + esc(t("nuclei.update_btn")) + '</button>';
+            h += '<div id="nuclei-update-result" class="ct-mt-2 ct-text-label"></div>';
+        }
         h += '</div>';
         holder.innerHTML = h;
     }

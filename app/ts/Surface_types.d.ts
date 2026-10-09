@@ -226,6 +226,7 @@ interface SurfaceNucleiConfig {
     version?: string;
     templates_count?: number;
     last_update?: string;
+    templates_updatable?: boolean;
     tuning?: Record<string, number>;
     tuning_limits?: Record<string, { min: number; max: number }>;
     tuning_defaults?: Record<string, number>;

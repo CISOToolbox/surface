@@ -27,7 +27,8 @@ from src.database import async_session
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, is_excluded
 from src.scanners import (CONNECTOR_REGISTRY, DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY,
-                          resolve_first_ip, run_enabled_scanners)
+                          nuclei_template_update_command, nuclei_template_update_succeeded,
+                          nuclei_templates_updatable, resolve_first_ip, run_enabled_scanners)
 
 logger = logging.getLogger("surface.scheduler")
 
@@ -375,6 +376,8 @@ async def _maybe_update_nuclei_templates() -> None:
     nuclei_path = shutil.which("nuclei")
     if not nuclei_path:
         return  # binary not in PATH on this build — silently skip
+    if not nuclei_templates_updatable():
+        return  # read-only templates: they come with the image
 
     from src.models import AppSettings  # local import to mirror digest hook
     now = datetime.now(timezone.utc)
@@ -395,7 +398,7 @@ async def _maybe_update_nuclei_templates() -> None:
     try:
         proc = await asyncio.to_thread(
             subprocess.run,
-            [nuclei_path, "-ut", "-disable-update-check", "-no-color"],
+            nuclei_template_update_command(nuclei_path),
             capture_output=True, timeout=NUCLEI_UPDATE_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -406,9 +409,10 @@ async def _maybe_update_nuclei_templates() -> None:
         logger.exception("scheduler: nuclei -ut crashed")
         return
 
-    if proc.returncode != 0:
-        # Keep the last-run unchanged so we retry next cycle.
-        logger.warning("scheduler: nuclei -ut exited rc=%s: %s",
+    if not nuclei_template_update_succeeded(proc):
+        # Keep the last-run unchanged so we retry next cycle. Exit 0 is not
+        # enough: without network nuclei -ut exits 0 having done nothing.
+        logger.warning("scheduler: nuclei -ut did not refresh the templates (rc=%s): %s",
                        proc.returncode, proc.stderr.decode(errors="replace")[-500:])
         return
 

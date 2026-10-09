@@ -843,6 +843,7 @@ if (typeof _registerTranslations === "function") {
         "nuclei.save_error": "Save error",
         "nuclei.save_btn": "Save tuning",
         "nuclei.update_btn": "Update templates",
+        "nuclei.templates_from_image": "Templates come with the Surface image in this deployment: update the image to get newer ones.",
         "nuclei.updating": "Updating (1-2 min)...",
         "nuclei.templates_after": "templates after update",
         "nuclei.not_installed": "Nuclei is not installed in this container.",

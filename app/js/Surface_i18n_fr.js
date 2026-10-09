@@ -853,6 +853,7 @@ if (typeof _registerTranslations === "function") {
         "nuclei.save_error": "Erreur sauvegarde",
         "nuclei.save_btn": "Sauvegarder le tuning",
         "nuclei.update_btn": "Mettre à jour les templates",
+        "nuclei.templates_from_image": "Dans ce déploiement, les templates sont fournis par l'image Surface : mettez l'image à jour pour en obtenir de plus récents.",
         "nuclei.updating": "Mise à jour en cours (1-2 min)...",
         "nuclei.templates_after": "templates après mise à jour",
         "nuclei.not_installed": "Nuclei n'est pas installe dans ce container.",
