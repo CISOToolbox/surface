@@ -6,7 +6,7 @@ import subprocess
 from typing import Any
 
 from src.scan_common import (
-    _safe_target, _parse_nmap_xml, _is_stealth,
+    _safe_target, _parse_nmap_xml, _is_stealth, _warn_unproxied,
 )
 
 
@@ -45,6 +45,7 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
     # `--` ends option parsing so the target can never be read as a flag
     # (argument injection). `_safe_target()` also rejects a leading '-'.
     args = [nmap_path, "-oX", "-"] + profile_args + ["--", target]
+    _warn_unproxied("nmap", target)
     try:
         proc = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:

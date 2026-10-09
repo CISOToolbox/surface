@@ -6,7 +6,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target,
+    _safe_target, scan_client,
 )
 
 
@@ -292,20 +292,11 @@ def _fetch_takeover_body(target: str) -> tuple[int | None, str]:
       guard. Takeover fingerprints appear on the first response anyway.
     """
     import httpx
-    from src.proxy_common import pushed_proxy
     headers = {"User-Agent": "CISO-Surface/1.0 (takeover-check)"}
     for scheme in ("https", "http"):
         try:
-            # The target directly when the proxy is Pilot's: it is for the module's own calls.
-            with httpx.stream(
-                "GET",
-                f"{scheme}://{target}",
-                trust_env=not pushed_proxy(),
-                timeout=10.0,
-                headers=headers,
-                follow_redirects=False,
-                verify=False,
-            ) as resp:
+            with scan_client(target, None, timeout=10.0, follow_redirects=False, verify=False) as client, \
+                    client.stream("GET", f"{scheme}://{target}", headers=headers) as resp:
                 buf = bytearray()
                 for chunk in resp.iter_bytes():
                     remaining = _TAKEOVER_MAX_BODY_BYTES - len(buf)

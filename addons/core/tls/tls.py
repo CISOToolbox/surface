@@ -7,7 +7,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, _is_ip_literal, _tls_ssl_context,
+    _safe_target, _is_ip_literal, _tls_ssl_context, _warn_unproxied,
     _registrable, _normalize_host, _in_scope,
 )
 
@@ -150,6 +150,7 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
     """Check the TLS certificate validity on port 443 AND extract SAN DNS
     names as discovered hosts (pivoting from one cert to its siblings)."""
     target = _safe_target(target)
+    _warn_unproxied("tls", target)
     findings: list[dict[str, Any]] = []
     discovered: list[str] = []
     port = 443

@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 from src.scan_common import (
-    _safe_target, _is_stealth,
+    _safe_target, _is_stealth, _warn_unproxied,
 )
 
 
@@ -29,6 +29,7 @@ def scan_iprange_discovery(cidr: str) -> tuple[list[dict[str, Any]], list[str]]:
     sweep_timeout = 2400 if _is_stealth() else 600
     # `--` ends option parsing: the CIDR can never be read as a flag.
     args = [nmap_path, "-oX", "-", "-sn", timing, "--", cidr]
+    _warn_unproxied("nmap", cidr)
     try:
         proc = subprocess.run(args, capture_output=True, timeout=sweep_timeout)
     except Exception as e:

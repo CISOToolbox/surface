@@ -13,13 +13,15 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from typing import Any
+from urllib.parse import urlparse
 
 os.environ.setdefault("NUCLEI_TEMPLATES_DIR", "/opt/nuclei-templates")
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, _STEALTH_BROWSER_UA, _is_stealth,
+    _safe_target, _STEALTH_BROWSER_UA, _is_stealth, _proxy_for, bypasses_proxy, resolve_first_ip,
 )
 from src.scanners import _nuclei_tuning
 
@@ -111,6 +113,26 @@ def _apply_severity_override(template_id: str, nuclei_sev: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
+def _nuclei_stats(stderr: str) -> tuple[int, int]:
+    """(requests, errors) from nuclei's last ``-stats`` line: JSON with
+    ``-jsonl -silent``, text otherwise."""
+    for line in reversed(stderr.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                stats = json.loads(line)
+                if isinstance(stats, dict) and "requests" in stats:
+                    return int(stats["requests"]), int(stats.get("errors", 0))
+            except (ValueError, TypeError):
+                pass
+            continue
+        if "Errors:" in line and "Requests:" in line:
+            req = re.search(r"Requests:\s*(\d+)", line)
+            err = re.search(r"Errors:\s*(\d+)", line)
+            return (int(req.group(1)) if req else 0), (int(err.group(1)) if err else 0)
+    return 0, 0
+
+
 def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critical") -> list[dict[str, Any]]:
     """Run nuclei against the target with default templates.
 
@@ -174,7 +196,20 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
     # cap is unreachable in practice — give them 60 min before pulling
     # the plug. Normal scans keep the 15-min default.
     subprocess_timeout = 3600 if stealth else 900
+    # nuclei reads no HTTP(S)_PROXY: give it the proxy that applies to the
+    # target (none for an exception, by name or by the address it resolves
+    # to), through a 0600 file so a user:pass@ never shows on the command
+    # line. -pi also sends nuclei's own requests (interactsh) through it.
+    host = urlparse(url).hostname or target
+    proxy = "" if bypasses_proxy(host, resolve_first_ip(host)) else _proxy_for(urlparse(url).scheme)
+    proxy_host = urlparse(proxy).hostname or "?"
+    proxy_file = ""
     try:
+        if proxy:
+            fd, proxy_file = tempfile.mkstemp(prefix="nuclei-proxy-")
+            with os.fdopen(fd, "w") as f:
+                f.write(proxy + "\n")
+            args += ["-proxy", proxy_file, "-pi"]
         proc = subprocess.run(args, capture_output=True, timeout=subprocess_timeout)
     except subprocess.TimeoutExpired:
         # Operational signal, not a vulnerability — info severity so the
@@ -191,6 +226,20 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
             "scanner": "nuclei", "type": "scanner_error", "severity": "info",
             "title": f"Nuclei failed on {url}",
             "description": str(e), "target": target, "evidence": {},
+        }]
+    finally:
+        if proxy_file:
+            os.unlink(proxy_file)
+
+    stderr = proc.stderr.decode(errors="replace")
+    if proxy and "all proxies are dead" in stderr:
+        logger.warning("nuclei: the outbound proxy %s could not be used for %s (exit %s)",
+                       proxy_host, target, proc.returncode)
+        return [{
+            "scanner": "nuclei", "type": "scanner_error", "severity": "info",
+            "title": f"Nuclei could not use the outbound proxy for {url}",
+            "description": "nuclei could not reach the outbound proxy: the scan did not run.",
+            "target": target, "evidence": {"proxy_host": proxy_host},
         }]
 
     findings: list[dict[str, Any]] = []
@@ -250,15 +299,18 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
     # conclusion. Threshold is conservative (>=50% errors AND >=50 requests
     # — small scans naturally have noisy ratios on transient hiccups).
     try:
-        last_stats = ""
-        for line in proc.stderr.decode(errors="replace").splitlines():
-            if "Errors:" in line and "Requests:" in line:
-                last_stats = line
-        if last_stats:
-            err_match = re.search(r"Errors:\s*(\d+)", last_stats)
-            req_match = re.search(r"Requests:\s*(\d+)", last_stats)
-            errors = int(err_match.group(1)) if err_match else 0
-            requests = int(req_match.group(1)) if req_match else 0
+        requests, errors = _nuclei_stats(stderr)
+        if proxy and requests and errors >= requests:
+            logger.warning("nuclei: every request through the outbound proxy %s failed for %s "
+                           "(%d errors, %d requests)", proxy_host, target, errors, requests)
+            findings.append({
+                "scanner": "nuclei", "type": "scanner_error", "severity": "info",
+                "title": f"Nuclei could not scan {url} through the outbound proxy",
+                "description": (f"Every request through the outbound proxy failed ({errors} errors, "
+                                f"{requests} requests): the absence of findings means nothing."),
+                "target": target, "evidence": {"proxy_host": proxy_host, "errors": errors, "requests": requests},
+            })
+        elif requests:
             if requests >= 50 and errors / max(requests, 1) >= 0.5:
                 pct = round(100 * errors / requests)
                 findings.append({

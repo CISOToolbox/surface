@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target,
+    _resolve_safe_target, scan_client,
 )
 
 
@@ -94,8 +94,6 @@ def _grade_headers(headers: dict[str, str]) -> tuple[str, list[str], list[str]]:
 
 def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     """Fetch the HTTPS root and grade its security headers."""
-    import httpx
-    from src.proxy_common import pushed_proxy
 
     # Connect to the IP locked at validation time, not the name: handing the
     # hostname to httpx let it re-resolve, so the address that was vetted need
@@ -109,8 +107,7 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
         # _resolve_safe_target, so following it would be an SSRF bypass (to
         # cloud metadata / loopback / RFC1918). The security headers we grade
         # are those of the canonical URL anyway.
-        # The target directly when the proxy is Pilot's: it is for the module's own calls.
-        with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=5.0) as client:
+        with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0) as client:
             r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
     except Exception:
         return []

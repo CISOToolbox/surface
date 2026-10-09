@@ -15,8 +15,11 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
 
 from src.scan_common import logger
 from src.scan_common import (
+    _proxy_for,
     _resolve_safe_target,
     _safe_target,
+    bypasses_proxy,
+    resolve_first_ip,
 )
 
 
@@ -51,9 +54,7 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
         }]
 
     import base64
-    from urllib.parse import urlparse
-
-    from src.proxy_common import pushed_proxy
+    from urllib.parse import unquote, urlparse
 
     # Every sibling HTTP scanner sets follow_redirects=False and says why.
     # Chromium has no such switch: it follows 3xx, meta-refresh and JS
@@ -82,14 +83,23 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
             return route.abort()
         return route.continue_()
 
+    proxy_failed = ""
     for port, scheme in [(443, "https"), (80, "http")]:
         url = f"{scheme}://{target}:{port}/"
         try:
             with sync_playwright() as pw:
-                # Chromium follows *_proxy from the environment: not the proxy
-                # Pilot pushed, which is for the module's own calls.
-                args = ["--no-sandbox", "--disable-dev-shm-usage"] + (["--no-proxy-server"] if pushed_proxy() else [])
-                browser = pw.chromium.launch(headless=True, args=args)
+                # Chromium reads *_proxy but drops a user:pass@ in it: give it
+                # the proxy explicitly, or none for a target in the exceptions.
+                launch: dict[str, Any] = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+                if bypasses_proxy(target, resolve_first_ip(target)):
+                    if _proxy_for("https") or _proxy_for("http"):
+                        launch["args"].append("--no-proxy-server")
+                elif _proxy_for(scheme):
+                    p = urlparse(_proxy_for(scheme))
+                    launch["proxy"] = {"server": f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")}
+                    if p.username:
+                        launch["proxy"].update(username=unquote(p.username), password=unquote(p.password or ""))
+                browser = pw.chromium.launch(**launch)
                 context = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 720})
                 context.route("**/*", _guard)
                 page = context.new_page()
@@ -114,6 +124,16 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
             })
         except Exception as e:
             logger.info("screenshot failed for %s: %s", url, e)
+            if "ERR_PROXY" in str(e) or "ERR_TUNNEL" in str(e):
+                proxy_failed = urlparse(_proxy_for(scheme)).hostname or "?"
+    if not findings and proxy_failed:  # neither scheme captured, the proxy said why
+        logger.warning("screenshot of %s through the outbound proxy %s failed", target, proxy_failed)
+        findings.append({
+            "scanner": "screenshot", "type": "scanner_error", "severity": "info",
+            "title": f"Screenshot of {target} failed through the outbound proxy",
+            "description": "Chromium could not reach the target through the outbound proxy.",
+            "target": target, "evidence": {"proxy_host": proxy_failed},
+        })
     return findings
 
 

@@ -25,7 +25,9 @@ import re
 import socket
 import ssl
 import threading
+import urllib.request
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
 
@@ -284,15 +286,135 @@ def _dns_query(domain: str, rtype: str) -> list[str]:
         return []
 
 
+# ═══════════════════════════════════════════════════════════════
+# Outbound proxy for the scanners
+# ═══════════════════════════════════════════════════════════════
+# proxy_common exports the proxy (Pilot's, or the deployment's own) and the
+# exception list into HTTP(S)_PROXY / NO_PROXY, normalized. A scanner reaching
+# the scanned target follows it, except for a target in the exceptions. The
+# scanners connect to the IP locked at validation time, so the exceptions are
+# matched here, on the name and on that IP: httpx alone would only see the IP.
+
+def bypasses_proxy(host: str, ip: str | None = None) -> bool:
+    """Whether NO_PROXY exempts this target: ``*``, its exact IP (the name or
+    the locked ``ip``), an IPv4 range the deployment set, or a domain that is
+    the name or one of its parents. An entry's ``:port`` is ignored: a
+    scanner reaches several ports, and an excluded host must not reach the
+    proxy on any of them. A range given as the target (discovery) is exempt
+    when a range of NO_PROXY contains it."""
+    name = (host or "").strip().lower().rstrip(".").strip("[]")
+    addresses = []
+    for candidate in (ip, name):
+        try:
+            addresses.append(ipaddress.ip_network((candidate or "").strip("[]"), strict=False))
+        except ValueError:
+            pass
+    for entry in (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").split(","):
+        entry = entry.strip().lower()
+        if entry.count(":") == 1 and entry.rpartition(":")[2].isdigit():
+            entry = entry.rpartition(":")[0]  # IPv6 entries carry no port (proxy_common)
+        if not entry:
+            continue
+        if entry == "*":
+            return True
+        try:
+            network = ipaddress.ip_network(entry.strip("[]"), strict=False)
+        except ValueError:
+            if name == entry or name.endswith("." + entry):
+                return True
+            continue
+        if any(a.subnet_of(network) for a in addresses if a.version == network.version):
+            return True
+    return False
+
+
+def _proxy_for(scheme: str) -> str:
+    """The proxy the environment sets for a scheme, ALL_PROXY as fallback."""
+    proxies = urllib.request.getproxies_environment()
+    return proxies.get(scheme) or proxies.get("all") or ""
+
+
+def _warn_unproxied(scanner: str, target: str) -> None:
+    """Log that a raw-socket scanner reaches ``target`` directly although a
+    proxy applies to it: an HTTP proxy carries HTTP, not port scans or TLS
+    handshakes (nmap's --proxies is applied by nsock to NSE and -sV only)."""
+    if not bypasses_proxy(target) and (_proxy_for("https") or _proxy_for("http")):
+        logger.warning("%s: an outbound proxy is set, but %s cannot use it: "
+                       "it reaches %s directly", scanner, scanner, target)
+
+
+_PROXY_STATE = threading.local()  # per thread: {target: (proxy host, cause)}, {targets answered}
+
+
+def take_proxy_failures() -> list[tuple[str, str, str]]:
+    """The targets ``scan_client`` could not reach through the proxy on this
+    thread since the last call, as (target, proxy host, cause): a target that
+    some client reached (https refused, http answered, in one client or two)
+    was scanned and is left out. The dispatcher calls it around each scanner
+    and turns them into a finding of that scanner."""
+    failures = getattr(_PROXY_STATE, "failures", {})
+    answered = getattr(_PROXY_STATE, "answered", set())
+    _PROXY_STATE.failures, _PROXY_STATE.answered = {}, set()
+    return [(target, *failure) for target, failure in failures.items() if target not in answered]
+
+
+@contextmanager
+def scan_client(host: str, ip: str | None = None, **kwargs: Any):
+    """The httpx client of a scanner that reaches the scanned target ``host``
+    (connected to at ``ip``, the locked address): direct when the target is a
+    proxy exception, through the outbound proxy otherwise. The scanners
+    swallow request errors, so a proxy that refuses, cannot be reached or
+    does not answer is recorded for the dispatcher (``take_proxy_failures``),
+    which logs it and reports it: without it the scan reads as a clean one."""
+    import httpx
+
+    direct = bypasses_proxy(host, ip)
+
+    class _Client(httpx.Client):
+        failure: tuple[str, str] | None = None  # (proxy host, cause), the first one
+        answered = False
+
+        def _warn(self, request, cause: str) -> None:
+            proxy = "" if direct else _proxy_for(request.url.scheme)
+            if proxy and self.failure is None:
+                self.failure = (urlparse(proxy).hostname or "?", cause)
+
+        def send(self, request, **kw):
+            try:
+                response = super().send(request, **kw)
+            except (httpx.ProxyError, httpx.ConnectError, httpx.TimeoutException) as e:
+                self._warn(request, type(e).__name__)
+                raise
+            # Plain HTTP is forwarded, so a proxy refusing it answers in the
+            # target's place: a 407 is the proxy's, never the target's page.
+            # (https goes through a CONNECT tunnel: a refused CONNECT raises,
+            # and a 407 read inside the tunnel is the target's.)
+            if (response.status_code == 407 and request.url.scheme == "http"
+                    and not direct and _proxy_for("http")):
+                response.close()
+                self._warn(request, "HTTP 407")
+                raise httpx.ProxyError("the outbound proxy requires authentication", request=request)
+            self.answered = True
+            return response
+
+    with _Client(trust_env=not direct, **kwargs) as client:
+        try:
+            yield client
+        finally:
+            if not hasattr(_PROXY_STATE, "failures"):
+                _PROXY_STATE.failures, _PROXY_STATE.answered = {}, set()
+            if client.answered:
+                _PROXY_STATE.answered.add(host)
+            elif client.failure:
+                _PROXY_STATE.failures.setdefault(host, client.failure)
+
+
 def _http_probe(target: str, port: int, scheme: str, timeout: float = 5.0) -> dict[str, Any] | None:
     """Issue one GET / on (target:port) and return {status, headers, body}.
     Returns None on connection failure."""
-    import httpx
-    from src.proxy_common import pushed_proxy
     url = f"{scheme}://{target}:{port}/"
     try:
-        # The target directly when the proxy is Pilot's: it is for the module's own calls.
-        with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=timeout) as c:
+        with scan_client(target, None, verify=False, follow_redirects=False, timeout=timeout) as c:
             r = c.get(url, headers={"User-Agent": "Surface/0.2 (CISO Toolbox)"})
             body_snippet = r.text[:8192] if r.text else ""
             return {

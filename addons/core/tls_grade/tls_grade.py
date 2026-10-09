@@ -6,7 +6,7 @@ import ssl
 from typing import Any
 
 from src.scan_common import (
-    _safe_target, _tls_ssl_context,
+    _safe_target, _tls_ssl_context, _warn_unproxied,
 )
 
 
@@ -62,6 +62,7 @@ def scan_host_tls_grade(target: str) -> list[dict[str, Any]]:
     highest supported version. Emit one finding per insecure legacy
     version accepted + one summary with the overall grade."""
     target = _safe_target(target)
+    _warn_unproxied("tls_grade", target)
     port = 443
 
     # Quick reachability check — skip hosts that don't even answer 443

@@ -5,7 +5,7 @@ import re as _re
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, _registrable,
+    _resolve_safe_target, scan_client, _registrable,
 )
 
 
@@ -55,8 +55,6 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     """Fetch / on the target, extract <script src> URLs, download each
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
-    import httpx
-    from src.proxy_common import pushed_proxy
 
     # Connect to the IP locked at validation time, not the name: handing the
     # hostname to httpx let it re-resolve, so the address that was vetted need
@@ -68,8 +66,7 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     try:
         # follow_redirects=False — a 3xx on the HTML root could otherwise
         # redirect us off-domain before script-src extraction.
-        # The target directly when the proxy is Pilot's: it is for the module's own calls.
-        with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=5.0) as client:
+        with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0) as client:
             r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
             if r.status_code != 200:
                 return []

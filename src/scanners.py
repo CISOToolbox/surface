@@ -29,6 +29,7 @@ from src.scan_common import (  # noqa: F401  # re-exported for routes/scheduler 
     _severity_for_port, HIGH_RISK_SERVICES, CRITICAL_SERVICES, _parse_nmap_xml, _tls_ssl_context,
     _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth,
     _MULTI_LABEL_TLDS, _HOST_RE, _registrable, _normalize_host, _in_scope,
+    take_proxy_failures,
 )
 
 
@@ -363,6 +364,7 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
         if not meta:
             logger.warning("Unknown scanner %s requested for %s/%s", name, kind, value)
             continue
+        take_proxy_failures()  # only this scanner's
         if kind not in meta["kinds"]:
             logger.warning("Scanner %s not applicable to kind=%s, skipping", name, kind)
             continue
@@ -395,6 +397,18 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
                 "scanner": name, "type": "exception", "severity": "info",
                 "title": f"Erreur scanner {name} pour {value}",
                 "description": str(e), "target": value, "evidence": {},
+            })
+        # The HTTP scanners swallow request errors: a proxy that failed them
+        # is said here, or the scan would read as a clean one.
+        for target, proxy_host, cause in take_proxy_failures():
+            logger.warning("%s: scan of %s through the outbound proxy %s failed (%s): "
+                           "the results for this target are incomplete", name, target, proxy_host, cause)
+            findings.append({
+                "scanner": name, "type": "scanner_error", "severity": "info",
+                "title": f"{name} could not scan {target} through the outbound proxy",
+                "description": (f"Requests through the outbound proxy {proxy_host} failed ({cause}): "
+                                "the results for this target are incomplete."),
+                "target": target, "evidence": {"proxy_host": proxy_host, "cause": cause},
             })
 
     return findings, discovered
