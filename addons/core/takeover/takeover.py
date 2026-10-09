@@ -292,12 +292,15 @@ def _fetch_takeover_body(target: str) -> tuple[int | None, str]:
       guard. Takeover fingerprints appear on the first response anyway.
     """
     import httpx
+    from src.proxy_common import pushed_proxy
     headers = {"User-Agent": "CISO-Surface/1.0 (takeover-check)"}
     for scheme in ("https", "http"):
         try:
+            # The target directly when the proxy is Pilot's: it is for the module's own calls.
             with httpx.stream(
                 "GET",
                 f"{scheme}://{target}",
+                trust_env=not pushed_proxy(),
                 timeout=10.0,
                 headers=headers,
                 follow_redirects=False,

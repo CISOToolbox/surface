@@ -60,6 +60,7 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     as a security finding. Probes both HTTP (80) and HTTPS (443), and
     stops after 3 connection errors in a row to stay fast on dead hosts."""
     import httpx
+    from src.proxy_common import pushed_proxy
 
     # Full re-validation via _resolve_safe_target (same allowlist path as
     # _safe_target, with explicit lock of the resolved IP at call time).
@@ -75,7 +76,8 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
 
     # Pick whichever scheme answers /.
     working: tuple[int, str] | None = None
-    with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
+    # The target directly when the proxy is Pilot's: it is for the module's own calls.
+    with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=3.0) as client:
         for port, scheme in schemes:
             try:
                 r = client.get(f"{scheme}://{connect_host}:{port}/",
@@ -90,7 +92,8 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     port, scheme = working
     base = f"{scheme}://{connect_host}:{port}"
 
-    with httpx.Client(verify=False, follow_redirects=False, timeout=3.0) as client:
+    # The target directly when the proxy is Pilot's: it is for the module's own calls.
+    with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=3.0) as client:
         consecutive_errors = 0
         for path, marker, sev in _SENSITIVE_PATHS:
             try:

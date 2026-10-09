@@ -53,6 +53,8 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
     import base64
     from urllib.parse import urlparse
 
+    from src.proxy_common import pushed_proxy
+
     # Every sibling HTTP scanner sets follow_redirects=False and says why.
     # Chromium has no such switch: it follows 3xx, meta-refresh and JS
     # navigations, resolving DNS itself, so a scanned host answering
@@ -84,7 +86,10 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
         url = f"{scheme}://{target}:{port}/"
         try:
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                # Chromium follows *_proxy from the environment: not the proxy
+                # Pilot pushed, which is for the module's own calls.
+                args = ["--no-sandbox", "--disable-dev-shm-usage"] + (["--no-proxy-server"] if pushed_proxy() else [])
+                browser = pw.chromium.launch(headless=True, args=args)
                 context = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 720})
                 context.route("**/*", _guard)
                 page = context.new_page()

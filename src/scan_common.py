@@ -288,9 +288,11 @@ def _http_probe(target: str, port: int, scheme: str, timeout: float = 5.0) -> di
     """Issue one GET / on (target:port) and return {status, headers, body}.
     Returns None on connection failure."""
     import httpx
+    from src.proxy_common import pushed_proxy
     url = f"{scheme}://{target}:{port}/"
     try:
-        with httpx.Client(verify=False, follow_redirects=False, timeout=timeout) as c:
+        # The target directly when the proxy is Pilot's: it is for the module's own calls.
+        with httpx.Client(trust_env=not pushed_proxy(), verify=False, follow_redirects=False, timeout=timeout) as c:
             r = c.get(url, headers={"User-Agent": "Surface/0.2 (CISO Toolbox)"})
             body_snippet = r.text[:8192] if r.text else ""
             return {
