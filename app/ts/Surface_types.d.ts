@@ -294,7 +294,7 @@ interface SurfaceAPIShape {
     deleteConnectorInstance(name: string): Promise<{ ok: boolean }>;
     nucleiConfig(): Promise<SurfaceNucleiConfig>;
     nucleiUpdateConfig(data: Record<string, number>): Promise<unknown>;
-    nucleiUpdateTemplates(): Promise<{ templates_count: number; stdout?: string }>;
+    nucleiUpdateTemplates(): Promise<{ templates_count: number; updated_at: string }>;
     shodanConfig(): Promise<SurfaceShodanConfig>;
     shodanSaveKey(apiKey: string): Promise<unknown>;
     shodanDeleteKey(): Promise<unknown>;

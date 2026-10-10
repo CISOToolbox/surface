@@ -4718,8 +4718,7 @@ window._nucleiUpdateTemplates = function() {
     if (res) res.innerHTML = "";
     SurfaceAPI.nucleiUpdateTemplates().then(function(r) {
         if (res) {
-            res.innerHTML = '<div class="ct-text-low ct-mb-1 ct-flex ct-items-center ct-gap-1">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>'
-                + (r.stdout ? '<pre style="background:var(--ct-surface);padding:var(--ct-s1);border-radius:var(--ct-r-sm);font-size:var(--ct-text-label);overflow:auto;max-height:140px">' + esc(r.stdout) + '</pre>' : '');
+            res.innerHTML = '<div class="ct-text-low ct-mb-1 ct-flex ct-items-center ct-gap-1">' + _icon("check_circle", 16) + ' ' + esc(String(r.templates_count)) + ' ' + esc(t("nuclei.templates_after")) + '</div>';
         }
         var holder = document.getElementById("surface-nuclei-section");
         if (holder) SurfaceAPI.nucleiConfig().then(function(cfg) { _renderNucleiFormInto(holder!, cfg); });

@@ -27,8 +27,9 @@ from src.database import async_session
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, is_excluded
 from src.scanners import (CONNECTOR_REGISTRY, DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY,
-                          nuclei_template_update_command, nuclei_template_update_succeeded,
-                          nuclei_templates_updatable, resolve_first_ip, run_enabled_scanners)
+                          nuclei_template_update_command, nuclei_template_update_output,
+                          nuclei_template_update_succeeded, nuclei_templates_updatable, resolve_first_ip,
+                          run_enabled_scanners)
 
 logger = logging.getLogger("surface.scheduler")
 
@@ -413,7 +414,7 @@ async def _maybe_update_nuclei_templates() -> None:
         # Keep the last-run unchanged so we retry next cycle. Exit 0 is not
         # enough: without network nuclei -ut exits 0 having done nothing.
         logger.warning("scheduler: nuclei -ut did not refresh the templates (rc=%s): %s",
-                       proc.returncode, proc.stderr.decode(errors="replace")[-500:])
+                       proc.returncode, nuclei_template_update_output(proc))
         return
 
     # Bust the cached templates inventory so the next /nuclei/config call

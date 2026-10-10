@@ -209,3 +209,62 @@ def test_a_templates_directory_not_created_yet_is_updatable(nuclei_calls, templa
     monkeypatch.setenv("NUCLEI_TEMPLATES_DIR", str(templates_dir / "nuclei-templates"))  # not there yet
     assert scans._nuclei_environment_info(True)["templates_updatable"] is True
 
+
+
+# BUG-95: nuclei's output stays server-side, on failure and on success; the
+# log keeps stdout as well as stderr; an accepted refresh takes a quota unit.
+
+_PROXY_LINE = b"[ERR] proxyconnect tcp: dial tcp proxy.medsecure.example:3128: connection refused\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rc", [0, 1])
+async def test_a_failed_admin_refresh_keeps_the_output_out_of_its_answer(monkeypatch, caplog, rc):
+    import logging
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: types.SimpleNamespace(
+        returncode=rc, stdout=b"[INF] stdout says why\n", stderr=_PROXY_LINE))
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as exc:
+        await scans.nuclei_update_templates(user=None)
+    assert "proxy.medsecure.example" not in exc.value.detail and "stdout says" not in exc.value.detail
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "proxy.medsecure.example" in logged and "stdout says why" in logged
+
+
+@pytest.mark.asyncio
+async def test_a_successful_admin_refresh_returns_no_output(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: types.SimpleNamespace(
+        returncode=0, stdout=b"via proxy.medsecure.example\n", stderr=_UPDATED + _PROXY_LINE))
+    answer = await scans.nuclei_update_templates(user=None)
+    assert "proxy.medsecure.example" not in repr(answer)
+    assert "templates_count" in answer and "updated_at" in answer
+
+
+@pytest.mark.asyncio
+async def test_the_scheduler_logs_stdout_too(monkeypatch, session_factory, caplog):
+    import logging
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: types.SimpleNamespace(
+        returncode=1, stdout=b"[INF] stdout says why\n", stderr=b""))
+    monkeypatch.setattr(scheduler, "NUCLEI_AUTO_UPDATE_HOURS", 24)
+    with caplog.at_level(logging.WARNING):
+        await scheduler._maybe_update_nuclei_templates()
+    assert [r for r in caplog.records if "stdout says why" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_refresh_takes_one_scan_quota_unit(nuclei_calls, monkeypatch):
+    taken = []
+    monkeypatch.setattr(scans, "check_scan_quota", lambda who: taken.append(who))
+    await scans.nuclei_update_templates(user=None)
+    assert taken == ["anonymous"]
+
+
+def test_the_logged_output_hides_proxy_credentials():
+    from src.scanners import nuclei_template_update_output
+    proc = types.SimpleNamespace(stdout=b"via http://ops:s3c@ret/x@proxy.medsecure.example:3128\n",
+                                 stderr=b"[ERR] proxyconnect http://ops:s3cret@proxy.medsecure.example:3128 refused\n")
+    out = nuclei_template_update_output(proc)
+    assert "s3c" not in out and "ret/x" not in out and "ops:" not in out
+    assert "proxy.medsecure.example:3128" in out

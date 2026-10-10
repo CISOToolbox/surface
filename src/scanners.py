@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from typing import Any
 
@@ -128,6 +129,14 @@ def nuclei_template_update_succeeded(proc) -> bool:
     it prints its banner and exits 0 having done nothing."""
     out = ((proc.stdout or b"") + (proc.stderr or b"")).decode(errors="replace").lower()
     return proc.returncode == 0 and any(marker in out for marker in _NUCLEI_UPDATE_DONE)
+
+
+def nuclei_template_update_output(proc) -> str:
+    """The end of what ``nuclei -ut`` printed, stderr then stdout, for the
+    logs only: it may name the outbound proxy, whose credentials are masked."""
+    err = (proc.stderr or b"").decode(errors="replace").strip()[-500:]
+    out = (proc.stdout or b"").decode(errors="replace").strip()[-500:]
+    return re.sub(r"(://)\S*@", r"\1***@", " | ".join(filter(None, (err, out))))
 
 
 def nuclei_template_update_command(nuclei_path: str) -> list[str]:

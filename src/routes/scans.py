@@ -432,8 +432,8 @@ async def nuclei_config_update(
 async def nuclei_update_templates(user: User = Depends(get_current_user)):
     """Trigger `nuclei -ut` to refresh the community templates.
 
-    Blocks for up to 3 minutes. Returns stdout/stderr and the new template
-    count. This is a privileged operation (rate-limited via scan quota) —
+    Blocks for up to 3 minutes. Returns the new template count; nuclei's
+    output goes to the logs only (it may name the outbound proxy). This is a privileged operation (rate-limited via scan quota) —
     the call is CPU/IO heavy and should not be spammed.
     """
     require_admin(user)
@@ -444,8 +444,8 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
     if not nuclei_path:
         raise HTTPException(status_code=500, detail="nuclei binary not found in PATH")
 
-    from src.scanners import (nuclei_template_update_command, nuclei_template_update_succeeded,
-                              nuclei_templates_updatable)
+    from src.scanners import (nuclei_template_update_command, nuclei_template_update_output,
+                              nuclei_template_update_succeeded, nuclei_templates_updatable)
     if not nuclei_templates_updatable():
         raise HTTPException(status_code=409, detail=(
             "The nuclei templates are read-only in this deployment: they come with "
@@ -461,11 +461,10 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="nuclei -ut timeout (>180s)")
 
-    stdout = proc.stdout.decode(errors="replace")[-2000:]
-    stderr = proc.stderr.decode(errors="replace")[-2000:]
     if not nuclei_template_update_succeeded(proc):
         # Kept server-side: the output may name the outbound proxy.
-        logger.warning("nuclei -ut did not refresh the templates (rc=%s): %s", proc.returncode, stderr[-500:])
+        logger.warning("nuclei -ut did not refresh the templates (rc=%s): %s",
+                       proc.returncode, nuclei_template_update_output(proc))
         if proc.returncode:
             raise HTTPException(status_code=502, detail=(
                 f"nuclei -ut failed (exit {proc.returncode}): see the Surface logs."))
@@ -478,9 +477,6 @@ async def nuclei_update_templates(user: User = Depends(get_current_user)):
     info = await asyncio.to_thread(_nuclei_environment_info, True)
 
     return {
-        "rc": proc.returncode,
-        "stdout": stdout,
-        "stderr": stderr,
         "templates_count": info.get("templates_count", 0),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
