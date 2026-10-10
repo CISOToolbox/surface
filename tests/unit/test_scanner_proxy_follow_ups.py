@@ -201,25 +201,32 @@ def test_an_exception_written_with_a_leading_dot_stays_on_the_locked_ip(monkeypa
     # again outside the locked IP (``*.x`` means the same to whoever wrote it).
     _proxied(monkeypatch, entry)
     assert scan_common.bypasses_proxy("portal.medsecure.example", "93.184.216.34")
-    assert scan_common.target_url("portal.medsecure.example", "93.184.216.34", "https") == (
-        "https://93.184.216.34", {"Host": "portal.medsecure.example"})
+    assert scan_common.target_request("portal.medsecure.example", "93.184.216.34", "https") == (
+        "https://93.184.216.34", {"Host": "portal.medsecure.example"}, {"sni_hostname": "portal.medsecure.example"})
 
 
 @pytest.mark.parametrize("scheme,expected", [
-    ("https", ("https://93.184.216.34:8443", {"Host": "portal.medsecure.example"})),
-    ("http", ("http://portal.medsecure.example:8443", {})),
+    ("https", ("https://93.184.216.34:8443", {"Host": "portal.medsecure.example:8443"},
+               {"sni_hostname": "portal.medsecure.example"})),
+    ("http", ("http://portal.medsecure.example:8443", {}, {})),
 ])
-def test_the_target_url_follows_the_proxy_of_its_scheme(monkeypatch, scheme, expected):
+def test_the_target_request_follows_the_proxy_of_its_scheme(monkeypatch, scheme, expected):
     monkeypatch.setenv("HTTP_PROXY", _PROXY)  # plain HTTP only
-    assert scan_common.target_url("portal.medsecure.example", "93.184.216.34", scheme, 8443) == expected
+    assert scan_common.target_request("portal.medsecure.example", "93.184.216.34", scheme, 8443) == expected
 
 
 @pytest.mark.parametrize("port,expected", [(443, "https://[2001:db8::1]:443"), (None, "https://[2001:db8::1]")])
-def test_the_target_url_brackets_an_ipv6_address(port, expected):
+def test_the_target_request_brackets_an_ipv6_address(port, expected):
     # Unbracketed, httpx refuses the URL (InvalidURL, not a transport error):
     # the scanner swallowed it and an IPv6 host read as clean.
-    assert scan_common.target_url("v6.medsecure.example", "2001:db8::1", "https", port) == (
-        expected, {"Host": "v6.medsecure.example"})
+    assert scan_common.target_request("v6.medsecure.example", "2001:db8::1", "https", port) == (
+        expected, {"Host": "v6.medsecure.example"}, {"sni_hostname": "v6.medsecure.example"})
+
+
+def test_a_bracketed_ip_target_sends_no_sni():
+    # An address is never a TLS server name.
+    assert scan_common.target_request("[2001:db8::1]", "2001:db8::1", "https") == (
+        "https://[2001:db8::1]", {"Host": "[2001:db8::1]"}, {})
 
 
 def test_an_ipv6_exception_with_a_port_exempts_its_address(monkeypatch):

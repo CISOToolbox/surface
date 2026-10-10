@@ -355,18 +355,28 @@ def _warn_unproxied(scanner: str, target: str) -> None:
                        "it reaches %s directly", scanner, scanner, target)
 
 
-def target_url(target: str, locked_ip: str | None, scheme: str, port: int | None = None) -> tuple[str, dict[str, str]]:
-    """The base URL (no trailing slash) and headers of a scanner reaching
-    ``target``, validated at ``locked_ip``. Directly it connects to the locked
-    IP, the name in ``Host`` (DNS rebinding). Through the proxy it names the
-    target: the proxy resolves it, a proxy filtering by name accepts it, and
-    a forwarded plain-HTTP request keeps the scanned vhost (a proxy rewrites
-    ``Host`` from the URL)."""
+def target_request(target: str, locked_ip: str | None, scheme: str,
+                   port: int | None = None) -> tuple[str, dict[str, str], dict[str, str]]:
+    """The base URL (no trailing slash), headers and request extensions of a
+    scanner reaching ``target``, validated at ``locked_ip``. Directly it
+    connects to the locked IP (DNS rebinding), the name in ``Host`` (with a
+    port that is not the scheme's default) and, on https, as TLS SNI: a host
+    that picks its certificate or vhost by SNI answers as for the name.
+    Through the proxy it names the target: the proxy resolves it, a proxy
+    filtering by name accepts it, and a forwarded plain-HTTP request keeps
+    the scanned vhost (a proxy rewrites ``Host`` from the URL)."""
     proxied = bool(_proxy_for(scheme)) and not bypasses_proxy(target, locked_ip)
     host = target if proxied or not locked_ip else locked_ip
-    netloc = f"[{host}]" if ":" in host else host
+    bare = host.strip("[]")  # a target may come bracketed
+    netloc = f"[{bare}]" if ":" in bare else bare
     netloc = f"{netloc}:{port}" if port else netloc
-    return f"{scheme}://{netloc}", ({"Host": target} if host != target else {})
+    base = f"{scheme}://{netloc}"
+    if host == target:
+        return base, {}, {}
+    default = {"https": 443, "http": 80}.get(scheme)
+    headers = {"Host": target if port in (None, default) else f"{target}:{port}"}
+    sni = scheme == "https" and not _is_ip_literal(target)  # an address is no server name
+    return base, headers, ({"sni_hostname": target} if sni else {})
 
 
 _PROXY_STATE = threading.local()  # per thread: {target: (proxy host, cause)}, {targets answered}
@@ -387,7 +397,7 @@ def take_proxy_failures() -> list[tuple[str, str, str]]:
 @contextmanager
 def scan_client(host: str, ip: str | None = None, **kwargs: Any):
     """The httpx client of a scanner that reaches the scanned target ``host``
-    (validated at ``ip``, the locked address; ``target_url`` builds what to
+    (validated at ``ip``, the locked address; ``target_request`` builds what to
     ask for): direct when the target is a proxy exception, through the
     outbound proxy otherwise. The scanners swallow request errors, so each
     one is logged here, and a proxy that refuses, cannot be reached or does

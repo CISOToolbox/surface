@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, target_url,
+    _resolve_safe_target, scan_client, target_request,
 )
 
 
@@ -66,7 +66,7 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     # the hostname to httpx let the name be re-resolved, so the address that
     # was vetted need not be the one reached (DNS rebinding). The original
     # name travels in the Host header so name-based vhosts still answer.
-    # Through the proxy, the name (target_url).
+    # Through the proxy, the name (target_request).
     locked_ip, target = _resolve_safe_target(target)
     findings: list[dict[str, Any]] = []
     schemes = [(443, "https"), (80, "http")]
@@ -75,9 +75,10 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     working: tuple[int, str] | None = None
     with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         for port, scheme in schemes:
-            probe, _host_hdr = target_url(target, locked_ip, scheme, port)
+            probe, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
             try:
-                r = client.get(f"{probe}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
+                r = client.get(f"{probe}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr},
+                               extensions=_ext)
                 if r.status_code < 500:
                     working = (port, scheme)
                     break
@@ -86,14 +87,14 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     if not working:
         return []
     port, scheme = working
-    base, _host_hdr = target_url(target, locked_ip, scheme, port)
+    base, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
 
     with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         consecutive_errors = 0
         for path, marker, sev in _SENSITIVE_PATHS:
             try:
                 r = client.get(base + path,
-                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
+                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr}, extensions=_ext)
             except Exception:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:

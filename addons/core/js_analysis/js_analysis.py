@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re as _re
+from contextlib import ExitStack
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, target_url, _registrable,
+    _resolve_safe_target, scan_client, target_request, _registrable, _is_ip_literal,
 )
 
 
@@ -56,57 +58,66 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
 
-    # Directly, connect to the IP locked at validation time, not the name:
-    # handing the hostname to httpx let it re-resolve, so the address that was
-    # vetted need not be the one reached (DNS rebinding). The name rides in
-    # the Host header so name-based vhosts still answer. Through the proxy,
-    # the name (target_url).
+    # Every request reaches its host as target_request says: directly on the
+    # IP validated for that host (DNS rebinding), its name in Host and as SNI;
+    # through the proxy, by name. One client per host, as each host follows
+    # the proxy routing of its own (an exception may cover a script host and
+    # not the target, or the reverse).
     locked_ip, target = _resolve_safe_target(target)
-    base, _host_hdr = target_url(target, locked_ip, "https")
-    base_url = f"{base}/"
+    base, _host_hdr, _ext = target_request(target, locked_ip, "https")
+    ua = {"User-Agent": "Surface/0.3 (CISO Toolbox)"}
+    js_bodies: list[tuple[str, str]] = []
     try:
-        # follow_redirects=False — a 3xx on the HTML root could otherwise
-        # redirect us off-domain before script-src extraction.
-        with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0) as client:
-            r = client.get(base_url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
+        with ExitStack() as stack:
+            # follow_redirects=False — a 3xx on the HTML root could otherwise
+            # redirect us off-domain before script-src extraction.
+            client = stack.enter_context(
+                scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0))
+            r = client.get(f"{base}/", headers={**ua, **_host_hdr}, extensions=_ext)
             if r.status_code != 200:
                 return []
             html = r.text or ""
             # Extract every script src
             src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
             raw_urls = src_re.findall(html)[:_JS_MAX_FILES]
-            # Resolve relative URLs
-            from urllib.parse import urljoin, urlparse
-            resolved = [urljoin(str(r.url), u) for u in raw_urls]
+            # Relative URLs are the target's: resolved against its name (the
+            # root is not redirected), not the address it was fetched at.
+            named_base = target_request(target, None, "https")[0] + "/"
+            resolved = [urljoin(named_base, u) for u in raw_urls]
 
             # SSRF guard: reject any script URL that (a) is not http(s),
-            # (b) has a hostname that fails _resolve_safe_target (internal
-            # IP / loopback / docker sibling / metadata), or (c) lives on
-            # a different registrable domain than the target. The attacker
+            # (b) lives on a different registrable domain than the target (an
+            # IP target: is another host), or
+            # (c) has a hostname that fails _resolve_safe_target (internal
+            # IP / loopback / docker sibling / metadata). The attacker
             # controls the HTML so we cannot trust src values.
-            target_reg = _registrable(target) or target
-            urls: list[str] = []
+            # Hosts as urlparse gives them: lower case, no brackets. An
+            # address has no domain, only its own scripts.
+            name = target.lower().strip("[]")
+            target_reg = None if _is_ip_literal(name) else _registrable(name) or name
+            clients = {name: (client, locked_ip)}
             for u in resolved:
                 try:
                     parsed = urlparse(u)
-                    if parsed.scheme not in ("http", "https"):
-                        continue
+                    port = parsed.port  # raises on an invalid port
                     host = parsed.hostname or ""
-                    if not host:
+                    if parsed.scheme not in ("http", "https") or not host:
                         continue
-                    _resolve_safe_target(host)  # raises on unsafe
-                    host_reg = _registrable(host) or host
-                    if host_reg != target_reg:
+                    if host != name and (target_reg is None or (_registrable(host) or host) != target_reg):
                         continue
-                    urls.append(u)
-                except Exception:
-                    continue
-
-            js_bodies: list[tuple[str, str]] = []
-            for u in urls:
-                try:
+                    # Resolved once per host: its client's routing and the
+                    # URL rest on the same address.
+                    if host not in clients:
+                        ip = _resolve_safe_target(host)[0]
+                        clients[host] = (stack.enter_context(
+                            scan_client(host, ip, verify=False, follow_redirects=False, timeout=5.0)), ip)
+                    host_client, ip = clients[host]
+                    script_base, headers, ext = target_request(host, ip, parsed.scheme, port)
+                    path = ((parsed.path or "/") + (f";{parsed.params}" if parsed.params else "")
+                            + (f"?{parsed.query}" if parsed.query else ""))
                     # Size-bounded download
-                    with client.stream("GET", u, timeout=4.0) as resp:
+                    with host_client.stream("GET", script_base + path, headers={**ua, **headers},
+                                              extensions=ext, timeout=4.0) as resp:
                         if resp.status_code != 200:
                             continue
                         chunks: list[bytes] = []

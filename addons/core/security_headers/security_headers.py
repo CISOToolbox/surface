@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, target_url,
+    _resolve_safe_target, scan_client, target_request,
 )
 
 
@@ -99,9 +99,9 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     # handing the hostname to httpx let it re-resolve, so the address that was
     # vetted need not be the one reached (DNS rebinding). The name rides in
     # the Host header so name-based vhosts still answer. Through the proxy,
-    # the name (target_url).
+    # the name (target_request).
     locked_ip, target = _resolve_safe_target(target)
-    base, _host_hdr = target_url(target, locked_ip, "https")
+    base, _host_hdr, _ext = target_request(target, locked_ip, "https")
     url = f"{base}/"
     try:
         # follow_redirects=False: a redirect target is NOT re-validated by
@@ -109,7 +109,7 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
         # cloud metadata / loopback / RFC1918). The security headers we grade
         # are those of the canonical URL anyway.
         with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0) as client:
-            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
+            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr}, extensions=_ext)
     except Exception:
         return []
 
