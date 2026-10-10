@@ -295,13 +295,30 @@ def _dns_query(domain: str, rtype: str) -> list[str]:
 # scanners connect to the IP locked at validation time, so the exceptions are
 # matched here, on the name and on that IP: httpx alone would only see the IP.
 
+def proxy_exceptions() -> list[str]:
+    """NO_PROXY, one host per entry, as the scanners read it: lower case, the
+    ``:port`` dropped (a scanner reaches several ports, an excluded host must
+    not reach the proxy on any of them), IPv6 brackets dropped, and ``.x`` or
+    ``*.x`` read as ``x`` (a deployment's own NO_PROXY is not normalized)."""
+    out = []
+    for entry in (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").split(","):
+        entry = entry.strip().lower()
+        if entry.startswith("[") and "]" in entry:
+            entry = entry[1:entry.index("]")]
+        elif entry.count(":") == 1 and entry.rpartition(":")[2].isdigit():
+            entry = entry.rpartition(":")[0]
+        entry = entry[2:] if entry.startswith("*.") else entry[1:] if entry.startswith(".") else entry
+        if entry:
+            out.append(entry)
+    return out
+
+
 def bypasses_proxy(host: str, ip: str | None = None) -> bool:
     """Whether NO_PROXY exempts this target: ``*``, its exact IP (the name or
     the locked ``ip``), an IPv4 range the deployment set, or a domain that is
-    the name or one of its parents. An entry's ``:port`` is ignored: a
-    scanner reaches several ports, and an excluded host must not reach the
-    proxy on any of them. A range given as the target (discovery) is exempt
-    when a range of NO_PROXY contains it."""
+    the name or one of its parents (entries read by ``proxy_exceptions``). A
+    range given as the target (discovery) is exempt when a range of NO_PROXY
+    contains it."""
     name = (host or "").strip().lower().rstrip(".").strip("[]")
     addresses = []
     for candidate in (ip, name):
@@ -309,16 +326,11 @@ def bypasses_proxy(host: str, ip: str | None = None) -> bool:
             addresses.append(ipaddress.ip_network((candidate or "").strip("[]"), strict=False))
         except ValueError:
             pass
-    for entry in (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").split(","):
-        entry = entry.strip().lower()
-        if entry.count(":") == 1 and entry.rpartition(":")[2].isdigit():
-            entry = entry.rpartition(":")[0]  # IPv6 entries carry no port (proxy_common)
-        if not entry:
-            continue
+    for entry in proxy_exceptions():
         if entry == "*":
             return True
         try:
-            network = ipaddress.ip_network(entry.strip("[]"), strict=False)
+            network = ipaddress.ip_network(entry, strict=False)
         except ValueError:
             if name == entry or name.endswith("." + entry):
                 return True
@@ -338,9 +350,23 @@ def _warn_unproxied(scanner: str, target: str) -> None:
     """Log that a raw-socket scanner reaches ``target`` directly although a
     proxy applies to it: an HTTP proxy carries HTTP, not port scans or TLS
     handshakes (nmap's --proxies is applied by nsock to NSE and -sV only)."""
-    if not bypasses_proxy(target) and (_proxy_for("https") or _proxy_for("http")):
+    if (_proxy_for("https") or _proxy_for("http")) and not bypasses_proxy(target, resolve_first_ip(target)):
         logger.warning("%s: an outbound proxy is set, but %s cannot use it: "
                        "it reaches %s directly", scanner, scanner, target)
+
+
+def target_url(target: str, locked_ip: str | None, scheme: str, port: int | None = None) -> tuple[str, dict[str, str]]:
+    """The base URL (no trailing slash) and headers of a scanner reaching
+    ``target``, validated at ``locked_ip``. Directly it connects to the locked
+    IP, the name in ``Host`` (DNS rebinding). Through the proxy it names the
+    target: the proxy resolves it, a proxy filtering by name accepts it, and
+    a forwarded plain-HTTP request keeps the scanned vhost (a proxy rewrites
+    ``Host`` from the URL)."""
+    proxied = bool(_proxy_for(scheme)) and not bypasses_proxy(target, locked_ip)
+    host = target if proxied or not locked_ip else locked_ip
+    netloc = f"[{host}]" if ":" in host else host
+    netloc = f"{netloc}:{port}" if port else netloc
+    return f"{scheme}://{netloc}", ({"Host": target} if host != target else {})
 
 
 _PROXY_STATE = threading.local()  # per thread: {target: (proxy host, cause)}, {targets answered}
@@ -361,11 +387,12 @@ def take_proxy_failures() -> list[tuple[str, str, str]]:
 @contextmanager
 def scan_client(host: str, ip: str | None = None, **kwargs: Any):
     """The httpx client of a scanner that reaches the scanned target ``host``
-    (connected to at ``ip``, the locked address): direct when the target is a
-    proxy exception, through the outbound proxy otherwise. The scanners
-    swallow request errors, so a proxy that refuses, cannot be reached or
-    does not answer is recorded for the dispatcher (``take_proxy_failures``),
-    which logs it and reports it: without it the scan reads as a clean one."""
+    (validated at ``ip``, the locked address; ``target_url`` builds what to
+    ask for): direct when the target is a proxy exception, through the
+    outbound proxy otherwise. The scanners swallow request errors, so each
+    one is logged here, and a proxy that refuses, cannot be reached or does
+    not answer is recorded for the dispatcher (``take_proxy_failures``),
+    which reports it: without it the scan reads as a clean one."""
     import httpx
 
     direct = bypasses_proxy(host, ip)
@@ -380,10 +407,41 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                 self.failure = (urlparse(proxy).hostname or "?", cause)
 
         def send(self, request, **kw):
+            stage = {"connect": False, "tls": False}
+            outer = request.extensions.get("trace")
+
+            def trace(event: str, info: dict) -> None:
+                # httpcore: a new connection, then (through the proxy) the
+                # CONNECT on it, then the tunnel's TLS handshake.
+                if event == "connection.connect_tcp.started":
+                    stage["connect"] = True
+                elif event == "proxy.start_tls.started":
+                    stage["tls"] = True
+                if outer:
+                    outer(event, info)
+
+            request.extensions["trace"] = trace
             try:
                 response = super().send(request, **kw)
-            except (httpx.ProxyError, httpx.ConnectError, httpx.TimeoutException) as e:
-                self._warn(request, type(e).__name__)
+            except httpx.TransportError as e:
+                cause = f"ProxyError: {e}" if isinstance(e, httpx.ProxyError) else type(e).__name__
+                proxied = not direct and _proxy_for(request.url.scheme)
+                # Once the proxy accepted the CONNECT (the TLS handshake with
+                # the target started) or on a tunnel already open, the
+                # connection is the target's: a failed handshake, a read, a
+                # write, a slow answer are its own. Reaching the proxy, its
+                # answer to the CONNECT, and plain HTTP (forwarded) are the
+                # proxy's. A connection error only arises on a new connection.
+                if isinstance(e, (httpx.ProxyError, httpx.PoolTimeout)) or request.url.scheme != "https":
+                    tunnel = False
+                elif stage["tls"] or stage["connect"]:
+                    tunnel = stage["tls"]
+                else:
+                    tunnel = not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+                logger.info("scan of %s: %s %s%s failed (%s)", host, request.method, request.url.scheme,
+                            " through the outbound proxy" if proxied else "", cause)
+                if not tunnel:
+                    self._warn(request, cause)
                 raise
             # Plain HTTP is forwarded, so a proxy refusing it answers in the
             # target's place: a 407 is the proxy's, never the target's page.
@@ -394,7 +452,12 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                 response.close()
                 self._warn(request, "HTTP 407")
                 raise httpx.ProxyError("the outbound proxy requires authentication", request=request)
-            self.answered = True
+            # A gateway error on forwarded plain HTTP is most likely the
+            # proxy's own: it does not show that the target was reached, nor
+            # hide a refused CONNECT on https.
+            if not (response.status_code in (502, 503, 504) and request.url.scheme == "http"
+                    and not direct and _proxy_for("http")):
+                self.answered = True
             return response
 
     with _Client(trust_env=not direct, **kwargs) as client:
@@ -407,24 +470,6 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                 _PROXY_STATE.answered.add(host)
             elif client.failure:
                 _PROXY_STATE.failures.setdefault(host, client.failure)
-
-
-def _http_probe(target: str, port: int, scheme: str, timeout: float = 5.0) -> dict[str, Any] | None:
-    """Issue one GET / on (target:port) and return {status, headers, body}.
-    Returns None on connection failure."""
-    url = f"{scheme}://{target}:{port}/"
-    try:
-        with scan_client(target, None, verify=False, follow_redirects=False, timeout=timeout) as c:
-            r = c.get(url, headers={"User-Agent": "Surface/0.2 (CISO Toolbox)"})
-            body_snippet = r.text[:8192] if r.text else ""
-            return {
-                "status": r.status_code,
-                "headers": dict(r.headers),
-                "body": body_snippet,
-                "url": url,
-            }
-    except Exception:
-        return None
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -54,8 +54,3 @@ def test_a_scanner_reaching_the_target_uses_scan_client(addon):
     src = (_ROOT / "addons" / "core" / addon / f"{addon}.py").read_text(encoding="utf-8")
     assert _clients(ast.parse(src)) == [] and "scan_client(" in src
 
-
-def test_the_http_probe_uses_scan_client():
-    tree = ast.parse((_ROOT / "src" / "scan_common.py").read_text(encoding="utf-8"))
-    [probe] = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_http_probe"]
-    assert _clients(probe) == []

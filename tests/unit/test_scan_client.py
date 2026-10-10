@@ -18,8 +18,9 @@ scan of a public target failed. They now build their httpx client with
     matched against the deployment's ranges;
   - a 407 is the proxy's answer, never the target's: it is an error, logged,
     not a page the scanner reads as the target's;
-  - every scanner reaching the target passes the locked IP it connects to,
-    and the proxy is asked for that IP (a real socket stands in for it);
+  - every scanner reaching the target passes the locked IP it validated
+    (through the proxy it then asks for the name: BUG-97); a target in the
+    exceptions never reaches the proxy (a real socket stands in for it);
   - a proxy failure becomes a finding of the scanner, not only a log line:
     the scanners swallow request errors and would show a clean scan; but a
     client that got an answer otherwise (https refused, http answered) did
@@ -119,8 +120,8 @@ def test_a_failing_proxy_is_logged_once_per_client(caplog, error):
         for _ in range(2):
             with pytest.raises(error):
                 c.get("https://93.184.216.34/")
-    assert scan_common.take_proxy_failures() == [
-        ("portal.medsecure.example", "proxy.medsecure.example", error.__name__)]
+    cause = "ProxyError: proxy failure" if error is httpx.ProxyError else error.__name__
+    assert scan_common.take_proxy_failures() == [("portal.medsecure.example", "proxy.medsecure.example", cause)]
 
 
 def test_a_407_from_the_proxy_is_an_error_not_the_targets_page(caplog):
@@ -179,11 +180,11 @@ def fake_proxy(monkeypatch):
     srv.close()
 
 
-def test_the_proxy_is_asked_for_the_locked_ip(fake_proxy):
+def test_the_proxy_gets_the_credentials(fake_proxy):
     with scan_client("portal.medsecure.example", "93.184.216.34", timeout=5) as c:
         with pytest.raises(httpx.ProxyError):
-            c.get("https://93.184.216.34/")
-    assert fake_proxy[:2] == ["CONNECT 93.184.216.34:443 HTTP/1.1", "auth"]
+            c.get("https://portal.medsecure.example/")
+    assert fake_proxy[:2] == ["CONNECT portal.medsecure.example:443 HTTP/1.1", "auth"]
 
 
 def test_a_target_in_the_exceptions_never_reaches_the_proxy(fake_proxy):
@@ -263,6 +264,7 @@ def test_takeover_with_https_refused_and_http_answered_is_no_proxy_failure(monke
     monkeypatch.setattr(mod, "scan_client", lambda host, ip=None, **kw: real(
         host, ip, mounts={"https://": httpx.MockTransport(refused), "http://": http}, **kw))
     monkeypatch.setattr(mod, "_safe_target", lambda t: t)
+    monkeypatch.setattr(mod, "resolve_first_ip", lambda t: None)
     monkeypatch.setattr(mod, "_resolve_cname_chain", lambda t: ["shop-medsecure.github.io"])
     monkeypatch.setitem(scanners.SCANNER_REGISTRY, "takeover",
                         {"callable": mod.scan_host_takeover, "kinds": ["host"], "returns_discovered": False})
@@ -334,7 +336,7 @@ def test_a_scanner_passes_the_locked_ip_it_connects_to(monkeypatch, addon, funct
     assert seen and seen[0] == ("portal.medsecure.example", "203.0.113.9")
 
 
-def test_the_takeover_check_and_the_http_probe_go_through_scan_client(monkeypatch):
+def test_the_takeover_check_goes_through_scan_client(monkeypatch):
     seen = []
 
     def record(host, ip=None, **kw):
@@ -342,11 +344,10 @@ def test_the_takeover_check_and_the_http_probe_go_through_scan_client(monkeypatc
         raise _Stop
 
     mod = load_core_addon("takeover")
+    monkeypatch.setattr(mod, "resolve_first_ip", lambda t: None)
     monkeypatch.setattr(mod, "scan_client", record)
     try:
         mod._fetch_takeover_body("shop.medsecure.example")
     except _Stop:
         pass
-    monkeypatch.setattr(scan_common, "scan_client", record)
-    scan_common._http_probe("portal.medsecure.example", 443, "https")
-    assert seen[0] == "shop.medsecure.example" and seen[-1] == "portal.medsecure.example"
+    assert seen == ["shop.medsecure.example"]

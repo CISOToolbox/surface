@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client,
+    _resolve_safe_target, scan_client, target_url,
 )
 
 
@@ -62,13 +62,12 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
 
     # Full re-validation via _resolve_safe_target (same allowlist path as
     # _safe_target, with explicit lock of the resolved IP at call time).
-    # The locked IP is what we connect to: discarding it and handing the
-    # hostname to httpx let the name be re-resolved, so the address that was
-    # vetted need not be the one reached (DNS rebinding). The original name
-    # travels in the Host header so name-based vhosts still answer.
+    # Directly, the locked IP is what we connect to: discarding it and handing
+    # the hostname to httpx let the name be re-resolved, so the address that
+    # was vetted need not be the one reached (DNS rebinding). The original
+    # name travels in the Host header so name-based vhosts still answer.
+    # Through the proxy, the name (target_url).
     locked_ip, target = _resolve_safe_target(target)
-    connect_host = locked_ip or target
-    _host_hdr = {"Host": target} if locked_ip else {}
     findings: list[dict[str, Any]] = []
     schemes = [(443, "https"), (80, "http")]
 
@@ -76,9 +75,9 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     working: tuple[int, str] | None = None
     with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         for port, scheme in schemes:
+            probe, _host_hdr = target_url(target, locked_ip, scheme, port)
             try:
-                r = client.get(f"{scheme}://{connect_host}:{port}/",
-                               headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
+                r = client.get(f"{probe}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr})
                 if r.status_code < 500:
                     working = (port, scheme)
                     break
@@ -87,7 +86,7 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     if not working:
         return []
     port, scheme = working
-    base = f"{scheme}://{connect_host}:{port}"
+    base, _host_hdr = target_url(target, locked_ip, scheme, port)
 
     with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         consecutive_errors = 0

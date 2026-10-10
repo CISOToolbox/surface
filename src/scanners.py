@@ -26,7 +26,7 @@ logger = logging.getLogger("surface.scanners")
 from src.scan_common import (  # noqa: F401  # re-exported for routes/scheduler + add-ons
     _DOCKER_SIBLING_NAMES, _METADATA_IPS,
     _safe_target, _resolve_safe_target, resolve_first_ip, _is_ip_literal, _check_ip_allowed,
-    _int_env, _dns_query, _http_probe,
+    _int_env, _dns_query,
     _severity_for_port, HIGH_RISK_SERVICES, CRITICAL_SERVICES, _parse_nmap_xml, _tls_ssl_context,
     _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth,
     _MULTI_LABEL_TLDS, _HOST_RE, _registrable, _normalize_host, _in_scope,

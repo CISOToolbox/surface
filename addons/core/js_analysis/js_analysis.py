@@ -5,7 +5,7 @@ import re as _re
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, _registrable,
+    _resolve_safe_target, scan_client, target_url, _registrable,
 )
 
 
@@ -56,13 +56,14 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
 
-    # Connect to the IP locked at validation time, not the name: handing the
-    # hostname to httpx let it re-resolve, so the address that was vetted need
-    # not be the one reached (DNS rebinding). The name rides in the Host
-    # header so name-based vhosts still answer.
+    # Directly, connect to the IP locked at validation time, not the name:
+    # handing the hostname to httpx let it re-resolve, so the address that was
+    # vetted need not be the one reached (DNS rebinding). The name rides in
+    # the Host header so name-based vhosts still answer. Through the proxy,
+    # the name (target_url).
     locked_ip, target = _resolve_safe_target(target)
-    _host_hdr = {"Host": target} if locked_ip else {}
-    base_url = f"https://{locked_ip or target}/"
+    base, _host_hdr = target_url(target, locked_ip, "https")
+    base_url = f"{base}/"
     try:
         # follow_redirects=False — a 3xx on the HTML root could otherwise
         # redirect us off-domain before script-src extraction.
