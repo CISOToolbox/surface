@@ -379,19 +379,71 @@ def target_request(target: str, locked_ip: str | None, scheme: str,
     return base, headers, ({"sni_hostname": target} if sni else {})
 
 
-_PROXY_STATE = threading.local()  # per thread: {target: (proxy host, cause)}, {targets answered}
+# Per thread: the proxy failures and the answers of the scanned targets, by
+# origin of the target (scheme, port): {target: {origin: (proxy host, cause)}}
+# and {target: {origins answered}}, plus the open ``alternative_origins``.
+_PROXY_STATE = threading.local()
 
 
-def take_proxy_failures() -> list[tuple[str, str, str]]:
+def _proxy_sink() -> tuple[dict, dict]:
+    groups = getattr(_PROXY_STATE, "groups", None)
+    if groups:
+        return groups[-1]
+    if not hasattr(_PROXY_STATE, "failures"):
+        _PROXY_STATE.failures, _PROXY_STATE.answered = {}, {}
+    return _PROXY_STATE.failures, _PROXY_STATE.answered
+
+
+def _record_proxy_outcome(target: str, failures: dict, answered: set) -> None:
+    # The outcome of a client (or a group) comes after what the sink holds:
+    # an origin it reached clears an earlier failure there. (Which origins
+    # answered only matters among alternatives: one is enough.)
+    sink_failures, sink_answered = _proxy_sink()
+    for origin in answered:
+        sink_failures.get(target, {}).pop(origin, None)
+        sink_answered.setdefault(target, set()).add(origin)
+    for origin, failure in failures.items():
+        sink_failures.setdefault(target, {}).setdefault(origin, failure)
+
+
+@contextmanager
+def alternative_origins():
+    """Requests made inside reach the same content by several origins of a
+    target (https, then http as a fallback): one origin answering is enough,
+    the proxy failures of the others are dropped. All of them failing is
+    the target's failure as usual."""
+    group: tuple[dict, dict] = ({}, {})
+    if not getattr(_PROXY_STATE, "groups", None):
+        _PROXY_STATE.groups = []
+    _PROXY_STATE.groups.append(group)
+    try:
+        yield
+    finally:
+        _PROXY_STATE.groups.pop()
+        failures, answered = group
+        for target in set(failures) | set(answered):
+            _record_proxy_outcome(target, {} if answered.get(target) else failures.get(target, {}),
+                                  answered.get(target, set()))
+
+
+def take_proxy_failures() -> list[tuple[str, str, str, str]]:
     """The targets ``scan_client`` could not reach through the proxy on this
-    thread since the last call, as (target, proxy host, cause): a target that
-    some client reached (https refused, http answered, in one client or two)
-    was scanned and is left out. The dispatcher calls it around each scanner
-    and turns them into a finding of that scanner."""
+    thread since the last call, as (target, proxy host, cause, origin): an
+    origin (scheme, port) of the target that the proxy failed and that no
+    request reached afterwards (an answer before it, such as a probe of the
+    root, does not show the later requests went through); one per target,
+    its first such origin. An answer on another origin does not clear it (a
+    script on another port is not the root), except among
+    ``alternative_origins``. The dispatcher calls it
+    around each scanner and turns them into a finding of that scanner."""
     failures = getattr(_PROXY_STATE, "failures", {})
-    answered = getattr(_PROXY_STATE, "answered", set())
-    _PROXY_STATE.failures, _PROXY_STATE.answered = {}, set()
-    return [(target, *failure) for target, failure in failures.items() if target not in answered]
+    _PROXY_STATE.failures, _PROXY_STATE.answered = {}, {}
+    out = []
+    for target, by_origin in failures.items():
+        if by_origin:
+            origin, (proxy_host, cause) = next(iter(by_origin.items()))
+            out.append((target, proxy_host, cause, origin))
+    return out
 
 
 @contextmanager
@@ -407,14 +459,26 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
 
     direct = bypasses_proxy(host, ip)
 
+    def origin(url) -> str:
+        # The target's origin the request reached, whether the URL names the
+        # target or its locked address.
+        default = {"https": 443, "http": 80}.get(url.scheme)
+        bare = host.strip("[]")
+        netloc = f"[{bare}]" if ":" in bare else bare
+        return f"{url.scheme}://{netloc}" + (f":{url.port}" if url.port and url.port != default else "")
+
     class _Client(httpx.Client):
-        failure: tuple[str, str] | None = None  # (proxy host, cause), the first one
-        answered = False
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            # The origins failed since their last answer (proxy host, cause,
+            # the first of the run), and the origins that answered.
+            self.failures: dict[str, tuple[str, str]] = {}
+            self.answered: set[str] = set()
 
         def _warn(self, request, cause: str) -> None:
             proxy = "" if direct else _proxy_for(request.url.scheme)
-            if proxy and self.failure is None:
-                self.failure = (urlparse(proxy).hostname or "?", cause)
+            if proxy:
+                self.failures.setdefault(origin(request.url), (urlparse(proxy).hostname or "?", cause))
 
         def send(self, request, **kw):
             stage = {"connect": False, "tls": False}
@@ -467,19 +531,15 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
             # hide a refused CONNECT on https.
             if not (response.status_code in (502, 503, 504) and request.url.scheme == "http"
                     and not direct and _proxy_for("http")):
-                self.answered = True
+                self.failures.pop(origin(request.url), None)
+                self.answered.add(origin(request.url))
             return response
 
     with _Client(trust_env=not direct, **kwargs) as client:
         try:
             yield client
         finally:
-            if not hasattr(_PROXY_STATE, "failures"):
-                _PROXY_STATE.failures, _PROXY_STATE.answered = {}, set()
-            if client.answered:
-                _PROXY_STATE.answered.add(host)
-            elif client.failure:
-                _PROXY_STATE.failures.setdefault(host, client.failure)
+            _record_proxy_outcome(host, client.failures, client.answered)
 
 
 # ═══════════════════════════════════════════════════════════════

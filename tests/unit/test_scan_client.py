@@ -22,9 +22,9 @@ scan of a public target failed. They now build their httpx client with
     (through the proxy it then asks for the name: BUG-97); a target in the
     exceptions never reaches the proxy (a real socket stands in for it);
   - a proxy failure becomes a finding of the scanner, not only a log line:
-    the scanners swallow request errors and would show a clean scan; but a
-    client that got an answer otherwise (https refused, http answered) did
-    scan, and is not reported.
+    the scanners swallow request errors and would show a clean scan; but
+    alternative schemes answered on one (https refused, http answered) did
+    scan, and are not reported (per origin otherwise: BUG-99).
 """
 from __future__ import annotations
 
@@ -121,7 +121,8 @@ def test_a_failing_proxy_is_logged_once_per_client(caplog, error):
             with pytest.raises(error):
                 c.get("https://93.184.216.34/")
     cause = "ProxyError: proxy failure" if error is httpx.ProxyError else error.__name__
-    assert scan_common.take_proxy_failures() == [("portal.medsecure.example", "proxy.medsecure.example", cause)]
+    assert scan_common.take_proxy_failures() == [
+        ("portal.medsecure.example", "proxy.medsecure.example", cause, "https://portal.medsecure.example")]
 
 
 def test_a_407_from_the_proxy_is_an_error_not_the_targets_page(caplog):
@@ -140,7 +141,7 @@ def test_a_407_from_the_proxy_is_an_error_not_the_targets_page(caplog):
             with pytest.raises(httpx.ProxyError):
                 c.get("http://93.184.216.34/.env")
     assert len(answers) == 2
-    assert scan_common.take_proxy_failures() == [("portal.medsecure.example", "proxy.medsecure.example", "HTTP 407")]
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == [("portal.medsecure.example", "proxy.medsecure.example", "HTTP 407")]
 
 
 def test_a_407_inside_the_https_tunnel_is_the_targets():
@@ -228,14 +229,14 @@ def test_a_proxy_failure_is_a_finding_of_the_scanner(monkeypatch, caplog):
     assert "s3cret" not in repr(findings)
 
 
-def test_a_client_answered_on_another_scheme_is_not_a_proxy_failure(monkeypatch):
+def test_alternative_schemes_answered_on_one_are_not_a_proxy_failure(monkeypatch):
     from src import scanners
 
     def https_refused(request):
         raise httpx.ProxyError("CONNECT refused: 443 closed", request=request)
 
     def http_like(target):
-        with scan_client(target, "93.184.216.34", mounts={
+        with scan_common.alternative_origins(), scan_client(target, "93.184.216.34", mounts={
                 "https://": httpx.MockTransport(https_refused),
                 "http://": httpx.MockTransport(lambda r: httpx.Response(404))}) as c:
             for scheme in ("https", "http"):
@@ -307,7 +308,7 @@ def test_a_direct_failure_is_not_blamed_on_the_proxy():
     with pytest.raises(httpx.ConnectError):
         with scan_client("pacs.medsecure.example", "10.4.2.1", transport=httpx.MockTransport(fail)) as c:
             c.get("https://10.4.2.1/")
-    assert scan_common.take_proxy_failures() == []
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == []
 
 
 class _Stop(Exception):

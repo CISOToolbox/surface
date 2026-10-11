@@ -220,7 +220,7 @@ def test_a_proxy_refusing_a_neighbour_script_is_reported(monkeypatch, network):
     _proxied(monkeypatch, "portal.medsecure.example")
     network[2].add("cdn.medsecure.example")
     _js(monkeypatch, network, '<script src="https://cdn.medsecure.example/lib.js"></script>')
-    assert scan_common.take_proxy_failures() == [
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == [
         ("cdn.medsecure.example", "proxy.medsecure.example", "ProxyError: 502 Bad Gateway")]
 
 
@@ -229,7 +229,7 @@ def test_a_proxy_refusing_a_script_is_reported_though_it_answered_the_root(monke
     network[2].add("cdn.medsecure.example")
     _js(monkeypatch, network, '<script src="https://cdn.medsecure.example/lib.js"></script>')
     assert network[0][0][0] == "proxy"
-    assert scan_common.take_proxy_failures() == [
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == [
         ("cdn.medsecure.example", "proxy.medsecure.example", "ProxyError: 502 Bad Gateway")]
 
 

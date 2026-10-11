@@ -283,7 +283,7 @@ def test_a_gateway_error_of_the_proxy_does_not_hide_its_refused_connect(fake_pro
     monkeypatch.setattr(mod, "_resolve_safe_target", lambda t: ("93.184.216.34", "portal.medsecure.example"))
     scan_common.take_proxy_failures()
     assert mod.scan_host_sensitive_files("portal.medsecure.example") == []
-    assert scan_common.take_proxy_failures() == [
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == [
         ("portal.medsecure.example", "127.0.0.1", "ProxyError: 502 Bad Gateway")]
 
 
@@ -297,7 +297,7 @@ def test_an_unreachable_proxy_is_the_proxys(monkeypatch):
     with scan_client("portal.medsecure.example", "93.184.216.34", timeout=2) as c:
         with pytest.raises(httpx.ConnectError):
             c.get("https://portal.medsecure.example/")
-    assert scan_common.take_proxy_failures() == [("portal.medsecure.example", "127.0.0.1", "ConnectError")]
+    assert [f[:3] for f in scan_common.take_proxy_failures()] == [("portal.medsecure.example", "127.0.0.1", "ConnectError")]
 
 
 def test_a_name_next_to_an_excepted_domain_goes_through_the_proxy(fake_proxy, monkeypatch):
@@ -329,7 +329,7 @@ def _fail_through(scheme, error, message="failure"):
                      mounts={f"{scheme}://": httpx.MockTransport(fail)}) as c:
         with pytest.raises(error):
             c.get(f"{scheme}://portal.medsecure.example/")
-    return scan_common.take_proxy_failures()
+    return [f[:3] for f in scan_common.take_proxy_failures()]
 
 
 @pytest.fixture
@@ -383,7 +383,8 @@ def _scan_through(play, script):
 
 @pytest.mark.parametrize("play,error", [("silent", "ReadTimeout"), ("close", "RemoteProtocolError")])
 def test_a_proxy_silent_or_hanging_up_on_the_connect_is_the_proxys(scripted_proxy, play, error):
-    assert _scan_through(play, scripted_proxy) == (error, [("portal.medsecure.example", "127.0.0.1", error)])
+    assert _scan_through(play, scripted_proxy) == (error, [
+        ("portal.medsecure.example", "127.0.0.1", error, "https://portal.medsecure.example")])
 
 
 @pytest.mark.parametrize("play", ["tunnel_garbage", "tunnel_close", "tunnel_silent"])

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, target_request,
+    _resolve_safe_target, alternative_origins, scan_client, target_request,
 )
 
 
@@ -71,9 +71,11 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     schemes = [(443, "https"), (80, "http")]
 
-    # Pick whichever scheme answers /.
+    # Pick whichever scheme answers /: one of the two answering is enough
+    # (alternative_origins), the proxy refusing the other is no failure.
     working: tuple[int, str] | None = None
-    with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
+    with alternative_origins(), \
+            scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         for port, scheme in schemes:
             probe, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
             try:

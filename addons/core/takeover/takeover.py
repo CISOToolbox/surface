@@ -6,7 +6,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, resolve_first_ip, scan_client,
+    _safe_target, alternative_origins, resolve_first_ip, scan_client,
 )
 
 
@@ -294,20 +294,22 @@ def _fetch_takeover_body(target: str) -> tuple[int | None, str]:
     import httpx
     headers = {"User-Agent": "CISO-Surface/1.0 (takeover-check)"}
     ip = resolve_first_ip(target)  # the proxy exceptions match it too
-    for scheme in ("https", "http"):
-        try:
-            with scan_client(target, ip, timeout=10.0, follow_redirects=False, verify=False) as client, \
-                    client.stream("GET", f"{scheme}://{target}", headers=headers) as resp:
-                buf = bytearray()
-                for chunk in resp.iter_bytes():
-                    remaining = _TAKEOVER_MAX_BODY_BYTES - len(buf)
-                    if remaining <= 0:
-                        break
-                    buf.extend(chunk[:remaining])
-                body = buf.decode("utf-8", errors="replace")
-                return (resp.status_code, body)
-        except httpx.HTTPError:
-            continue
+    # https, then http as a fallback: one answering is enough.
+    with alternative_origins():
+        for scheme in ("https", "http"):
+            try:
+                with scan_client(target, ip, timeout=10.0, follow_redirects=False, verify=False) as client, \
+                        client.stream("GET", f"{scheme}://{target}", headers=headers) as resp:
+                    buf = bytearray()
+                    for chunk in resp.iter_bytes():
+                        remaining = _TAKEOVER_MAX_BODY_BYTES - len(buf)
+                        if remaining <= 0:
+                            break
+                        buf.extend(chunk[:remaining])
+                    body = buf.decode("utf-8", errors="replace")
+                    return (resp.status_code, body)
+            except httpx.HTTPError:
+                continue
     return (None, "")
 
 
