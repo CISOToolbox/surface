@@ -19,6 +19,7 @@ from src.database import async_session, get_db
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
+from src.scan_common import FOLLOW_REDIRECT_MODES
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 from src.audit import log_action
 
@@ -187,11 +188,14 @@ def _redact_config_out(config: dict) -> dict:
 def _merge_config_secrets(new_config: dict | None, existing: dict | None) -> dict:
     """Encrypt a freshly-entered smb_password into smb_password_enc; preserve
     the existing one when the client sends none. Strip server-controlled keys
-    the client must not set directly."""
+    the client must not set directly, and a redirect policy the scanners do
+    not know."""
     cfg = dict(new_config or {})
     existing = existing or {}
     cfg.pop("smb_password_enc", None)
     cfg.pop("smb_password_set", None)
+    if "follow_redirects" in cfg and cfg["follow_redirects"] not in FOLLOW_REDIRECT_MODES:
+        cfg.pop("follow_redirects")
     pw = cfg.pop("smb_password", None)
     if pw:
         cfg["smb_password_enc"] = encrypt_secret(str(pw))
@@ -410,8 +414,9 @@ async def _run_manual_scan(
     async with async_session() as sink_db:
         sink, sink_counts = make_thread_sink(sink_db, loop)
         try:
+            exclusions = await _load_exclusions(sink_db)
             findings, discovered = await asyncio.to_thread(
-                run_enabled_scanners, kind, value, enabled_scanners, stealth, config or {}, sink)
+                run_enabled_scanners, kind, value, enabled_scanners, stealth, config or {}, sink, exclusions=exclusions)
         except Exception as e:
             findings, discovered = [], []
             error_msg = str(e)[:1000]
@@ -590,7 +595,7 @@ async def scan_all(
                 async with async_session() as sink_db:
                     sink, sink_counts = make_thread_sink(sink_db, loop)
                     findings, _discovered = await asyncio.to_thread(
-                        run_enabled_scanners, kind, value, scanners, stealth, config or {}, sink)
+                        run_enabled_scanners, kind, value, scanners, stealth, config or {}, sink, exclusions=exclusions)
             except Exception as e:
                 return asset_id, value, None, str(e), False
             try:

@@ -1,10 +1,11 @@
 """HTTP security-headers grade scanner — Surface core add-on."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, target_request,
+    _resolve_safe_target, scan_client, fetch_page, follow_redirects_mode,
 )
 
 
@@ -92,8 +93,10 @@ def _grade_headers(headers: dict[str, str]) -> tuple[str, list[str], list[str]]:
     return grade, strengths, weaknesses
 
 
-def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
-    """Fetch the HTTPS root and grade its security headers."""
+def scan_host_security_headers(target: str, asset_config: dict | None = None) -> list[dict[str, Any]]:
+    """Fetch the HTTPS root (and its redirects, as the target's
+    ``follow_redirects`` says) and grade the security headers of the page
+    reached."""
 
     # Directly, connect to the IP locked at validation time, not the name:
     # handing the hostname to httpx let it re-resolve, so the address that was
@@ -101,15 +104,18 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     # the Host header so name-based vhosts still answer. Through the proxy,
     # the name (target_request).
     locked_ip, target = _resolve_safe_target(target)
-    base, _host_hdr, _ext = target_request(target, locked_ip, "https")
-    url = f"{base}/"
+
+    def open_client(host: str, ip: str | None):
+        # follow_redirects=False: a redirect target is not validated by httpx
+        # (an SSRF bypass to cloud metadata or loopback); fetch_page
+        # validates each hop itself.
+        return scan_client(host, ip, verify=False, follow_redirects=False, timeout=5.0)
+
     try:
-        # follow_redirects=False: a redirect target is NOT re-validated by
-        # _resolve_safe_target, so following it would be an SSRF bypass (to
-        # cloud metadata / loopback / RFC1918). The security headers we grade
-        # are those of the canonical URL anyway.
-        with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0) as client:
-            r = client.get(url, headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr}, extensions=_ext)
+        with ExitStack() as stack:
+            r, _host, url, stop = fetch_page(stack, {}, open_client, target, locked_ip,
+                                       follow_redirects_mode(asset_config),
+                                       {"User-Agent": "Surface/0.3 (CISO Toolbox)"})
     except Exception:
         return []
 
@@ -117,6 +123,11 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
     sev = {"A": "info", "B": "info", "C": "low", "D": "medium", "F": "high"}[grade]
     title = f"Security headers grade {grade} on {target}"
     desc = f"Grade {grade}.\n\n"
+    if stop:
+        # The grade is the redirect's own headers, not the site's page.
+        title += " (redirect not followed)"
+        desc = (f"Grade {grade} of the HTTP {r.status_code} redirect to {stop[0]}, not followed: "
+                f"{stop[1]}. The page it leads to was not graded.\n\n") + desc
     if strengths:
         desc += "Strengths:\n- " + "\n- ".join(strengths) + "\n\n"
     if weaknesses:
@@ -130,6 +141,12 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
         "target": f"{target}:443",
         "evidence": {
             "grade": grade,
+            "url": url,
+            "status_code": r.status_code,
+            # Scalars, so the UI words the finding for this case
+            # (finding.security_headers_grade.redirect_not_followed.*).
+            **({"variant": "redirect_not_followed", "redirect_location": stop[0],
+                "redirect_reason": stop[1]} if stop else {}),
             "strengths": strengths,
             "weaknesses": weaknesses,
             "raw_headers": {k: v for k, v in r.headers.items() if k.lower().startswith(("strict-", "content-security", "x-", "referrer", "permissions", "feature-"))},
@@ -138,4 +155,5 @@ def scan_host_security_headers(target: str) -> list[dict[str, Any]]:
 
 
 SURFACE_SCANNERS = {"security_headers": {"label": "Security headers grade",
-    "kinds": {"host"}, "callable": scan_host_security_headers, "returns_discovered": False}}
+    "kinds": {"host"}, "callable": scan_host_security_headers, "returns_discovered": False,
+    "wants_config": True}}

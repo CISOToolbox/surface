@@ -17,6 +17,8 @@
  *   "finding.<type>.title"   → "Port {port}/{protocol} ({service}) ouvert sur {address}"
  *   "finding.<type>.desc"    → "Le service {service} écoute sur {address}:{port}/{protocol}."
  *   "finding.<type>.sev.<s>" → note appended to desc for severity <s> (optional)
+ *   "finding.<type>.<variant>.title|desc" → used first when evidence.variant
+ *     is set: one finding (one dedup key) worded for a particular case
  *
  * Generic and reusable (Surface, AppSec, …). When the template does not exist
  * (technical parse_error/exception type, legacy finding), it falls back to the

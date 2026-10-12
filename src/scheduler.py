@@ -102,7 +102,7 @@ async def _scan_one(asset_id) -> None:
         sink, sink_counts = make_thread_sink(sink_db, loop)
         try:
             findings, discovered = await asyncio.to_thread(
-                run_enabled_scanners, kind, value, enabled_scanners, stealth, cfg, sink)
+                run_enabled_scanners, kind, value, enabled_scanners, stealth, cfg, sink, exclusions=_excl)
         except Exception as e:
             logger.exception("scanners crashed for %s/%s", kind, value)
             findings, discovered = [], []

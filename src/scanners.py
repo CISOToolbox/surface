@@ -28,7 +28,7 @@ from src.scan_common import (  # noqa: F401  # re-exported for routes/scheduler 
     _safe_target, _resolve_safe_target, resolve_first_ip, _is_ip_literal, _check_ip_allowed,
     _int_env, _dns_query,
     _severity_for_port, HIGH_RISK_SERVICES, CRITICAL_SERVICES, _parse_nmap_xml, _tls_ssl_context,
-    _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth,
+    _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth, _EXCLUSIONS_CTX,
     _MULTI_LABEL_TLDS, _HOST_RE, _registrable, _normalize_host, _in_scope,
     take_proxy_failures,
 )
@@ -315,14 +315,16 @@ def addon_help_docs() -> list[dict[str, Any]]:
     ]
 
 
-def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: bool = False, config: dict | None = None, sink=None) -> tuple[list[dict[str, Any]], list[str]]:
+def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: bool = False, config: dict | None = None, sink=None,
+                         exclusions: list[str] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     """Run only the scanners whose names are in `enabled`. Returns (findings, discovered).
 
     When ``stealth=True``, sets a thread-local flag that scanners
     (nuclei, nmap) check to switch to a slower, less detectable
     profile. The flag is always cleared on exit so a panicking
     scanner can't leak the state into a subsequent unrelated run on
-    the same worker thread.
+    the same worker thread. ``exclusions`` (the scan blocklist) is held the
+    same way, for the hosts a scanner reaches on its own (redirect hops).
     """
     findings: list[dict[str, Any]] = []
     discovered: list[str] = []
@@ -331,10 +333,12 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: boo
 
     enabled = _order_by_dependencies(enabled)
     _STEALTH_CTX.on = bool(stealth)
+    _EXCLUSIONS_CTX.values = list(exclusions or [])
     try:
         return _run_scanners_inner(kind, value, enabled, findings, discovered, config or {}, sink)
     finally:
         _STEALTH_CTX.on = False
+        _EXCLUSIONS_CTX.values = []
 
 
 def _order_by_dependencies(enabled: list[str]) -> list[str]:

@@ -1423,6 +1423,7 @@ function _ensureMonitoredModal() {
                     '<div class="surface-field-help">' + esc(t("mon_modal.scanners_help")) + '</div>' +
                 '</div>' +
                 '<div id="monitored-typo"></div>' +
+                '<div id="monitored-redirects"></div>' +
                 // File-share (SMB) options — shown only for kind=file_share.
                 '<div id="monitored-fileshare" class="ct-hidden">' +
                     '<div class="ct-field"><label class="surface-field-lbl">' + esc(t("mon_modal.fs_user")) + '</label>' +
@@ -1474,6 +1475,7 @@ function _ensureMonitoredModal() {
             _updateMonitoredKindHelp();
             _renderScannerChecklist(null);
             _renderMonitoredTypo();
+            _renderMonitoredRedirects();
             _toggleFileShareConfig();
         });
     });
@@ -1530,6 +1532,44 @@ function _renderMonitoredTypo() {
     _bindTypoConfig(ov, "#monitored-scanners");
 }
 
+// FEAT-57 — whether the page scanners follow the root's redirects: hosts
+// only, shown while js_analysis or security_headers is ticked (a hidden
+// setting is not written). Unset, the scanners follow the target's domain.
+var _REDIRECT_SCANNERS = ["js_analysis", "security_headers"];
+
+function _renderMonitoredRedirects() {
+    var slot = document.getElementById("monitored-redirects");
+    var ov = document.getElementById("monitored-overlay");
+    if (!slot || !ov) return;
+    var sel = document.querySelector('input[name="monitored-kind"]:checked') as HTMLInputElement | null;
+    var a = _editingMonitoredId ? _monitored.find(function(x) { return x.id === _editingMonitoredId; }) : null;
+    var cur = (((a && a.config) || {}) as Record<string, any>).follow_redirects || "same_domain";
+    if (!sel || sel.value !== "host") { slot.innerHTML = ""; return; }
+    var opt = function(v: string) {
+        return '<option value="' + v + '"' + (cur === v ? " selected" : "") + '>' + esc(t("mon_modal.redirects_" + v)) + '</option>';
+    };
+    slot.innerHTML = '<div class="ct-field ct-hidden" data-redirects-config>' +
+        '<label class="surface-field-lbl" for="monitored-follow-redirects">' + esc(t("mon_modal.redirects")) + '</label>' +
+        '<select class="ct-input" id="monitored-follow-redirects">' + opt("same_domain") + opt("all") + opt("none") + '</select>' +
+        '<div class="surface-field-help">' + esc(t("mon_modal.redirects_help")) + '</div>' +
+    '</div>';
+    var list = ov.querySelector<HTMLElement>("#monitored-scanners");
+    var sync = function() {
+        var box = ov!.querySelector<HTMLElement>("[data-redirects-config]");
+        if (!box) return;
+        var on = _REDIRECT_SCANNERS.some(function(name) {
+            var cb = ov!.querySelector<HTMLInputElement>('#monitored-scanners input[type=checkbox][value="' + name + '"]');
+            return !!(cb && cb.checked);
+        });
+        box.classList.toggle("ct-hidden", !on);
+    };
+    if (list && !list.dataset.redirectsBound) {
+        list.dataset.redirectsBound = "1";
+        list.addEventListener("change", sync);
+    }
+    sync();
+}
+
 function _updateMonitoredKindHelp() {
     var sel = document.querySelector('input[name="monitored-kind"]:checked') as HTMLInputElement | null;
     var k = sel ? sel.value : "domain";
@@ -1568,6 +1608,7 @@ window._newMonitoredDialog = function() {
     _updateMonitoredKindHelp();
     _renderScannerChecklist(null);
     _renderMonitoredTypo();
+    _renderMonitoredRedirects();
     _toggleFileShareConfig();
     ov.hidden = false;
     setTimeout(function() {
@@ -1775,6 +1816,7 @@ window._editMonitoredDialog = function(id) {
     _updateMonitoredKindHelp();
     _renderScannerChecklist(a.enabled_scanners || null);
     _renderMonitoredTypo();
+    _renderMonitoredRedirects();
     _toggleFileShareConfig();
     ov.hidden = false;
 };
@@ -1813,6 +1855,11 @@ window._saveMonitored = function() {
     if (data.kind === "domain") {
         var _typo = _readTypoConfig(document.getElementById("monitored-overlay")!);
         if (_typo) data.config = Object.assign({}, data.config, _typo);
+    }
+    var _redir = document.querySelector<HTMLElement>("#monitored-redirects [data-redirects-config]");
+    if (data.kind === "host" && _redir && !_redir.classList.contains("ct-hidden")) {
+        data.config = Object.assign({}, data.config,
+            { follow_redirects: (document.getElementById("monitored-follow-redirects") as HTMLSelectElement).value });
     }
     // File-share options → config (only when relevant; harmless otherwise).
     if (data.kind === "file_share") {

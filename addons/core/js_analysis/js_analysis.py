@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from src.scan_common import (
     _resolve_safe_target, scan_client, target_request, _registrable, _is_ip_literal,
+    fetch_page, follow_redirects_mode, logger, _excluded_host,
 )
 
 
@@ -53,8 +54,9 @@ def _mask_secret(value: str, severity: str) -> str:
     return f"{value[:4]}…{value[-4:]}"
 
 
-def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
-    """Fetch / on the target, extract <script src> URLs, download each
+def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list[dict[str, Any]]:
+    """Fetch / on the target (and its redirects, as the target's
+    ``follow_redirects`` says), extract <script src> URLs, download each
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
 
@@ -64,38 +66,53 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
     # the proxy routing of its own (an exception may cover a script host and
     # not the target, or the reverse).
     locked_ip, target = _resolve_safe_target(target)
-    base, _host_hdr, _ext = target_request(target, locked_ip, "https")
     ua = {"User-Agent": "Surface/0.3 (CISO Toolbox)"}
     js_bodies: list[tuple[str, str]] = []
+
+    def open_client(host: str, ip: str | None):
+        # follow_redirects=False: fetch_page validates each hop itself.
+        return scan_client(host, ip, verify=False, follow_redirects=False, timeout=5.0)
+
     try:
         with ExitStack() as stack:
-            # follow_redirects=False — a 3xx on the HTML root could otherwise
-            # redirect us off-domain before script-src extraction.
-            client = stack.enter_context(
-                scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=5.0))
-            r = client.get(f"{base}/", headers={**ua, **_host_hdr}, extensions=_ext)
+            # {host: (client, the address it was validated at)}, the page's
+            # hops included.
+            clients: dict = {}
+            r, name, page_url, stop = fetch_page(stack, clients, open_client, target, locked_ip,
+                                                 follow_redirects_mode(asset_config), ua)
+            if stop:
+                # Said, or the scan would read as a clean one.
+                return [{
+                    "scanner": "js_analysis",
+                    "type": "js_not_analysed",
+                    "severity": "info",
+                    "title": f"JavaScript not analysed on {target}: the home page redirect was not followed",
+                    "description": (f"The home page answers HTTP {r.status_code} to {stop[0]}, not followed: "
+                                    f"{stop[1]}. No script was read."),
+                    "target": target,
+                    "evidence": {"url": page_url, "status_code": r.status_code,
+                                 "location": stop[0], "reason": stop[1]},
+                }]
             if r.status_code != 200:
                 return []
             html = r.text or ""
             # Extract every script src
             src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
             raw_urls = src_re.findall(html)[:_JS_MAX_FILES]
-            # Relative URLs are the target's: resolved against its name (the
-            # root is not redirected), not the address it was fetched at.
-            named_base = target_request(target, None, "https")[0] + "/"
-            resolved = [urljoin(named_base, u) for u in raw_urls]
+            # Relative URLs are the page's: resolved against its URL by name,
+            # not the address it was fetched at.
+            resolved = [urljoin(page_url, u) for u in raw_urls]
 
             # SSRF guard: reject any script URL that (a) is not http(s),
-            # (b) lives on a different registrable domain than the target (an
-            # IP target: is another host), or
+            # (b) lives on a different registrable domain than the page's
+            # host (an IP: is another host), or
             # (c) has a hostname that fails _resolve_safe_target (internal
             # IP / loopback / docker sibling / metadata). The attacker
             # controls the HTML so we cannot trust src values.
-            # Hosts as urlparse gives them: lower case, no brackets. An
-            # address has no domain, only its own scripts.
-            name = target.lower().strip("[]")
+            # Hosts as urlparse gives them: lower case, no brackets (``name``,
+            # the page's host, comes so). An address has no domain, only its
+            # own scripts.
             target_reg = None if _is_ip_literal(name) else _registrable(name) or name
-            clients = {name: (client, locked_ip)}
             for u in resolved:
                 try:
                     parsed = urlparse(u)
@@ -109,8 +126,12 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
                     # URL rest on the same address.
                     if host not in clients:
                         ip = _resolve_safe_target(host)[0]
-                        clients[host] = (stack.enter_context(
-                            scan_client(host, ip, verify=False, follow_redirects=False, timeout=5.0)), ip)
+                        # The run's scan blocklist, as for a redirect hop.
+                        if _excluded_host(host, ip):
+                            logger.info("scan of %s: scripts of %s not fetched (host in the scan blocklist)",
+                                        target, host)
+                            continue
+                        clients[host] = (stack.enter_context(open_client(host, ip)), ip)
                     host_client, ip = clients[host]
                     script_base, headers, ext = target_request(host, ip, parsed.scheme, port)
                     path = ((parsed.path or "/") + (f";{parsed.params}" if parsed.params else "")
@@ -165,4 +186,5 @@ def scan_host_js_analysis(target: str) -> list[dict[str, Any]]:
 
 
 SURFACE_SCANNERS = {"js_analysis": {"label": "JavaScript bundle analysis (secrets & endpoints)",
-    "kinds": {"host"}, "callable": scan_host_js_analysis, "returns_discovered": False}}
+    "kinds": {"host"}, "callable": scan_host_js_analysis, "returns_discovered": False,
+    "wants_config": True}}

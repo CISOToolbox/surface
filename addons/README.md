@@ -74,7 +74,11 @@ runs the named scanner first, whatever order the asset lists them in.
 
 A scanner returns a `list[dict]` of findings (or `(findings, discovered)` when
 `returns_discovered`). Each finding dict: `scanner, type, severity, title,
-description, target, evidence`.
+description, target, evidence`. The UI words a finding from its i18n templates
+`finding.<type>.title|desc`, filled with the scalars of `evidence` (the
+backend text is the fallback); a finding that needs other wording in a
+particular case sets `evidence.variant`, and `finding.<type>.<variant>.*` is
+tried first, under the same dedup key.
 
 > **Dedup identity** = `dedup_key = scanner|type|target` (see
 > `src/findings_dedup.py`). If one `target` can legitimately yield several
@@ -116,6 +120,15 @@ and reach the scanner via `wants_config`. Secrets (e.g. the SMB password) are
 - On read, `_redact_config_out` strips `*_enc` and exposes a boolean
   `smb_password_set` so the UI can show "set / not set" without leaking.
 - The scanner decrypts at scan time; plaintext is never stored or returned.
+- `follow_redirects` (`none` | `same_domain` | `all`, default `same_domain`)
+  is read by the page scanners (`js_analysis`, `security_headers`) through
+  `scan_common.follow_redirects_mode`; `_merge_config_secrets` drops any
+  other value. They fetch the page with `scan_common.fetch_page`, which
+  validates and pins each hop, and skips the hosts of the run's scan
+  blocklist (`scan_common.scan_exclusions()`, set by the dispatcher;
+  `js_analysis` checks its scripts' hosts against it too, through
+  `scan_common._excluded_host`): a page scanner never passes
+  `follow_redirects=True` to a client.
 
 ## 5. In-app help for add-ons (TRUE conditional doc)
 

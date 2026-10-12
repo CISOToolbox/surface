@@ -171,7 +171,7 @@ async def test_a_reopened_finding_is_alerted(db, mailbox):
 async def test_findings_persisted_in_batches_are_alerted(monkeypatch, db, wired):
     a, j = await _asset_and_job(db)
 
-    def _scan(kind, value, enabled, stealth, config, sink):
+    def _scan(kind, value, enabled, stealth, config, sink, exclusions=None):
         sink([_finding("a#1"), _finding("b#2")])
         sink([_finding("a#1")])            # second batch: a is refreshed
         return [_finding("c#3")], []
@@ -180,6 +180,20 @@ async def test_findings_persisted_in_batches_are_alerted(monkeypatch, db, wired)
     await mon._run_manual_scan(a.id, j.id, "domain", a.value, ["ct_logs"])
     keys = sorted(wired[0][2])
     assert keys == sorted(compute_dedup_key("ct_logs", "ct_typosquat_cert", t) for t in ("a#1", "b#2", "c#3"))
+
+
+@pytest.mark.asyncio
+async def test_a_manual_scan_hands_the_blocklist_to_the_scanners(monkeypatch, db, wired):
+    # For the hosts a scanner reaches on its own (FEAT-57, redirect hops).
+    from src.models import ScanExclusion
+    a, j = await _asset_and_job(db)
+    db.add(ScanExclusion(value="legacy.medsecure.example"))
+    await db.commit()
+    handed = []
+    monkeypatch.setattr(mon, "run_enabled_scanners",
+                        lambda *a, exclusions=None, **k: handed.append(exclusions) or ([], []))
+    await mon._run_manual_scan(a.id, j.id, "domain", a.value, ["ct_logs"])
+    assert handed == [["legacy.medsecure.example"]]
 
 
 @pytest.mark.asyncio
@@ -207,6 +221,28 @@ async def test_scan_all_sends_one_alert_naming_the_assets_with_findings(monkeypa
     assert keys == sorted(compute_dedup_key("ct_logs", "ct_typosquat_cert", v + ".net#01") for v in noisy)
     named = label.split(" (+")[0].split(", ")
     assert len(named) == 3 and set(named) <= set(noisy) and label.endswith(" (+1)")
+
+
+@pytest.mark.asyncio
+async def test_scan_all_and_the_scheduler_hand_the_blocklist_to_the_scanners(monkeypatch, engine, db):
+    # For the hosts a scanner reaches on its own (FEAT-57, redirect hops).
+    import src.scheduler as scheduler
+    from src.models import ScanExclusion
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    handed = []
+    stub = lambda *a, exclusions=None, **k: handed.append(exclusions) or ([], [])  # noqa: E731
+    for mod in (mon, scheduler):
+        monkeypatch.setattr(mod, "async_session", maker)
+        monkeypatch.setattr(mod, "run_enabled_scanners", stub)
+    monkeypatch.setattr(mon, "check_scan_quota", lambda *a, **k: None)
+    monkeypatch.setattr(scheduler, "resolve_first_ip", lambda v: None)   # no DNS in a unit test
+    asset = MonitoredAsset(kind="domain", value="medsecure.example", enabled=True,
+                           enabled_scanners=["ct_logs"], config={})
+    db.add_all([asset, ScanExclusion(value="legacy.medsecure.example")])
+    await db.commit()
+    await mon.scan_all(request=None, user=None, db=db)
+    await scheduler._scan_one(asset.id)
+    assert handed == [["legacy.medsecure.example"], ["legacy.medsecure.example"]]
 
 
 @pytest.mark.asyncio

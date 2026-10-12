@@ -29,7 +29,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger("surface.scanners")
 
@@ -379,6 +379,120 @@ def target_request(target: str, locked_ip: str | None, scheme: str,
     return base, headers, ({"sni_hostname": target} if sni else {})
 
 
+# A target's ``config.follow_redirects``: whether the page scanners follow its
+# root's redirects, none, those on its registrable domain, or all of them.
+FOLLOW_REDIRECT_MODES = ("none", "same_domain", "all")
+_MAX_REDIRECTS = 5
+
+
+def follow_redirects_mode(asset_config: dict | None) -> str:
+    """The target's redirect policy; ``same_domain`` when unset or unknown."""
+    mode = (asset_config or {}).get("follow_redirects")
+    return mode if mode in FOLLOW_REDIRECT_MODES else "same_domain"
+
+
+def fetch_page(stack, clients: dict, open_client, target: str, locked_ip: str,
+               mode: str, headers: dict[str, str]):
+    """GET the target's root, then its redirects as ``mode`` allows: the page
+    a browser would show. httpx never follows a redirect itself (its target
+    is not validated): each hop is validated as a target is
+    (``_resolve_safe_target``, once per host), pinned to its address with
+    ``target_request``, and reached by a client of its own host
+    (``open_client(host, ip)``, entered on ``stack``, kept in ``clients`` as
+    {host: (client, ip)}) for that host's proxy routing. Only http(s), at
+    most ``_MAX_REDIRECTS`` hops, no URL twice, no host of the run's scan
+    blocklist (``scan_exclusions``). A redirect not followed, or followed to
+    a hop that fails, is the page; the root failing raises. Returns
+    (response, host, URL by name without its query, stop): ``stop`` is None,
+    or, when the page
+    is a redirect not followed, (where it led, without its query; why)."""
+    import httpx
+
+    name = target.lower().strip("[]")
+    target_reg = None if _is_ip_literal(name) else _registrable(name) or name
+    host, ip, scheme, port, path = name, locked_ip, "https", None, "/"
+    visited: set[str] = set()
+    previous = None
+
+    def without_query(u: str) -> str:
+        # The page's URL, and where a redirect led in a finding: neither its
+        # query nor its credentials (user:password@), as either may carry a
+        # secret.
+        u = u.split("?", 1)[0].split("#", 1)[0]
+        scheme, sep, rest = u.partition("://")
+        if sep:
+            netloc, slash, tail = rest.partition("/")
+            u = scheme + sep + netloc.rsplit("@", 1)[-1] + slash + tail
+        return u
+
+    while True:
+        url = target_request(host, None, scheme, port)[0] + path
+        try:
+            if host not in clients:
+                clients[host] = (stack.enter_context(open_client(target if host == name else host, ip)), ip)
+            client, ip = clients[host]
+            base, host_hdr, ext = target_request(host, ip, scheme, port)
+            # httpx builds the redirect request even when not following it,
+            # and refuses a Location it cannot parse (javascript:, a bad
+            # port, a control character: InvalidURL or RemoteProtocolError).
+            # Once a redirect came in (the hook saw its headers; its body is
+            # not needed), that answer is still the page. Any other error,
+            # a body that fails to arrive included, is the request failing.
+            answers: list = []
+            client.event_hooks["response"].append(answers.append)
+            try:
+                response = client.get(base + path, headers={**headers, **host_hdr}, extensions=ext)
+            except (httpx.InvalidURL, httpx.RemoteProtocolError):
+                if not (answers and answers[-1].is_redirect):
+                    raise
+                response = answers[-1]
+            finally:
+                client.event_hooks["response"].remove(answers.append)
+        except Exception as e:
+            if previous is None:
+                raise
+            logger.info("scan of %s: redirect to %s not followed (%s)", target, url, type(e).__name__)
+            return (*previous, (without_query(url)[:300], f"the redirect target failed ({type(e).__name__})"))
+        page = response, host, without_query(url)
+        visited.add(url)
+        if not response.is_redirect:
+            return (*page, None)
+        location = response.headers.get("location", "")
+        try:
+            location = urljoin(url, location)  # raises on a broken IPv6 host
+            if mode == "none":
+                raise ValueError("the target's setting is not to follow redirects")
+            nxt = urlparse(location)
+            nxt_host, nxt_port = (nxt.hostname or ""), nxt.port  # an invalid port raises
+            if nxt.scheme not in ("http", "https") or not nxt_host:
+                raise ValueError("not an http(s) URL")
+            if nxt_port == {"https": 443, "http": 80}[nxt.scheme]:
+                nxt_port = None
+            nxt_path = ((nxt.path or "/") + (f";{nxt.params}" if nxt.params else "")
+                        + (f"?{nxt.query}" if nxt.query else ""))
+            nxt_url = target_request(nxt_host, None, nxt.scheme, nxt_port)[0] + nxt_path
+            if mode == "same_domain" and nxt_host != name and (
+                    target_reg is None or (_registrable(nxt_host) or nxt_host) != target_reg):
+                raise ValueError("off the target's domain")
+            if nxt_url in visited or len(visited) > _MAX_REDIRECTS:
+                raise ValueError("redirect loop or too many redirects")
+            if nxt_host in clients:
+                nxt_ip = clients[nxt_host][1]
+            else:
+                try:
+                    nxt_ip = _resolve_safe_target(nxt_host)[0]
+                except ValueError as e:
+                    logger.info("scan of %s: redirect host %s refused (%s)", target, nxt_host, e)
+                    raise ValueError("not a host the scanner may reach (internal or unresolvable)")
+            if _excluded_host(nxt_host, nxt_ip):
+                raise ValueError("host in the scan blocklist")
+        except ValueError as e:
+            logger.info("scan of %s: redirect from %s not followed (%s)", target, url, e)
+            return (*page, (without_query(location)[:300], str(e)))
+        previous = page
+        host, ip, scheme, port, path = nxt_host, nxt_ip, nxt.scheme, nxt_port, nxt_path
+
+
 # Per thread: the proxy failures and the answers of the scanned targets, by
 # origin of the target (scheme, port): {target: {origin: (proxy host, cause)}}
 # and {target: {origins answered}}, plus the open ``alternative_origins``.
@@ -561,6 +675,24 @@ _STEALTH_BROWSER_UA = (
 
 def _is_stealth() -> bool:
     return bool(getattr(_STEALTH_CTX, "on", False))
+
+
+# The scan blocklist (ScanExclusion values) of the run, set by
+# `run_enabled_scanners` like the stealth flag: the scanned asset is checked
+# before the run, a host the run reaches on its own (a redirect hop) here.
+_EXCLUSIONS_CTX = threading.local()
+
+
+def scan_exclusions() -> list[str]:
+    return list(getattr(_EXCLUSIONS_CTX, "values", None) or [])
+
+
+def _excluded_host(host: str, ip: str | None) -> bool:
+    exclusions = scan_exclusions()
+    if not exclusions:
+        return False
+    from src.models import is_excluded  # models pulls SQLAlchemy: not at import
+    return is_excluded([host, ip or ""], exclusions)
 
 
 # ═══════════════════════════════════════════════════════════════

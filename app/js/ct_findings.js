@@ -17,6 +17,8 @@
  *   "finding.<type>.title"   → "Port {port}/{protocol} ({service}) ouvert sur {address}"
  *   "finding.<type>.desc"    → "Le service {service} écoute sur {address}:{port}/{protocol}."
  *   "finding.<type>.sev.<s>" → note appended to desc for severity <s> (optional)
+ *   "finding.<type>.<variant>.title|desc" → used first when evidence.variant
+ *     is set: one finding (one dedup key) worded for a particular case
  *
  * Generic and reusable (Surface, AppSec, …). When the template does not exist
  * (technical parse_error/exception type, legacy finding), it falls back to the
@@ -73,6 +75,7 @@ function _findingApply(key, params) {
     return t(key, params);
 }
 // Rebuilds a localized title ("title") or description ("desc"). Cascade:
+//   0. "finding.<type>.<variant>.<kind>" — when evidence.variant is set
 //   1. "finding.<type>.<kind>"     — precise template
 //   2. "finding.<scanner>.<kind>"  — generic scanner template (dynamic types)
 //   3. backend text (f.title / f.description)
@@ -82,7 +85,10 @@ function _findingText(f, kind) {
     if (!type)
         return backend;
     var params = _findingParams(f);
-    var out = _findingApply("finding." + type + "." + kind, params);
+    var variant = f.evidence && typeof f.evidence.variant === "string" ? f.evidence.variant : "";
+    var out = variant ? _findingApply("finding." + type + "." + variant + "." + kind, params) : null;
+    if (out == null)
+        out = _findingApply("finding." + type + "." + kind, params);
     if (out == null && f && f.scanner)
         out = _findingApply("finding." + f.scanner + "." + kind, params);
     if (out == null)
