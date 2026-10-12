@@ -73,6 +73,34 @@ def _safe_target(t: str) -> str:
     return canonical
 
 
+class UnresolvedTarget(ValueError):
+    """A name `_resolve_safe_target` found no usable address for. ``reason``:
+    ``"no_address"`` (the name exists, without an address: a mail-only
+    domain), ``"no_name"`` (it does not exist: NXDOMAIN, a dangling CNAME
+    included) or ``"lookup_failed"`` (the resolver failed: SERVFAIL, timeout,
+    an invalid name)."""
+
+    def __init__(self, message: str, reason: str, canonical: str):
+        super().__init__(message)
+        self.reason = reason
+        self.canonical = canonical
+
+
+def _safe_name(t: str) -> str:
+    """Validate a name the scanner only asks about (DNS, the CT logs, a
+    third-party service) and never connects to: as `_safe_target`, but a name
+    that exists without an address (a mail-only domain) passes. A name that
+    does not exist, a failed lookup, a name resolving to an internal address
+    or naming an internal service are still refused: the scanner would
+    otherwise report as missing the records it could not read."""
+    try:
+        return _resolve_safe_target(t)[1]
+    except UnresolvedTarget as e:
+        if e.reason != "no_address":
+            raise
+        return e.canonical
+
+
 def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | None, str]:
     """Validate a scan target against shell injection and SSRF.
 
@@ -91,7 +119,9 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
     monitored domain) whose apex legitimately has no A record — the per-connection
     lock still fires when a scanner actually contacts a host, so nothing that
     resolves to a forbidden target is ever reached. A name that DOES resolve to a
-    blocked IP is still rejected.
+    blocked IP is still rejected. Otherwise a name without a usable address
+    raises `UnresolvedTarget`, which says why (`_safe_name` lets a name that
+    exists without an address through).
     """
     t = (t or "").strip()
     if not t:
@@ -150,7 +180,10 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
         # (allow_unresolved), where no connection is made to the apex.
         if allow_unresolved:
             return None, t
-        raise ValueError(f"Cible non resolvable : {bare} ({e})")
+        errno = getattr(e, "errno", None)
+        reason = ("no_address" if errno == getattr(socket, "EAI_NODATA", None)
+                  else "no_name" if errno == socket.EAI_NONAME else "lookup_failed")
+        raise UnresolvedTarget(f"Cible non resolvable : {bare} ({e})", reason, t)
 
     resolved = [info[4][0] for info in infos if info[4]]
     locked: str | None = None
@@ -165,7 +198,7 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
     if locked is None:
         if allow_unresolved:
             return None, t
-        raise ValueError(f"Cible non resolvable : {bare} (aucune adresse exploitable)")
+        raise UnresolvedTarget(f"Cible non resolvable : {bare} (aucune adresse exploitable)", "no_address", t)
     return locked, t
 
 
@@ -275,14 +308,21 @@ def _int_env(name: str, default: int, minv: int = 1, maxv: int = 10000) -> int:
     return max(minv, min(maxv, v))
 
 
-def _dns_query(domain: str, rtype: str) -> list[str]:
+def _dns_query(domain: str, rtype: str, strict: bool = False) -> list[str]:
+    """The records of ``domain``, ``[]`` when there are none. ``strict``: a
+    query that fails (timeout, no nameserver answering) raises instead of
+    reading as no record, for a scanner that reports a missing record."""
+    import dns.resolver
     try:
-        import dns.resolver
         resolver = dns.resolver.Resolver()
         resolver.lifetime = 5
         answers = resolver.resolve(domain, rtype)
         return [str(a) for a in answers]
-    except Exception:
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+        return []
+    except Exception as e:
+        if strict:
+            raise ValueError(f"DNS query {rtype} {domain} failed ({type(e).__name__})") from e
         return []
 
 

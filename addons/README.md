@@ -72,6 +72,23 @@ in this scan. A scanner that chains off another one names it in `runs_after`
 (e.g. `ct_logs` → `["typosquatting"]`): when both are enabled, the dispatcher
 runs the named scanner first, whatever order the asset lists them in.
 
+A scanner validates its `value` first. One that connects to it calls
+`scan_common._resolve_safe_target` (or `_safe_target`), which refuses a name
+without an address; one that only asks about it (DNS, the CT logs, a
+third-party service) calls `scan_common._safe_name`, which lets through a
+name that exists without an address (a mail-only domain). Both refuse
+internal names and addresses, a name that does not exist and a failed
+lookup (`UnresolvedTarget`, whose `reason` says which): the scanner fails
+as an error rather than reporting as missing what it could not read. In
+the same way, a scanner that reports a missing DNS record queries with
+`scan_common._dns_query(..., strict=True)`: no record (NoAnswer, NXDOMAIN)
+is `[]`, a query that fails (timeout, no nameserver answering) raises.
+`takeover` also runs on a name that does not exist when a CNAME leads to it
+(a dangling CNAME), and says when it could not check a service: no page to
+look for its fingerprint in (no address, or neither scheme answered), or
+the NXDOMAIN query of the CNAME target failed (`takeover_not_checked`). A
+CNAME query that fails is an error.
+
 A scanner returns a `list[dict]` of findings (or `(findings, discovered)` when
 `returns_discovered`). Each finding dict: `scanner, type, severity, title,
 description, target, evidence`. The UI words a finding from its i18n templates

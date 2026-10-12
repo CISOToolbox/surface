@@ -7,7 +7,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, _int_env, _normalize_host, _in_scope,
+    _safe_name, _int_env, _normalize_host, _in_scope,
 )
 
 
@@ -291,7 +291,7 @@ def scan_domain_dns_brute(domain: str) -> tuple[list[dict[str, Any]], list[str]]
     import dns.resolver
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    domain = _safe_target(domain).lower()
+    domain = _safe_name(domain).lower()
     words = _load_dns_brute_wordlist()
     concurrency = _int_env("SURFACE_DNS_BRUTE_CONCURRENCY", 10, 1, 100)
     timeout = _int_env("SURFACE_DNS_BRUTE_TIMEOUT", 3, 1, 30)

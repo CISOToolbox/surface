@@ -10,16 +10,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from src.scan_common import _dns_query, _safe_target
+from src.scan_common import _dns_query, _safe_name
 
 
 def scan_domain_email(domain: str) -> list[dict[str, Any]]:
     """Check SPF, DMARC, DKIM and MX records for a domain."""
-    domain = _safe_target(domain).lower()
+    domain = _safe_name(domain).lower()
+    # A record it could not read is not a missing one: strict queries, a
+    # failed one fails the scan (DKIM aside, below).
     findings: list[dict[str, Any]] = []
 
     # MX
-    mx = _dns_query(domain, "MX")
+    mx = _dns_query(domain, "MX", strict=True)
     if not mx:
         findings.append({
             "scanner": "email_security", "type": "mx_missing", "severity": "info",
@@ -29,7 +31,7 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
         })
 
     # SPF (TXT starting with v=spf1)
-    txt = _dns_query(domain, "TXT")
+    txt = _dns_query(domain, "TXT", strict=True)
     spf = next((t for t in txt if "v=spf1" in t.lower()), None)
     if not spf:
         findings.append({
@@ -66,7 +68,7 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
             })
 
     # DMARC (TXT on _dmarc.<domain>)
-    dmarc_txt = _dns_query(f"_dmarc.{domain}", "TXT")
+    dmarc_txt = _dns_query(f"_dmarc.{domain}", "TXT", strict=True)
     dmarc = next((t for t in dmarc_txt if "v=DMARC1" in t), None)
     if not dmarc:
         findings.append({
@@ -84,14 +86,29 @@ def scan_domain_email(domain: str) -> list[dict[str, Any]]:
                 "target": domain, "evidence": {"dmarc": dmarc},
             })
 
-    # DKIM — try common selectors
+    # DKIM — try common selectors. They are guessed: one whose query fails is
+    # skipped, and DKIM is then said not checked rather than missing.
     dkim_found = False
+    selectors_failed: list[str] = []
     for selector in ("default", "google", "selector1", "selector2", "k1", "mail"):
-        dkim_txt = _dns_query(f"{selector}._domainkey.{domain}", "TXT")
+        try:
+            dkim_txt = _dns_query(f"{selector}._domainkey.{domain}", "TXT", strict=True)
+        except ValueError:
+            selectors_failed.append(selector)
+            continue
         if any("v=DKIM1" in t or "p=" in t for t in dkim_txt):
             dkim_found = True
             break
-    if not dkim_found:
+    if not dkim_found and selectors_failed:
+        findings.append({
+            "scanner": "email_security", "type": "dkim_not_checked", "severity": "info",
+            "title": f"DKIM not fully checked on {domain}",
+            "description": (f"No common DKIM selector was found, and the DNS query of some failed "
+                            f"({', '.join(selectors_failed)}): DKIM may be configured on one of them. "
+                            "Scan again later."),
+            "target": domain, "evidence": {"selectors_failed": selectors_failed},
+        })
+    elif not dkim_found:
         findings.append({
             "scanner": "email_security", "type": "dkim_missing", "severity": "medium",
             "title": f"DKIM not detected on {domain}",

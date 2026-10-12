@@ -6,7 +6,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, alternative_origins, resolve_first_ip, scan_client,
+    _resolve_safe_target, UnresolvedTarget, alternative_origins, resolve_first_ip, scan_client,
 )
 
 
@@ -224,8 +224,10 @@ _TAKEOVER_FINGERPRINTS: tuple[TakeoverFingerprint, ...] = (
 )
 
 
-def _resolve_cname_chain(host: str, max_depth: int = 5) -> list[str]:
-    """Return the full CNAME chain starting at `host`, empty if none."""
+def _resolve_cname_chain(host: str, max_depth: int = 5, strict: bool = False) -> list[str]:
+    """Return the full CNAME chain starting at `host`, empty if none.
+    ``strict``: a query that fails (timeout, no nameserver answering), at
+    any hop, raises instead of reading as the end of the chain."""
     import dns.resolver
     import dns.exception
 
@@ -244,16 +246,19 @@ def _resolve_cname_chain(host: str, max_depth: int = 5) -> list[str]:
                 break
             chain.append(target)
             current = target
-        except dns.exception.DNSException:
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
             break
-        except Exception:
+        except Exception as e:
+            if strict:
+                raise ValueError(f"DNS query CNAME {current} failed ({type(e).__name__})") from e
             break
     return chain
 
 
-def _cname_target_is_nxdomain(target: str) -> bool:
+def _cname_target_is_nxdomain(target: str) -> bool | None:
     """True when the given hostname explicitly NXDOMAINs — a strong
-    dangling-CNAME signal for services that release claim on no-A-record."""
+    dangling-CNAME signal for services that release claim on no-A-record.
+    None when the query failed (timeout, no nameserver answering): neither."""
     import dns.resolver
     import dns.exception
     try:
@@ -264,10 +269,10 @@ def _cname_target_is_nxdomain(target: str) -> bool:
         return False
     except dns.resolver.NXDOMAIN:
         return True
-    except dns.exception.DNSException:
+    except dns.resolver.NoAnswer:
         return False
     except Exception:
-        return False
+        return None
 
 
 def _match_takeover_service(cname: str) -> dict[str, Any] | None:
@@ -324,19 +329,36 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
          CNAME target has no A record.
       4. Emit one critical/high finding per confirmed hit.
     """
-    target = _safe_target(target)
+    # A name without an address, or that does not exist, is the takeover
+    # case itself (a CNAME to a released resource): checked on its DNS
+    # alone, without fetching the name. A failed lookup is an error.
+    try:
+        ip, target = _resolve_safe_target(target)
+        unresolved = None
+    except UnresolvedTarget as e:
+        if e.reason == "lookup_failed":
+            raise
+        ip, target, unresolved = None, e.canonical, e
     findings: list[dict[str, Any]] = []
 
-    cname_chain = _resolve_cname_chain(target)
+    # A CNAME query that fails is an error, not a name without a CNAME.
+    cname_chain = _resolve_cname_chain(target, strict=True)
     if not cname_chain:
+        if unresolved is not None and unresolved.reason == "no_name":
+            raise unresolved  # neither a name nor a CNAME: a typo, not a takeover
         return []
 
     logger.info("takeover: %s -> cname chain: %s", target, cname_chain)
 
     # Fetch the target body ONCE. Each fingerprint check inspects the same
     # response — avoiding N HTTP round-trips per CNAME in the chain.
-    status_code, body = _fetch_takeover_body(target)
+    status_code, body = _fetch_takeover_body(target) if ip else (None, "")
     body_lc = body.lower()
+    # Services that could not be checked, and why: no page to look for a
+    # fingerprint in (no address, or neither scheme answered), or the
+    # NXDOMAIN query of the CNAME target failed.
+    not_checked: list[str] = []
+    checks: list[str] = []
 
     for cname in cname_chain:
         entry = _match_takeover_service(cname)
@@ -348,7 +370,8 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
         fps = entry.get("fingerprints", ())
         nxdomain_vuln = entry.get("nxdomain_is_vulnerable", False)
 
-        target_nxdomain = _cname_target_is_nxdomain(cname) if nxdomain_vuln else False
+        nxdomain = _cname_target_is_nxdomain(cname) if nxdomain_vuln else False
+        target_nxdomain = nxdomain is True
 
         fingerprint_hit: str | None = None
         for fp in fps:
@@ -358,6 +381,13 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
 
         vulnerable = bool(fingerprint_hit) or target_nxdomain
         if not vulnerable:
+            why = (f"the DNS query of {cname} failed" if nxdomain is None
+                   else None if not any(fps) or status_code is not None
+                   else "no address to fetch its page from" if ip is None
+                   else "its page could not be fetched (https and http)")
+            if why and service not in not_checked:
+                not_checked.append(service)
+                checks.append(f"{service}: {why}")
             continue
 
         reasons: list[str] = []
@@ -391,6 +421,21 @@ def scan_host_takeover(target: str) -> list[dict[str, Any]]:
             },
         })
 
+    if not_checked and not findings:
+        # Said, or the scan would read as a clean one.
+        findings.append({
+            "scanner": "takeover",
+            "type": "takeover_not_checked",
+            "severity": "info",
+            "title": f"Subdomain takeover not fully checked on {target}",
+            "description": (
+                f"{target} points via CNAME to a service that could not be checked for an "
+                f"unclaimed resource ({'; '.join(checks)}). Check the CNAME record of {target}, "
+                "or scan it again later."
+            ),
+            "target": target,
+            "evidence": {"cname_chain": cname_chain, "services": not_checked, "checks": checks},
+        })
     return findings
 
 

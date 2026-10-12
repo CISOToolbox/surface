@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _safe_target, _registrable,
+    _safe_name, _registrable,
 )
 
 
@@ -61,7 +61,7 @@ def scan_domain_cloud_buckets(domain: str) -> tuple[list[dict[str, Any]], list[s
     if interested)."""
     import httpx
 
-    domain = _safe_target(domain)
+    domain = _safe_name(domain)
     candidates = _bucket_candidates(domain)
     # Cap to avoid hitting rate limits on cloud providers
     candidates = candidates[:80]

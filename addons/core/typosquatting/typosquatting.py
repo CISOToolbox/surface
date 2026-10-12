@@ -27,7 +27,7 @@ import time
 from typing import Any
 from urllib.parse import quote
 
-from src.scan_common import _safe_target, logger
+from src.scan_common import _safe_name, logger
 
 # Permutation classes that justify a (rate-limited) CT lookup — the
 # highest-confidence impersonation vectors. Kept small to bound crt.sh load.
@@ -192,7 +192,7 @@ def _crt_sh_cert_count(domain: str, timeout: float = 20.0) -> int | None:
 def scan_domain_typosquatting(domain: str, config: dict | None = None) -> list[dict[str, Any]]:
     """Generate lookalikes (dnstwist) and flag the active ones via DNS + CT."""
     config = config or {}
-    domain = _safe_target(domain).lower()
+    domain = _safe_name(domain).lower()
     if "." not in domain:
         return []
     max_variants = max(1, min(int(config.get("typosquat_max_variants", _DEF_MAX_VARIANTS)), 500))

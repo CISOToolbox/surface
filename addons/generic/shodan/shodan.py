@@ -7,7 +7,7 @@ from typing import Any
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, _normalize_host, _in_scope,
+    _safe_target, _safe_name, _normalize_host, _in_scope,
 )
 from src.scanners import _get_shodan_api_key
 
@@ -21,7 +21,7 @@ def scan_domain_shodan(domain: str) -> tuple[list[dict[str, Any]], list[str]]:
     """
     import httpx
 
-    domain = _safe_target(domain).lower()
+    domain = _safe_name(domain).lower()
     api_key = _get_shodan_api_key()
     findings: list[dict[str, Any]] = []
 

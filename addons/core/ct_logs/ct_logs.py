@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from src.scan_common import logger
 from src.scan_common import (
-    _safe_target, _normalize_host, _in_scope,
+    _safe_name, _normalize_host, _in_scope,
 )
 
 _CT_HEADERS = {"User-Agent": "CISO-Surface/1.0 (+https://cisotoolbox.org)"}
@@ -96,7 +96,7 @@ def scan_domain_ct_logs(domain: str, prior_findings: list[dict[str, Any]] | None
     Then watches the certificates of the lookalikes flagged by typosquatting
     earlier in this scan (``prior_findings``) — see ``_lookalike_cert_findings``.
     """
-    domain = _safe_target(domain).lower()
+    domain = _safe_name(domain).lower()
     findings: list[dict[str, Any]] = []
     discovered: set[str] = set()
 

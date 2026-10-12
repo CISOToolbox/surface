@@ -264,9 +264,9 @@ def test_takeover_with_https_refused_and_http_answered_is_no_proxy_failure(monke
     http = httpx.MockTransport(refused if not https_fails else lambda r: httpx.Response(404, text="nothing"))
     monkeypatch.setattr(mod, "scan_client", lambda host, ip=None, **kw: real(
         host, ip, mounts={"https://": httpx.MockTransport(refused), "http://": http}, **kw))
-    monkeypatch.setattr(mod, "_safe_target", lambda t: t)
+    monkeypatch.setattr(mod, "_resolve_safe_target", lambda t, allow_unresolved=False: ("93.184.216.34", t))
     monkeypatch.setattr(mod, "resolve_first_ip", lambda t: None)
-    monkeypatch.setattr(mod, "_resolve_cname_chain", lambda t: ["shop-medsecure.github.io"])
+    monkeypatch.setattr(mod, "_resolve_cname_chain", lambda t, **k: ["shop-medsecure.github.io"])
     monkeypatch.setitem(scanners.SCANNER_REGISTRY, "takeover",
                         {"callable": mod.scan_host_takeover, "kinds": ["host"], "returns_discovered": False})
     with caplog.at_level(logging.WARNING):

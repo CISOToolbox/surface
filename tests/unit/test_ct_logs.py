@@ -46,7 +46,7 @@ def _fake_crt(monkeypatch, responses: dict[str, list]):
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", fake)
     monkeypatch.setattr(ct.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ct, "_safe_target", lambda d: d)
+    monkeypatch.setattr(ct, "_safe_name", lambda d: d)
     return calls
 
 
@@ -100,7 +100,7 @@ def test_domain_query_failure_does_not_hide_lookalike_certs(monkeypatch):
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", fake)
     monkeypatch.setattr(ct.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ct, "_safe_target", lambda d: d)
+    monkeypatch.setattr(ct, "_safe_name", lambda d: d)
     findings, discovered = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
     assert {f["type"] for f in findings} == {"ct_error", "ct_typosquat_cert"}
     assert discovered == []
@@ -115,7 +115,7 @@ def test_lookalike_watch_stops_after_repeated_crt_sh_failures(monkeypatch):
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", fake)
     monkeypatch.setattr(ct.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ct, "_safe_target", lambda d: d)
+    monkeypatch.setattr(ct, "_safe_name", lambda d: d)
     prior = [_typo(f"acme{i}.example.net") for i in range(10)]
     findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
     assert _certs(findings) == []
@@ -132,7 +132,7 @@ def test_an_oversized_lookalike_does_not_stop_the_watch(monkeypatch):
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", fake)
     monkeypatch.setattr(ct.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ct, "_safe_target", lambda d: d)
+    monkeypatch.setattr(ct, "_safe_name", lambda d: d)
     prior = [_typo(f"acme{i}.example.net") for i in range(10)]
     findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
     assert [f["target"] for f in _certs(findings)] == ["acme9.example.net#0f"]
