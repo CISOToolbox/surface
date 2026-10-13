@@ -17,7 +17,14 @@ transport and the direct one recorded):
   - a proxy failure on a neighbour host's script is reported even when the
     root answered, through the proxy or directly;
   - the HTTP scanners' root request, pinned to the locked IP, sends the
-    name as SNI.
+    name as SNI;
+  - the 20-script cap counts the scripts fetched: a foreign script, a
+    refused host's or a duplicate takes no place; a refused or unresolvable
+    script host, or one of the scan blocklist, is checked and logged once;
+    past 20 refused hosts, no new host is resolved, and the target's own
+    scripts are still read;
+  - the scripts read are analysed when the scan ends on an error; a page
+    that cannot be read gives nothing.
 """
 from __future__ import annotations
 
@@ -244,3 +251,102 @@ def test_directly_the_root_request_sends_the_name_as_sni(monkeypatch, network, a
     https = [s for s in seen if s[1].startswith("https://")]
     assert https and all(s[1].startswith("https://93.184.216.34") and s[3] == "portal.medsecure.example"
                          for s in https)
+
+
+def _counting_lookup(monkeypatch, unresolvable=()):
+    looked_up: list[str] = []
+
+    def lookup(host, port=0, *a, **k):
+        looked_up.append(host)
+        if host in unresolvable:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_ADDRESSES.get(host, host), port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", lookup)
+    return looked_up
+
+
+def test_foreign_scripts_do_not_take_the_places_of_the_targets_own(monkeypatch, network):
+    network[1]["/app.js"] = f"var k = '{_KEY}';"
+    foreign = "".join(f'<script src="https://tracker.other.example/{n}.js"></script>' for n in range(25))
+    findings, scripts = _js(monkeypatch, network, foreign + '<script src="/app.js"></script>')
+    assert [s[1] for s in scripts] == ["https://93.184.216.34/app.js"]
+    assert len(findings) == 1
+
+
+def test_at_most_twenty_scripts_are_fetched(monkeypatch, network):
+    own = "".join(f'<script src="/{n}.js"></script>' for n in range(25))
+    _f, scripts = _js(monkeypatch, network, own)
+    assert [s[1] for s in scripts] == [f"https://93.184.216.34/{n}.js" for n in range(20)]
+
+
+def test_a_script_listed_twice_is_fetched_once(monkeypatch, network):
+    _f, scripts = _js(monkeypatch, network, '<script src="/app.js"></script>'
+                                            '<script src="https://portal.medsecure.example/app.js"></script>')
+    assert [s[1] for s in scripts] == ["https://93.184.216.34/app.js"]
+
+
+@pytest.mark.parametrize("host,unresolvable", [("internal.medsecure.example", ()),
+                                               ("gone.medsecure.example", ("gone.medsecure.example",))])
+def test_a_refused_script_host_is_checked_and_logged_once(monkeypatch, network, caplog, host, unresolvable):
+    # Blocked (loopback) or unresolvable: its scripts neither take the
+    # places of the others nor resolve it again, and the log names it once.
+    network[1]["/app.js"] = f"var k = '{_KEY}';"
+    looked_up = _counting_lookup(monkeypatch, unresolvable)
+    refused = "".join(f'<script src="https://{host}/{n}.js"></script>' for n in range(25))
+    with caplog.at_level("INFO", logger="surface.scanners"):
+        findings, scripts = _js(monkeypatch, network, refused + '<script src="/app.js"></script>')
+    assert [s[1] for s in scripts] == ["https://93.184.216.34/app.js"] and len(findings) == 1
+    assert looked_up.count(host) == 1
+    assert len([r for r in caplog.records if host in r.getMessage()]) == 1
+
+
+def test_the_scripts_read_are_analysed_when_the_scan_ends_on_an_error(monkeypatch, network):
+    network[1]["/app.js"] = f"var k = '{_KEY}';"
+
+    def fail(self, *exc):
+        raise RuntimeError("connection pool closed twice")
+
+    monkeypatch.setattr(httpx.Client, "__exit__", fail)
+    findings, _scripts = _js(monkeypatch, network, '<script src="/app.js"></script>')
+    assert [f["evidence"]["js_url"] for f in findings] == ["https://portal.medsecure.example/app.js"]
+
+
+def test_a_page_that_cannot_be_read_gives_nothing(monkeypatch, network):
+    _counting_lookup(monkeypatch)
+    monkeypatch.setattr(httpx.Client, "_init_transport", lambda self, **kw: httpx.MockTransport(
+        lambda request: (_ for _ in ()).throw(httpx.ConnectError("refused", request=request))))
+    seen, pages, _refuse, client = network
+    pages["/"] = '<script src="/app.js"></script>'
+    mod = load_core_addon("js_analysis")
+    monkeypatch.setattr(mod, "scan_client", client)
+    assert mod.scan_host_js_analysis("portal.medsecure.example") == []
+
+
+def test_at_most_twenty_refused_script_hosts_are_resolved(monkeypatch, network):
+    # A page listing many blocked hosts of its domain does not turn the scan
+    # into as many DNS lookups, and the target's own scripts after them are
+    # still read.
+    network[1]["/app.js"] = f"var k = '{_KEY}';"
+    looked_up = _counting_lookup(monkeypatch)
+    monkeypatch.setitem(_ADDRESSES, "portal.medsecure.example", "93.184.216.34")
+    for n in range(25):
+        monkeypatch.setitem(_ADDRESSES, f"in{n}.medsecure.example", "127.0.0.1")
+    blocked = "".join(f'<script src="https://in{n}.medsecure.example/x.js"></script>' for n in range(25))
+    findings, scripts = _js(monkeypatch, network, blocked + '<script src="/app.js"></script>')
+    assert [s[1] for s in scripts] == ["https://93.184.216.34/app.js"] and len(findings) == 1
+    assert len([h for h in looked_up if h.startswith("in")]) == 20
+
+
+@pytest.mark.parametrize("exclusion", ["cdn.medsecure.example", "93.184.216.40/32"])
+def test_a_script_host_of_the_scan_blocklist_is_not_contacted(monkeypatch, network, caplog, exclusion):
+    # Nor checked again for each of its scripts, which take no place.
+    monkeypatch.setattr(scan_common._EXCLUSIONS_CTX, "values", [exclusion], raising=False)
+    network[1]["/app.js"] = f"var k = '{_KEY}';"
+    looked_up = _counting_lookup(monkeypatch)
+    excluded = "".join(f'<script src="https://cdn.medsecure.example/{n}.js"></script>' for n in range(25))
+    with caplog.at_level("INFO", logger="surface.scanners"):
+        findings, scripts = _js(monkeypatch, network, excluded + '<script src="/app.js"></script>')
+    assert [s[1] for s in scripts] == ["https://93.184.216.34/app.js"] and len(findings) == 1
+    assert looked_up.count("cdn.medsecure.example") == 1
+    assert len([r for r in caplog.records if "cdn.medsecure.example" in r.getMessage()]) == 1

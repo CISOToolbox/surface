@@ -98,7 +98,7 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
             html = r.text or ""
             # Extract every script src
             src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
-            raw_urls = src_re.findall(html)[:_JS_MAX_FILES]
+            raw_urls = src_re.findall(html)
             # Relative URLs are the page's: resolved against its URL by name,
             # not the address it was fetched at.
             resolved = [urljoin(page_url, u) for u in raw_urls]
@@ -113,7 +113,15 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
             # the page's host, comes so). An address has no domain, only its
             # own scripts.
             target_reg = None if _is_ip_literal(name) else _registrable(name) or name
+            # The cap counts the scripts fetched: a foreign script, a refused
+            # host's or a duplicate takes no place. A refused host is checked
+            # once; past as many refused hosts as scripts, no new host is
+            # resolved, the hosts already open are still read.
+            fetched: set[str] = set()
+            refused: set[str] = set()
             for u in resolved:
+                if len(fetched) >= _JS_MAX_FILES:
+                    break
                 try:
                     parsed = urlparse(u)
                     port = parsed.port  # raises on an invalid port
@@ -122,16 +130,23 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
                         continue
                     if host != name and (target_reg is None or (_registrable(host) or host) != target_reg):
                         continue
+                    if u in fetched or host in refused:
+                        continue
                     # Resolved once per host: its client's routing and the
                     # URL rest on the same address.
                     if host not in clients:
-                        ip = _resolve_safe_target(host)[0]
-                        # The run's scan blocklist, as for a redirect hop.
-                        if _excluded_host(host, ip):
-                            logger.info("scan of %s: scripts of %s not fetched (host in the scan blocklist)",
-                                        target, host)
+                        if len(refused) >= _JS_MAX_FILES:
+                            continue
+                        try:
+                            ip = _resolve_safe_target(host)[0]
+                            if _excluded_host(host, ip):
+                                raise ValueError("host in the scan blocklist")
+                        except ValueError as e:
+                            refused.add(host)
+                            logger.info("scan of %s: scripts of %s not fetched (%s)", target, host, e)
                             continue
                         clients[host] = (stack.enter_context(open_client(host, ip)), ip)
+                    fetched.add(u)
                     host_client, ip = clients[host]
                     script_base, headers, ext = target_request(host, ip, parsed.scheme, port)
                     path = ((parsed.path or "/") + (f";{parsed.params}" if parsed.params else "")
@@ -152,8 +167,9 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
                     js_bodies.append((u, body))
                 except Exception:
                     continue
-    except Exception:
-        return []
+    except Exception as e:
+        # The scripts read until then are still analysed.
+        logger.info("scan of %s: JavaScript analysis stopped (%s: %s)", target, type(e).__name__, e)
 
     findings: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
