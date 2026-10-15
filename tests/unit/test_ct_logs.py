@@ -7,7 +7,12 @@ Offline: crt.sh is replaced by a fake keyed on the query string. Locks:
 - an older certificate, or no typosquatting finding, yields nothing;
 - lookalikes never reach `discovered` (no auto-enrolment of attacker domains);
 - the dispatcher runs typosquatting before ct_logs whatever the asset order,
-  and passes (value, prior_findings, config) to a scanner declaring both.
+  and passes (value, prior_findings, config) to a scanner declaring both;
+- BUG-103: a flagged lookalike whose certificates could not be checked
+  (crt.sh failing on both queries or on one, watch stopped after repeated
+  failures, time budget spent, over the per-scan cap) is named, with the
+  cause, in one info finding ``ct_lookalikes_not_checked`` — never a scan
+  that reads clean.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -157,8 +162,8 @@ def test_an_outage_counts_only_when_neither_query_answered(monkeypatch):
         return None, ValueError("too large")
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", refused_then_down)
-    certs, err = ct._lookalike_certs("acme.example.net")
-    assert certs == {} and isinstance(err, httpx.HTTPError)
+    certs, err, partial = ct._lookalike_certs("acme.example.net")
+    assert certs == {} and isinstance(err, httpx.HTTPError) and partial is None
 
     def down_then_answered(query, timeouts, max_bytes):
         if query.startswith("%25."):
@@ -166,8 +171,8 @@ def test_an_outage_counts_only_when_neither_query_answered(monkeypatch):
         return None, httpx.ConnectError("down")
 
     monkeypatch.setattr(ct, "_fetch_crt_sh", down_then_answered)
-    certs, err = ct._lookalike_certs("acme.example.net")
-    assert certs == {} and err is None
+    certs, err, partial = ct._lookalike_certs("acme.example.net")
+    assert certs == {} and err is None and isinstance(partial, httpx.HTTPError)
 
 
 def test_window_days_is_clamped():
@@ -205,3 +210,166 @@ def test_dispatcher_passes_prior_findings_and_config(monkeypatch):
                                   config={"ct_typosquat_window_days": 7})
     assert [f["target"] for f in seen["prior"]] == ["acme.example.net"]
     assert seen["config"] == {"ct_typosquat_window_days": 7}
+
+
+def _not_checked(findings):
+    return [f for f in findings if f["type"] == "ct_lookalikes_not_checked"]
+
+
+def _crt(monkeypatch, fake):
+    monkeypatch.setattr(ct, "_fetch_crt_sh", fake)
+    monkeypatch.setattr(ct.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ct, "_safe_name", lambda d: d)
+
+
+def _bad_gateway(query):
+    request = httpx.Request("GET", f"https://crt.sh/?q={query}")
+    return httpx.HTTPStatusError("502 Bad Gateway", request=request,
+                                 response=httpx.Response(502, request=request))
+
+
+def test_a_crt_sh_outage_names_every_lookalike_not_checked(monkeypatch):
+    # The case seen: crt.sh answers 502, the watch stops after three
+    # lookalikes; the others were never asked about.
+    _crt(monkeypatch, lambda q, t, m: (None, _bad_gateway(q)))
+    prior = [_typo(f"acme{i}.example.net") for i in range(6)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    (nc,) = _not_checked(findings)
+    assert nc["scanner"] == "ct_logs" and nc["severity"] == "info" and nc["target"] == "acme.example"
+    ev = nc["evidence"]
+    assert ev["original"] == "acme.example"
+    assert ev["lookalikes"] == [f"acme{i}.example.net" for i in range(6)]
+    assert ev["causes"] == ["crt.sh answered HTTP 502",
+                            f"watch stopped after {ct._MAX_LOOKALIKE_FAILURES} crt.sh outages"]
+    lines = nc["description"].split("\n")
+    assert "- acme2.example.net: crt.sh answered HTTP 502" in lines
+    assert f"- acme3.example.net: watch stopped after {ct._MAX_LOOKALIKE_FAILURES} crt.sh outages" in lines
+    # The UI templates get each lookalike with its own cause.
+    assert ev["checks"][2] == "acme2.example.net: crt.sh answered HTTP 502"
+    assert ev["checks"][3] == f"acme3.example.net: watch stopped after {ct._MAX_LOOKALIKE_FAILURES} crt.sh outages"
+
+
+def test_an_unreachable_crt_sh_is_named_as_such(monkeypatch):
+    _crt(monkeypatch, lambda q, t, m: ([], None) if q == "%25.acme.example"
+         else (None, httpx.ConnectTimeout("timeout")))
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    assert _not_checked(findings)[0]["evidence"]["causes"] == ["crt.sh unreachable (ConnectTimeout)"]
+
+
+def test_a_lookalike_with_one_query_failed_is_not_checked(monkeypatch):
+    # The subdomain query is the one that finds test.<lookalike>: its
+    # failure is not covered by the exact one answering.
+    def fake(query, timeouts, max_bytes):
+        if query == "%25.acme.example.net":
+            return None, _bad_gateway(query)
+        return [], None
+
+    _crt(monkeypatch, fake)
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == ["acme.example.net"]
+    assert ev["causes"] == ["crt.sh answered HTTP 502 on one of its two queries"]
+
+
+def test_certificates_found_on_a_partly_checked_lookalike_are_kept(monkeypatch):
+    def fake(query, timeouts, max_bytes):
+        if query == "acme.example.net":
+            return [_row("0a1b", "acme.example.net", 2)], None
+        if query == "%25.acme.example.net":
+            return None, httpx.ConnectError("down")
+        return [], None
+
+    _crt(monkeypatch, fake)
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    assert [f["target"] for f in _certs(findings)] == ["acme.example.net#0a1b"]
+    assert _not_checked(findings)[0]["evidence"]["lookalikes"] == ["acme.example.net"]
+
+
+def test_an_oversized_lookalike_is_named_and_the_others_are_not(monkeypatch):
+    def fake(query, timeouts, max_bytes):
+        if query.endswith("acme0.example.net"):
+            return None, ValueError("crt.sh response exceeded 5242880 bytes")
+        return [], None
+
+    _crt(monkeypatch, fake)
+    prior = [_typo(f"acme{i}.example.net") for i in range(3)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == ["acme0.example.net"]
+    assert ev["causes"] == ["crt.sh answer refused (crt.sh response exceeded 5242880 bytes)"]
+
+
+def test_a_json_answer_that_is_not_a_list_is_not_a_check(monkeypatch):
+    # crt.sh answering an error or a rate limit as a JSON object: nothing
+    # was read, on both queries or on one.
+    _crt(monkeypatch, lambda q, t, m: ([], None) if q == "%25.acme.example"
+         else ({"error": "rate limited"}, None))
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == ["acme.example.net"]
+    assert ev["causes"] == ["crt.sh answer refused (not a list)"]
+
+    _crt(monkeypatch, lambda q, t, m: ({"error": "rate limited"}, None) if q == "%25.acme.example.net"
+         else ([], None))
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    assert _not_checked(findings)[0]["evidence"]["causes"] == [
+        "crt.sh answer refused (not a list) on one of its two queries"]
+
+
+def test_a_refused_answer_between_outages_does_not_reset_the_count(monkeypatch):
+    # outage, outage, JSON object, outage: three outages, the watch stops.
+    def fake(query, timeouts, max_bytes):
+        if query == "%25.acme.example":
+            return [], None
+        if query.endswith("acme2.example.net"):
+            return {"error": "rate limited"}, None
+        return None, httpx.ConnectError("down")
+
+    _crt(monkeypatch, fake)
+    prior = [_typo(f"acme{i}.example.net") for i in range(6)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    ev = _not_checked(findings)[0]["evidence"]
+    stopped = f"watch stopped after {ct._MAX_LOOKALIKE_FAILURES} crt.sh outages"
+    assert ev["checks"] == ["acme0.example.net: crt.sh unreachable (ConnectError)",
+                            "acme1.example.net: crt.sh unreachable (ConnectError)",
+                            "acme2.example.net: crt.sh answer refused (not a list)",
+                            "acme3.example.net: crt.sh unreachable (ConnectError)",
+                            f"acme4.example.net: {stopped}", f"acme5.example.net: {stopped}"]
+
+
+def test_a_spent_time_budget_names_the_lookalikes_left(monkeypatch):
+    _crt(monkeypatch, lambda q, t, m: ([], None))
+    monkeypatch.setattr(ct, "_LOOKALIKE_BUDGET_S", -1.0)
+    prior = [_typo(f"acme{i}.example.net") for i in range(2)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == ["acme0.example.net", "acme1.example.net"]
+    assert ev["causes"] == ["watch time budget spent"]
+
+
+def test_a_budget_spent_midway_names_only_the_lookalikes_left(monkeypatch):
+    _crt(monkeypatch, lambda q, t, m: ([], None))
+    clock = iter([0.0, 0.0, 0.0] + [1e9] * 10)   # deadline, then the first two checks in time
+    monkeypatch.setattr(ct, "time", type("T", (), {"sleep": staticmethod(lambda s: None),
+                                                    "monotonic": staticmethod(lambda: next(clock))}))
+    prior = [_typo(f"acme{i}.example.net") for i in range(4)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == ["acme2.example.net", "acme3.example.net"]
+
+
+def test_lookalikes_over_the_cap_are_named(monkeypatch):
+    _crt(monkeypatch, lambda q, t, m: ([], None))
+    prior = [_typo(f"acme{i}.example.net") for i in range(ct._MAX_LOOKALIKES + 2)]
+    findings, _ = ct.scan_domain_ct_logs("acme.example", prior, {})
+    ev = _not_checked(findings)[0]["evidence"]
+    assert ev["lookalikes"] == [f"acme{i}.example.net" for i in range(ct._MAX_LOOKALIKES, ct._MAX_LOOKALIKES + 2)]
+    assert ev["causes"] == [f"over the {ct._MAX_LOOKALIKES} lookalikes checked per scan"]
+
+
+def test_every_lookalike_checked_gives_no_not_checked_finding(monkeypatch):
+    _fake_crt(monkeypatch, {"acme.example.net": [_row("0a1b", "acme.example.net", 3)]})
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [_typo("acme.example.net")], {})
+    assert _not_checked(findings) == [] and len(_certs(findings)) == 1
+    findings, _ = ct.scan_domain_ct_logs("acme.example", [], {})
+    assert _not_checked(findings) == []

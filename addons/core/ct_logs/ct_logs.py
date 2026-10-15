@@ -5,6 +5,8 @@ Two passive uses of crt.sh, no API key:
   • certificates issued on the lookalike domains the typosquatting scanner
     flagged in the same scan (``ct_typosquat_cert``, FEAT-55) — a fresh
     certificate on a lookalike is a strong phishing-preparation signal.
+    The lookalikes whose certificates could not be checked are named, with
+    the cause, in one ``ct_lookalikes_not_checked`` info finding.
 
 Config (per monitored asset, ``asset.config``):
   ct_typosquat_window_days (int, def 30) — a lookalike certificate raises a
@@ -207,7 +209,7 @@ def _names_in_scope(name_value: str, lookalike: str) -> list[str]:
     return sorted(out)
 
 
-def _lookalike_certs(lookalike: str) -> tuple[dict[str, dict[str, Any]], Exception | None]:
+def _lookalike_certs(lookalike: str) -> tuple[dict[str, dict[str, Any]], Exception | None, Exception | None]:
     """Certificates naming ``lookalike`` or one of its subdomains, by serial.
 
     Two queries: crt.sh's exact identity match misses subdomain-only
@@ -216,8 +218,10 @@ def _lookalike_certs(lookalike: str) -> tuple[dict[str, dict[str, Any]], Excepti
     a serial number, so keying by serial yields one entry per issued
     certificate.
 
-    The error is returned only when neither query was answered, preferring a
-    network/HTTP error (an outage) over a refused answer."""
+    Returns ``(certs, error, partial)``. The error is returned only when
+    neither query was answered, preferring a network/HTTP error (an outage)
+    over a refused answer; ``partial`` is the error of a query that failed
+    while the other answered (the certificates it alone finds are missing)."""
     import httpx
 
     certs: dict[str, dict[str, Any]] = {}
@@ -226,13 +230,14 @@ def _lookalike_certs(lookalike: str) -> tuple[dict[str, dict[str, Any]], Excepti
     for q in (quote(lookalike, safe=""), "%25." + quote(lookalike, safe="")):
         data, err = _fetch_crt_sh(q, _LOOKALIKE_TIMEOUTS, _LOOKALIKE_MAX_BYTES)
         time.sleep(0.3)  # throttle crt.sh
+        if data is not None and not isinstance(data, list):
+            # An error or a rate limit answered as a JSON object: nothing read.
+            data, err = None, ValueError("not a list")
         if data is None:
             if error is None or isinstance(err, httpx.HTTPError):
                 error = err
             continue
         answered = True
-        if not isinstance(data, list):
-            continue
         for row in data[:_CT_MAX_ROWS]:
             if not isinstance(row, dict):
                 continue
@@ -245,13 +250,26 @@ def _lookalike_certs(lookalike: str) -> tuple[dict[str, dict[str, Any]], Excepti
                 certs[serial] = dict(row, _names=names)
             else:
                 cur["_names"] = sorted(set(cur["_names"]) | set(names))
-    return certs, (None if answered else error)
+    return certs, (None if answered else error), (error if answered else None)
+
+
+def _crt_sh_cause(error: Exception) -> str:
+    """Why crt.sh gave no answer, for the ``ct_lookalikes_not_checked`` finding."""
+    import httpx
+
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"crt.sh answered HTTP {error.response.status_code}"
+    if isinstance(error, httpx.HTTPError):
+        return f"crt.sh unreachable ({type(error).__name__})"
+    return f"crt.sh answer refused ({error})"
 
 
 def _lookalike_cert_findings(domain: str, prior_findings: list[dict[str, Any]],
                              config: dict) -> list[dict[str, Any]]:
     """One ``ct_typosquat_cert`` finding per certificate issued on a flagged
-    lookalike within the window.
+    lookalike within the window, and one ``ct_lookalikes_not_checked`` info
+    finding naming the lookalikes whose certificates could not be checked,
+    with the causes — or the scan would read as a clean one.
 
     ``target`` = ``<lookalike>#<serial>``: the dedup key is per certificate, so
     each new certificate is inserted — and alerted — once; the same
@@ -266,15 +284,19 @@ def _lookalike_cert_findings(domain: str, prior_findings: list[dict[str, Any]],
     days = _window_days(config)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     findings: list[dict[str, Any]] = []
+    # {lookalike: cause}, in the lookalikes' order.
+    not_checked: dict[str, str] = {}
     failures = 0
     deadline = time.monotonic() + _LOOKALIKE_BUDGET_S
-    for lookalike in lookalikes[:_MAX_LOOKALIKES]:
+    for i, lookalike in enumerate(lookalikes[:_MAX_LOOKALIKES]):
         if time.monotonic() > deadline:
             logger.info("ct_logs: lookalike watch budget spent for %s, stopped at %s", domain, lookalike)
+            not_checked.update((rest, "watch time budget spent") for rest in lookalikes[i:_MAX_LOOKALIKES])
             break
-        certs, error = _lookalike_certs(lookalike)
+        certs, error, partial = _lookalike_certs(lookalike)
         if error is not None and not certs:
             logger.info("ct_logs: crt.sh failed for lookalike %s: %s", lookalike, error)
+            not_checked[lookalike] = _crt_sh_cause(error)
             # Only an outage (network or HTTP error) counts towards giving up:
             # one oversized lookalike (a popular real domain) must not stop
             # the watch of the others.
@@ -282,8 +304,14 @@ def _lookalike_cert_findings(domain: str, prior_findings: list[dict[str, Any]],
                 failures += 1
                 if failures >= _MAX_LOOKALIKE_FAILURES:
                     logger.info("ct_logs: crt.sh failing, lookalike watch stopped for %s", domain)
+                    not_checked.update(
+                        (rest, f"watch stopped after {_MAX_LOOKALIKE_FAILURES} crt.sh outages")
+                        for rest in lookalikes[i + 1:_MAX_LOOKALIKES])
                     break
             continue
+        if partial is not None:
+            logger.info("ct_logs: crt.sh failed on one query for lookalike %s: %s", lookalike, partial)
+            not_checked[lookalike] = _crt_sh_cause(partial) + " on one of its two queries"
         failures = 0
         for serial, row in sorted(certs.items()):
             nb = _parse_ts(row.get("not_before"))
@@ -319,6 +347,25 @@ def _lookalike_cert_findings(domain: str, prior_findings: list[dict[str, Any]],
     if len(lookalikes) > _MAX_LOOKALIKES:
         logger.info("ct_logs: %d lookalikes for %s, only the first %d checked",
                     len(lookalikes), domain, _MAX_LOOKALIKES)
+        not_checked.update((rest, f"over the {_MAX_LOOKALIKES} lookalikes checked per scan")
+                           for rest in lookalikes[_MAX_LOOKALIKES:])
+    if not_checked:
+        causes = list(dict.fromkeys(not_checked.values()))
+        findings.append({
+            "scanner": "ct_logs", "type": "ct_lookalikes_not_checked", "severity": "info",
+            "title": f"Certificates of {len(not_checked)} lookalike(s) of {domain} not checked",
+            "description": (
+                f"The certificates issued on these lookalikes of {domain}, flagged by the "
+                f"typosquatting scanner, could not be checked in Certificate Transparency:\n"
+                + "\n".join(f"- {name}: {cause}" for name, cause in not_checked.items())
+                + "\nScan again later."
+            ),
+            "target": domain,
+            # checks: each lookalike with its own cause, for the UI templates.
+            "evidence": {"original": domain, "lookalikes": list(not_checked), "causes": causes,
+                         "checks": [f"{name}: {cause}" for name, cause in not_checked.items()],
+                         "source": "crt.sh"},
+        })
     return findings
 
 

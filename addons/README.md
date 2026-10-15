@@ -87,7 +87,10 @@ is `[]`, a query that fails (timeout, no nameserver answering) raises.
 (a dangling CNAME), and says when it could not check a service: no page to
 look for its fingerprint in (no address, or neither scheme answered), or
 the NXDOMAIN query of the CNAME target failed (`takeover_not_checked`). A
-CNAME query that fails is an error.
+CNAME query that fails is an error. `ct_logs` names, with the cause, the
+flagged lookalikes whose certificates it could not check (crt.sh failing on
+either query, watch stopped after repeated failures, time budget spent,
+over the per-scan cap) in one info finding `ct_lookalikes_not_checked`.
 
 A scanner returns a `list[dict]` of findings (or `(findings, discovered)` when
 `returns_discovered`). Each finding dict: `scanner, type, severity, title,

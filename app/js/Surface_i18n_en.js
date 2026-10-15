@@ -502,6 +502,8 @@ if (typeof _registerTranslations === "function") {
         "finding.ct_error.desc": "The crt.sh request failed. crt.sh is sometimes slow or intermittently unavailable — try again later.",
         "finding.ct_typosquat_cert.title": "Certificate issued on lookalike domain {lookalike}",
         "finding.ct_typosquat_cert.desc": "A certificate was issued on {issued_on} for {names_list}, a lookalike of {original} flagged by the typosquatting scanner (issuer: {issuer}). Risk: a valid certificate is usually the last step before a phishing site or a brand-impersonation campaign goes live.",
+        "finding.ct_lookalikes_not_checked.title": "Certificates of lookalikes of {original} not checked",
+        "finding.ct_lookalikes_not_checked.desc": "The certificates issued on these lookalikes of {original}, flagged by the typosquatting scanner, could not be checked in Certificate Transparency: {checks_list}. Scan again later.",
         "finding.host_discovered.title": "New host discovered on {cidr}: {address}",
         "finding.host_discovered.desc": "A host is reachable at {address}. It has been added to the monitored hosts.",
         "finding.discovery_summary.title": "Discovery on {cidr}: {discovered_count} active host(s)",
