@@ -77,22 +77,29 @@ def smtp_deliver(
 
 
 def resolve_pushed_config(pushed: dict | None, default_from: str) -> dict:
-    """Resolve SMTP config from a Pilot in-memory push dict, then env vars.
+    """Resolve SMTP config from the module's in-memory dict, else env vars.
 
-    Used by Watch and Asset. ``pushed`` is their module-level ``_smtp_config``
-    (may be ``None``/empty). Returns host, port (int), user, password,
+    ``pushed`` is the module-level ``_smtp_config`` — what Pilot pushed or the
+    module's own settings saved (may be ``None``/empty). Resolved field by
+    field: a value in the dict wins, a missing one falls back to its ``SMTP_*``
+    variable — except the credentials: ``SMTP_USER`` / ``SMTP_PASSWORD`` are
+    only used with the ``SMTP_HOST`` they were set for, never sent to a host
+    that came from the dict. Returns host, port (int), user, password,
     from_addr, tls (bool). Empty host means "not configured" — the caller
     short-circuits.
     """
     pushed = pushed or {}
+    host_from_env = pushed.get("host") in (None, "")
 
-    def _pick(push_key: str, env_key: str, default: str = "") -> str:
+    def _pick(push_key: str, env_key: str, default: str = "", credential: bool = False) -> str:
         v = pushed.get(push_key)
         if v not in (None, ""):
             return str(v)
+        if credential and not host_from_env:
+            return default
         return os.getenv(env_key, default) or default
 
-    user = _pick("user", "SMTP_USER", "")
+    user = _pick("user", "SMTP_USER", "", credential=True)
     port_raw = _pick("port", "SMTP_PORT", "587")
     try:
         port = int(str(port_raw).strip() or "587")
@@ -103,14 +110,15 @@ def resolve_pushed_config(pushed: dict | None, default_from: str) -> dict:
         "host": _pick("host", "SMTP_HOST", ""),
         "port": port,
         "user": user,
-        "password": _pick("password", "SMTP_PASSWORD", ""),
+        "password": _pick("password", "SMTP_PASSWORD", "", credential=True),
         "from_addr": _pick("from_addr", "SMTP_FROM", user or default_from),
         "tls": str(tls_raw).strip().lower() in ("1", "true", "yes", "on"),
     }
 
 
 def send_html_email(cfg: dict, to: str, subject: str, html: str,
-                    timeout: int = 30) -> tuple[bool, str]:
+                    timeout: int = 30,
+                    host_validator: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """Build an HTML ``EmailMessage`` from a resolved ``cfg`` and send it.
 
     Returns ``(ok, error_message)``. ``(False, "smtp_not_configured")`` when
@@ -131,6 +139,7 @@ def send_html_email(cfg: dict, to: str, subject: str, html: str,
             username=cfg.get("user", ""), password=cfg.get("password", ""),
             sender=cfg["from_addr"], recipients=[to],
             raw_message=msg.as_string(), timeout=timeout,
+            host_validator=host_validator,
         )
         return True, ""
     except Exception as e:
