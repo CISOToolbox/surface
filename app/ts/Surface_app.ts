@@ -66,9 +66,11 @@ window.AI_APP_CONFIG = {
                 section(nucleiTitle, nucleiBody) +
                 section(shodanTitle, shodanBody) +
                 section(smtpTitle,   smtpBody) +
+                (window._ctProxySettingsBody ? section(tt("settings.proxy.title"), window._ctProxySettingsBody()) : "") +
             '</div>'
         );
     },
+    onSettingsRendered: function() { if (window._ctProxySettingsLoad) window._ctProxySettingsLoad(); },
     onSettingsSaved: function() {
         // Nuclei & Shodan have their own save buttons; nothing on the shared path.
     }

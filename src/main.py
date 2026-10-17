@@ -121,6 +121,8 @@ from src.routes.notifications import router as notifications_router
 app.include_router(notifications_router)
 from src.routes.nonconformities import router as nonconformities_router, internal_router as nonconformities_internal_router  # FEAT-45
 app.include_router(nonconformities_router)
+from src.proxy_settings_common import router as proxy_settings_router  # noqa: E402 — FEAT-58
+app.include_router(proxy_settings_router)
 if nonconformities_internal_router is not None:
     app.include_router(nonconformities_internal_router)
 if internal_router is not None:
