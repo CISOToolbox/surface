@@ -390,54 +390,6 @@
     gap: 4px;
 }
 /* v0.3 — Settings panel accordion */
-.surface-settings-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    margin-top: 16px;
-}
-.surface-settings-accordion {
-    border-top: 1px solid var(--ct-line);
-    padding: 4px 0;
-}
-.surface-settings-accordion[open] {
-    padding-bottom: 12px;
-}
-.surface-settings-summary {
-    cursor: pointer;
-    list-style: none;
-    padding: 12px 4px;
-    font-size: 0.9em;
-    font-weight: 600;
-    color: var(--ct-ink);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    user-select: none;
-}
-.surface-settings-summary::-webkit-details-marker { display: none; }
-.surface-settings-summary::marker { content: ""; }
-.surface-settings-summary:hover { color: var(--ct-ink); }
-.surface-settings-chevron {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.15s;
-    color: var(--ct-ink-2);
-    font-size: 1.3em;
-    line-height: 1;
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-}
-.surface-settings-accordion[open] .surface-settings-chevron {
-    transform: rotate(90deg);
-    color: var(--ct-ink);
-}
-.surface-settings-body {
-    padding: 4px 4px 4px 20px;
-    font-size: 0.85em;
-}
 .surface-settings-inner {
     font-size: inherit;
 }

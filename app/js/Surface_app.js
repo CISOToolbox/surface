@@ -26,7 +26,8 @@ window.AI_APP_CONFIG = {
         catch (e) { }
         var zones = (window._TZ_OPTIONS_GLOBAL || [""]);
         var tzBrowser = tt("tz.browser") || "Auto (browser)";
-        var tzHtml = '<select id="surface-tz-select" class="surface-settings-input" data-change="_onTimezoneChange" data-pass-value>';
+        // Applied at once, kept in this browser: nothing for Save to do.
+        var tzHtml = '<select id="surface-tz-select" class="surface-settings-input" data-settings-immediate data-change="_onTimezoneChange" data-pass-value>';
         zones.forEach(function (z) {
             var lbl = z === "" ? (tzBrowser + (browserTz ? " — " + browserTz : "")) : z;
             var sel = (z === currentTz) ? " selected" : "";
@@ -39,39 +40,33 @@ window.AI_APP_CONFIG = {
         var nucleiTitle = tt("nuclei.section") || "Nuclei (DAST scanner)";
         var shodanTitle = tt("shodan.section") || "Shodan API";
         var smtpTitle = tt("smtp.section") || "Email digest (SMTP)";
-        // Small helper: accordion wrapper. `name="surface-settings"` on
-        // every <details> gives us the native exclusive-accordion behaviour
-        // — opening one auto-closes any other one in the same group.
-        function section(title, body, open) {
-            return ('<details class="surface-settings-accordion" name="surface-settings"' + (open ? " open" : "") + '>' +
-                '<summary class="surface-settings-summary">' +
-                '<span class="surface-settings-chevron">▸</span>' +
-                '<span>' + title + '</span>' +
-                '</summary>' +
-                '<div class="surface-settings-body">' + body + '</div>' +
-                '</details>');
+        // A plain settings section: the shared panel turns each one into an
+        // accordion item and saves the registered ones with its Save button.
+        function section(title, body) {
+            return '<div class="settings-section"><div class="settings-label">' + esc(title) + '</div>' + body + '</div>';
         }
-        // Nuclei / Shodan / GitHub / SMTP all render via async JS in
-        // their own container div. `_surfaceWireSettings()` is called
-        // after the panel is inserted so each accordion hydrates lazily
-        // when the user expands it.
+        // Nuclei / Shodan / SMTP render via async JS in their own container
+        // div, wired after the panel is inserted (see openSettings below).
+        if (window._ctSettingsRegister) {
+            window._ctSettingsRegister({ id: "surface-nuclei", holder: "surface-nuclei-section", save: function () { return window._surfaceSaveNuclei(); } });
+            window._ctSettingsRegister({ id: "surface-shodan", holder: "surface-shodan-section", save: function () { return window._surfaceSaveShodan(); } });
+            window._ctSettingsRegister({ id: "surface-smtp", holder: "surface-smtp-section", save: function () { return window._surfaceSaveSmtp(); } });
+        }
         var nucleiBody = '<div id="surface-nuclei-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
         var shodanBody = '<div id="surface-shodan-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
         var smtpBody = '<div id="surface-smtp-section"   class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
-        return ('<div class="surface-settings-wrap">' +
-            section(tzTitle, tzHtml) +
+        return (section(tzTitle, tzHtml) +
             section(nucleiTitle, nucleiBody) +
             section(shodanTitle, shodanBody) +
             section(smtpTitle, smtpBody) +
             (window._ctProxySettingsBody ? section(tt("settings.proxy.title"), window._ctProxySettingsBody()) : "") +
-            (window._ctUsersSettingsBody ? section(tt("settings.users.title"), window._ctUsersSettingsBody()) : "") +
-            '</div>');
+            (window._ctUsersSettingsBody ? section(tt("settings.users.title"), window._ctUsersSettingsBody()) : ""));
     },
     onSettingsRendered: function () { if (window._ctProxySettingsLoad)
         window._ctProxySettingsLoad(); if (window._ctUsersSettingsLoad)
         window._ctUsersSettingsLoad(); },
     onSettingsSaved: function () {
-        // Nuclei & Shodan have their own save buttons; nothing on the shared path.
+        // Nuclei, Shodan and mail are registered sections; nothing on the shared path.
     }
 };
 // _ASSET_BASE is defined in Surface_config.js, loaded before i18n.js.
@@ -4807,8 +4802,7 @@ window.AI_APP_CONFIG = {
         h += numField("timeout", "nuclei.form.timeout", "nuclei.form.timeout_h");
         h += numField("retries", "nuclei.form.retries", "nuclei.form.retries_h");
         h += '<div class="ct-flex ct-gap-2 ct-mt-3 ct-row-wrap">';
-        h += '<button class="ct-btn ai-btn-accept ct-flex-1" data-variant="primary" id="nuclei-save-btn" data-click="_nucleiSaveTuning">' + esc(t("nuclei.save_btn")) + '</button>';
-        h += '<button class="ct-btn ai-btn-close" id="nuclei-reset-btn" data-click="_nucleiResetTuning" title="' + esc(t("nuclei.save_btn")) + '" data-size="xs" data-icon>' + _icon("refresh", 14) + '</button>';
+        h += '<button class="ct-btn ai-btn-close" id="nuclei-reset-btn" data-click="_nucleiResetTuning" title="' + esc(t("nuclei.reset_btn")) + '" data-size="xs" data-icon>' + _icon("refresh", 14) + '</button>';
         h += '</div>';
         h += '<div style="border-top:1px solid var(--ct-line);margin:var(--ct-s3) 0;padding-top:10px">';
         if (cfg.templates_updatable === false) {
@@ -4829,31 +4823,24 @@ window.AI_APP_CONFIG = {
             if (el && defaults[k] != null)
                 el.value = String(defaults[k]);
         });
+        // Set by code: no input event marks the section for Save.
+        if (window._ctSettingsMark)
+            window._ctSettingsMark("surface-nuclei");
     };
-    window._nucleiSaveTuning = function () {
-        var btn = document.getElementById("nuclei-save-btn");
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = "...";
-        }
+    /** Saved by the settings panel's Save button: null when saved, else the error. */
+    window._surfaceSaveNuclei = function () {
         var payload = {};
         ["rate_limit", "concurrency", "bulk_size", "timeout", "retries"].forEach(function (k) {
             var el = document.getElementById("nuclei-" + k);
             if (el && el.value !== "")
                 payload[k] = parseInt(el.value, 10);
         });
-        SurfaceAPI.nucleiUpdateConfig(payload).then(function (r) {
-            showStatus(t("nuclei.saved"));
+        return SurfaceAPI.nucleiUpdateConfig(payload).then(function () {
             var holder = document.getElementById("surface-nuclei-section");
             if (holder)
                 SurfaceAPI.nucleiConfig().then(function (cfg) { _renderNucleiFormInto(holder, cfg); });
-        }).catch(function (e) {
-            showStatus(e.message || t("nuclei.save_error"), true);
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = t("nuclei.save_btn");
-            }
-        });
+            return null;
+        }).catch(function (e) { return e.message || t("nuclei.save_error"); });
     };
     window._nucleiUpdateTemplates = function () {
         var btn = document.getElementById("nuclei-update-btn");
@@ -4923,10 +4910,6 @@ window.AI_APP_CONFIG = {
                 setTimeout(_surfaceWireNucleiSection, 0);
                 setTimeout(_surfaceWireShodanSection, 0);
                 setTimeout(_surfaceWireSmtpSection, 0);
-                // Wrap the ai_common.js sections (Language, Assistant IA) in
-                // the same accordion style as our extra sections so the whole
-                // panel reads consistently.
-                setTimeout(_wrapSharedSettingsSections, 0);
                 return r;
             };
         }
@@ -5004,7 +4987,6 @@ window.AI_APP_CONFIG = {
             '<div class="ct-text-label ct-muted ct-mt-1">' + esc(tt("shodan.key_help")) + '</div>' +
             '</div>' +
             '<div class="ct-flex ct-gap-2 ct-mt-2">' +
-            '<button class="ct-btn ai-btn-accept ct-flex-1" data-variant="primary" id="shodan-save-btn">' + _icon("check", 14) + ' ' + esc(tt("shodan.save")) + '</button>' +
             '<button class="ct-btn ai-btn-close" id="shodan-cancel-btn">' + _icon("x", 14) + ' ' + esc(tt("action.cancel")) + '</button>' +
             '</div>' +
             '<div id="shodan-save-result" class="ct-mt-2 ct-text-label"></div>';
@@ -5021,92 +5003,34 @@ window.AI_APP_CONFIG = {
         }, 50);
     }
     function _wireShodanInputHandlers() {
-        var saveBtn = document.getElementById("shodan-save-btn");
         var cancelBtn = document.getElementById("shodan-cancel-btn");
-        if (saveBtn)
-            saveBtn.onclick = _shodanSaveKey;
         if (cancelBtn)
-            cancelBtn.onclick = _surfaceWireShodanSection;
-        var inp = document.getElementById("shodan-key-input");
-        if (inp)
-            inp.onkeydown = function (e) {
-                if (e.key === "Enter") {
-                    e.preventDefault();
-                    _shodanSaveKey();
-                }
+            cancelBtn.onclick = function () {
+                // The edit is given up: nothing left to save in this section.
+                if (window._ctSettingsMark)
+                    window._ctSettingsMark("surface-shodan", false);
+                _surfaceWireShodanSection();
             };
     }
-    function _shodanSaveKey() {
+    /** Saved by the settings panel's Save button (the key is tested before it
+     *  is kept): null when saved or the field left empty, else the error. */
+    window._surfaceSaveShodan = function () {
         var inp = document.getElementById("shodan-key-input");
-        if (!inp)
-            return;
-        var key = (inp.value || "").trim();
-        var saveBtn = document.getElementById("shodan-save-btn");
+        var key = inp ? (inp.value || "").trim() : "";
+        if (!key)
+            return Promise.resolve(null);
         var res = document.getElementById("shodan-save-result");
-        if (!key) {
-            if (res)
-                res.innerHTML = '<div class="ct-text-critical">' + esc(t("shodan.key_required")) + '</div>';
-            return;
-        }
-        if (saveBtn) {
-            saveBtn.disabled = true;
-            saveBtn.textContent = "...";
-        }
         if (res)
             res.innerHTML = '<div class="ct-muted">' + esc(t("shodan.testing")) + '</div>';
-        SurfaceAPI.shodanSaveKey(key).then(function (r) {
-            showStatus(t("shodan.saved"));
+        return SurfaceAPI.shodanSaveKey(key).then(function () {
             _surfaceWireShodanSection();
+            return null;
         }).catch(function (e) {
             if (res)
-                res.innerHTML = '<div class="ct-text-critical">' + esc(e.message || t("common.error")) + '</div>';
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.textContent = t("shodan.save");
-            }
+                res.innerHTML = "";
+            return e.message || t("common.error");
         });
-    }
-    // Convert each top-level .settings-section produced by ai_common.js
-    // (Language, Assistant IA, Demo when visible) into a <details> accordion
-    // matching the style we use for our own extra sections. Collapsed by
-    // default so the panel opens clean.
-    function _wrapSharedSettingsSections() {
-        // ai_common.js creates <div class="ai-panel"> with a nested
-        // .ai-panel-body where the HTML ends up. Both are CLASSES, not ids.
-        var panel = document.querySelector(".ai-panel .ai-panel-body");
-        if (!panel)
-            return;
-        var sections = panel.querySelectorAll(".settings-section");
-        sections.forEach(function (sec) {
-            // Skip sections already wrapped or placed inside our extra wrap
-            if (sec.dataset.surfaceWrapped === "1")
-                return;
-            if (sec.closest(".surface-settings-wrap"))
-                return;
-            var labelEl = sec.querySelector(".settings-label");
-            if (!labelEl)
-                return;
-            var title = labelEl.textContent.trim();
-            var details = document.createElement("details");
-            details.className = "surface-settings-accordion";
-            details.setAttribute("name", "surface-settings"); // exclusive accordion
-            // Collapsed by default per the UX request.
-            var summary = document.createElement("summary");
-            summary.className = "surface-settings-summary";
-            summary.innerHTML = '<span class="surface-settings-chevron">▸</span><span>' + esc(title) + '</span>';
-            details.appendChild(summary);
-            // Move the rest of the section content (without the original
-            // label) inside a body div
-            labelEl.remove();
-            var body = document.createElement("div");
-            body.className = "surface-settings-body";
-            while (sec.firstChild)
-                body.appendChild(sec.firstChild);
-            details.appendChild(body);
-            sec.replaceWith(details);
-            details.dataset.surfaceWrapped = "1";
-        });
-    }
+    };
     // ═══════════════════════════════════════════════════════════════
     // SMTP / EMAIL DIGEST SETTINGS SECTION
     // ═══════════════════════════════════════════════════════════════
@@ -5133,7 +5057,6 @@ window.AI_APP_CONFIG = {
             h += '<input type="text" id="surface-smtp-rcpt" class="surface-settings-input" placeholder="ciso@example.com, soc@example.com" value="' + esc(cfg.recipients || "") + '">';
             h += '</div>';
             h += '<div class="ct-flex ct-gap-2 ct-mt-2">';
-            h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_saveSmtpRecipients">' + esc(t("smtp.save")) + '</button>';
             h += '<button class="ct-btn mt-8" data-write data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
             h += '</div>';
             holder.innerHTML = h;
@@ -5157,33 +5080,27 @@ window.AI_APP_CONFIG = {
         h += '</div>';
         h += '<label class="surface-settings-check"><input type="checkbox" id="surface-smtp-tls"' + (cfg.use_tls !== false ? " checked" : "") + '> ' + esc(t("smtp.use_tls")) + '</label>';
         h += '<div class="ct-flex ct-gap-2 ct-mt-2">';
-        h += '<button class="ct-btn mt-8" data-write data-variant="primary" data-click="_saveSmtpConfig">' + esc(t("smtp.save")) + '</button>';
         h += '<button class="ct-btn mt-8" data-write data-click="_sendSmtpDigestNow">' + esc(t("smtp.send_now")) + '</button>';
         h += '</div>';
         holder.innerHTML = h;
     }
-    window._saveSmtpRecipients = function () {
-        var body = {
-            recipients: (document.getElementById("surface-smtp-rcpt") || {}).value || "",
-        };
-        SurfaceAPI.smtpSetConfig(body).then(function () {
-            showStatus(t("smtp.saved"));
-        }).catch(function (e) { showStatus(e.message || String(e), true); });
-    };
-    window._saveSmtpConfig = function () {
-        var body = {
-            host: (document.getElementById("surface-smtp-host") || {}).value || "",
-            port: parseInt((document.getElementById("surface-smtp-port") || {}).value || "587", 10),
-            username: (document.getElementById("surface-smtp-user") || {}).value || "",
-            password: (document.getElementById("surface-smtp-pass") || {}).value || "",
-            sender: (document.getElementById("surface-smtp-sender") || {}).value || "",
-            recipients: (document.getElementById("surface-smtp-rcpt") || {}).value || "",
+    /** Saved by the settings panel's Save button: the server config in
+     *  standalone, the recipients only in the suite (Pilot owns the server). */
+    window._surfaceSaveSmtp = function () {
+        var val = function (id) { return (document.getElementById(id) || {}).value || ""; };
+        var body = document.getElementById("surface-smtp-host") ? {
+            host: val("surface-smtp-host"),
+            port: parseInt(val("surface-smtp-port") || "587", 10),
+            username: val("surface-smtp-user"),
+            password: val("surface-smtp-pass"),
+            sender: val("surface-smtp-sender"),
+            recipients: val("surface-smtp-rcpt"),
             use_tls: !!(document.getElementById("surface-smtp-tls") || {}).checked,
-        };
-        SurfaceAPI.smtpSetConfig(body).then(function () {
-            showStatus(t("smtp.saved"));
+        } : { recipients: val("surface-smtp-rcpt") };
+        return SurfaceAPI.smtpSetConfig(body).then(function () {
             _surfaceWireSmtpSection();
-        }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
+            return null;
+        }).catch(function (e) { return e.message || t("common.error"); });
     };
     window._sendSmtpDigestNow = function () {
         showStatus(t("smtp.sending"));

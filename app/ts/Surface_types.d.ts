@@ -456,9 +456,10 @@ interface Window {
 
     // Settings (nuclei / smtp)
     _nucleiResetTuning?: () => void;
-    _nucleiSaveTuning?: () => void;
+    /** Settings savers (the panel's Save button): null when saved, else the error. */
+    _surfaceSaveNuclei?: () => Promise<string | null>;
+    _surfaceSaveShodan?: () => Promise<string | null>;
+    _surfaceSaveSmtp?: () => Promise<string | null>;
     _nucleiUpdateTemplates?: () => void;
-    _saveSmtpConfig?: () => void;
-    _saveSmtpRecipients?: () => void;
     _sendSmtpDigestNow?: () => void;
 }
