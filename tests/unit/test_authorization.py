@@ -178,8 +178,6 @@ def _find_authenticated_routes():
 
 
 EXPECTED_ADMIN_ROUTES = {
-    ("users.py", "list_users"),
-    ("users.py", "update_user"),
     ("directory_proxy.py", "set_source"),
 }
 
@@ -192,6 +190,15 @@ class TestRouteProtection:
                     if r[0] != "directory_proxy.py" or os.path.exists(os.path.join(ROUTES_DIR, r[0]))}
         missing = expected - actual
         assert not missing, f"Routes expected to require admin: {missing}"
+
+    def test_user_management_requires_admin(self):
+        # The user routes are the shared router that routes/users.py mounts.
+        fpath = os.path.join(ROUTES_DIR, "..", "users_admin_common.py")
+        with open(fpath) as f:
+            tree = ast.parse(f.read(), filename=fpath)
+        admin = {n.name for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and "require_admin" in ast.dump(n)}
+        assert {"list_users", "update_user"} <= admin
 
     def test_write_routes_require_auth(self):
         """All findings/scans/measures write endpoints must use get_current_user."""

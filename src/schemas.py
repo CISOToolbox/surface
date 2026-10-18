@@ -25,11 +25,6 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class UserUpdate(BaseModel):
-    role: Optional[str] = None
-    ai_enabled: Optional[str] = None
-
-
 # ── Findings ───────────────────────────────────────────────────
 
 class FindingCreate(BaseModel):

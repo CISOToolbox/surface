@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,6 +27,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth_common import IDENTITY_PROVIDERS, standalone_permissions, standalone_sign_in
 from src.auth import (
     AUTH_MODE,
     AUTH_TOKEN,
@@ -114,13 +114,35 @@ async def _get_oidc_endpoints() -> dict:
     return _oidc_endpoints
 
 
+def _identity_provider_configured() -> bool:
+    return _entra_configured() or _google_configured() or _oidc_configured()
+
+
+async def _token_sign_in_open(db: AsyncSession) -> bool:
+    """With an identity provider configured, AUTH_TOKEN only bootstraps the
+    module: it is accepted while no admin has signed in through a provider,
+    then refused. Nothing ties the shared token to an address: accepting it
+    beyond that would let whoever holds it sign in as any account, an admin or
+    a disabled one alike. Until then, an instance first set up with the token
+    keeps a way in to approve its admin. If no admin signs in through a
+    provider any more (demoted, disabled), it opens again — the way back in.
+    Without a provider it stays the only way in (see the .env.example)."""
+    if not AUTH_TOKEN:
+        return False
+    if not _identity_provider_configured():
+        return True
+    provider_admins = (await db.execute(select(func.count()).select_from(User).where(
+        User.role == "admin", User.provider.in_(IDENTITY_PROVIDERS)))).scalar()
+    return provider_admins == 0
+
+
 @router.get("/providers")
-async def get_providers():
+async def get_providers(db: AsyncSession = Depends(get_db)):
     if AUTH_MODE == "standalone":
         return {
             "auth_enabled": auth_enabled(),
             "standalone": True,
-            "token": bool(AUTH_TOKEN),
+            "token": await _token_sign_in_open(db),
             "entra": _entra_configured(),
             "google": _google_configured(),
             "oidc": _oidc_configured(),
@@ -185,6 +207,9 @@ async def login_token(body: dict, db: AsyncSession = Depends(get_db)):
     import secrets as _secrets
     if not _secrets.compare_digest(token, AUTH_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid token")
+    if not await _token_sign_in_open(db):
+        raise HTTPException(status_code=403, detail=(
+            "Token sign-in is closed once an admin signs in with the identity provider: use your identity provider"))
 
     email = (body.get("email") or "admin@local").strip().lower()
     user = await _upsert_user(db, email=email, name=email.split("@")[0], picture="", provider="token", provider_id="token")
@@ -310,7 +335,10 @@ async def callback_entra(request: Request, db: AsyncSession = Depends(get_db)):
     provider_id = claims.get("oid") or claims.get("sub", "")
     if not email:
         return RedirectResponse(url="/login.html?error=userinfo_failed")
-    user = await _upsert_user(db, email=email, name=name, picture="", provider="entra", provider_id=provider_id)
+    try:
+        user = await _upsert_user(db, email=email, name=name, picture="", provider="entra", provider_id=provider_id)
+    except HTTPException as e:
+        return _refused_sign_in(e)
     redirect_after = request.cookies.get("oauth_redirect", "/")
     return _login_response(user, redirect_after)
 
@@ -353,14 +381,17 @@ async def callback_google(request: Request, db: AsyncSession = Depends(get_db)):
     if not resp.is_success:
         return RedirectResponse(url="/login.html?error=userinfo_failed")
     userinfo = resp.json()
-    user = await _upsert_user(
-        db,
-        email=userinfo.get("email", ""),
-        name=userinfo.get("name", ""),
-        picture=userinfo.get("picture", ""),
-        provider="google",
-        provider_id=userinfo.get("sub", ""),
-    )
+    try:
+        user = await _upsert_user(
+            db,
+            email=userinfo.get("email", ""),
+            name=userinfo.get("name", ""),
+            picture=userinfo.get("picture", ""),
+            provider="google",
+            provider_id=userinfo.get("sub", ""),
+        )
+    except HTTPException as e:
+        return _refused_sign_in(e)
     redirect_after = request.cookies.get("oauth_redirect", "/")
     return _login_response(user, redirect_after)
 
@@ -427,14 +458,17 @@ async def callback_oidc(request: Request, db: AsyncSession = Depends(get_db)):
     email = userinfo.get("email", "")
     if not email:
         return RedirectResponse(url="/login.html?error=userinfo_failed")
-    user = await _upsert_user(
-        db,
-        email=email,
-        name=userinfo.get("name") or userinfo.get("preferred_username", ""),
-        picture=userinfo.get("picture", ""),
-        provider="oidc",
-        provider_id=userinfo.get("sub", ""),
-    )
+    try:
+        user = await _upsert_user(
+            db,
+            email=email,
+            name=userinfo.get("name") or userinfo.get("preferred_username", ""),
+            picture=userinfo.get("picture", ""),
+            provider="oidc",
+            provider_id=userinfo.get("sub", ""),
+        )
+    except HTTPException as e:
+        return _refused_sign_in(e)
     redirect_after = request.cookies.get("oauth_redirect", "/")
     return _login_response(user, redirect_after)
 
@@ -474,36 +508,17 @@ async def _upsert_user(
         domain = email.rpartition("@")[2]
         if domain not in _ALLOWED_EMAIL_DOMAINS:
             raise HTTPException(status_code=403, detail="Email domain not allowed")
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-    now = datetime.now(timezone.utc)
-    if user:
-        if name:
-            user.name = name
-        if picture:
-            user.picture = picture
-        user.last_login = now
-    else:
-        count_result = await db.execute(select(func.count()).select_from(User))
-        role = "admin" if count_result.scalar() == 0 else "pending"
-        user = User(
-            email=email,
-            name=name or email.split("@")[0],
-            picture=picture or None,
-            provider=provider,
-            provider_id=provider_id or "",
-            role=role,
-            last_login=now,
-        )
-        db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    if user.role == "pending":
-        raise HTTPException(
-            status_code=403,
-            detail="Account created and awaiting administrator approval",
-        )
-    return user
+    return await standalone_sign_in(db, email, name=name, picture=picture,
+                                    provider=provider, provider_id=provider_id)
+
+
+def _refused_sign_in(e: HTTPException) -> RedirectResponse:
+    """Back to the sign-in page, saying why an OAuth sign-in was refused."""
+    detail = str(e.detail).lower()
+    code = ("account_disabled" if "disabled" in detail else
+            "awaiting_approval" if "approval" in detail else
+            "domain_not_allowed" if "domain" in detail else "access_denied")
+    return RedirectResponse(url=f"/login.html?error={code}")
 
 
 def _issue_jwt(user: User) -> str:
@@ -512,8 +527,7 @@ def _issue_jwt(user: User) -> str:
     Standalone Surface only speaks for itself, so permissions collapse to
     ``{MODULE_NAME: user.role}``. ``get_current_user`` in src/auth.py reads
     that map and enforces access."""
-    perms = {MODULE_NAME: user.role} if MODULE_NAME else {}
-    return create_jwt(str(user.id), user.email, user.role, perms)
+    return create_jwt(str(user.id), user.email, user.role, standalone_permissions(user))
 
 
 def _login_response(user: User, redirect_to: str = "/") -> RedirectResponse:

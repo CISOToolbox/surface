@@ -16,6 +16,20 @@
 (function () {
     "use strict";
     var currentPath = window.location.pathname.replace(/login\.html.*$/, "");
+    // A sign-in the server refused comes back as ?error=<code>.
+    var _ERRORS = {
+        awaiting_approval: "Account created and awaiting administrator approval",
+        account_disabled: "Account disabled",
+        domain_not_allowed: "Email domain not allowed"
+    };
+    var _error = new URLSearchParams(window.location.search).get("error");
+    if (_error) {
+        var _errorEl = document.getElementById("login-error");
+        if (_errorEl) {
+            _errorEl.style.display = "block";
+            _errorEl.textContent = _ERRORS[_error] || "Sign-in failed";
+        }
+    }
     // Check if already logged in
     fetch("auth/me", { credentials: "same-origin" })
         .then(function (r) { if (r.ok) {
@@ -103,13 +117,16 @@
             }).then(function (r) {
                 if (r.ok) {
                     window.location.href = "./";
+                    return;
                 }
-                else {
+                // A refused account (awaiting approval, disabled, domain) says why.
+                return r.json().catch(function () { return {}; }).then(function (body) {
+                    var why = r.status === 403 && typeof body.detail === "string" ? body.detail : "Invalid token";
                     if (errEl) {
                         errEl.style.display = "block";
-                        errEl.textContent = "Invalid token";
+                        errEl.textContent = why;
                     }
-                }
+                });
             }).catch(function () {
                 if (errEl) {
                     errEl.style.display = "block";
