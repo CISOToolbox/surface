@@ -3,6 +3,69 @@
 Every release has its section here, written at release time from the
 changes since the previous one and published as the GitHub release notes.
 
+## 1.7.0 — 2026-10-20
+
+### Added
+
+- The AI assistant toggle and the module's AI provider in one section, fields usable once the assistant is on (settings)
+- One Save button for every section, sections in an exclusive accordion, unsaved changes guarded (settings)
+- Settings sections join the shared panel — one Save button, the shared accordion
+- Remove a provider's saved keys from the settings drawer (ai)
+- The settings drawer lets a standalone module's admin set its AI provider, model and keys (ai)
+- A standalone module runs its AI on its server, set by its admin; Pilot's in the suite (ai)
+- The local account is shown fixed; without an identity provider the section says the module has one account (users)
+- The module's key opens one local account, its admin; other accounts come from an identity provider (auth)
+- One shared sign-in router for the nine backend modules — identity providers everywhere (auth)
+- Users section in the settings of the backend modules (settings)
+- User administration router for standalone modules — module roles, pending, disabled, last admin kept (users)
+- Standalone accounts await approval, and their role is read from the module on every request (auth)
+- Outbound proxy section in the settings of the backend modules (settings)
+- The outbound proxy is settable in the module itself when Pilot is absent (proxy)
+- SMTP settings in the standalone modules (shared)
+
+### Fixed
+
+- No multi-tenant Entra default — an unset tenant is empty, and the README says it is required (auth)
+- A module menu opened before the module learns it is standalone is closed (chrome)
+- A standalone module lists only itself in the module switcher (chrome)
+- A given-up section drops its error; AI provider input typed while the assistant is off is discarded (settings)
+- Restoring the Nuclei defaults is saved by Save; a cancelled Shodan key leaves nothing pending
+- Every way out of the panel asks before unsaved edits go; one save at a time; a refused or declined change stays pending (settings)
+- The module honours ALLOW_INSECURE_CUSTOM_LLM_ENDPOINT at call and at save (ai)
+- AI settings are stored as they were checked (ai)
+- Pilot's push is stored as Pilot checked it; a module admin's endpoint is checked as the call checks it; keys in clear without ENCRYPTION_KEY (ai)
+- One email_verified rule for Google and OIDC; tests for OIDC and the account lock (auth)
+- An address the identity provider has not verified is refused (auth)
+- Only the key's own account is local; the key never revives an account; account creation serialised (auth)
+- A provider sign-in marks the account as the provider's; the token closes once such an admin exists (auth)
+- A role change says what changed to the module's write journal (users)
+- The shared token closes once an admin signs in through the identity provider (auth)
+- The last-admin guard locks the admin rows; one journal entry per change (users)
+- With an identity provider configured, the shared token only creates the first account (auth)
+- A refused sign-in says why — awaiting approval, disabled, domain not allowed (login)
+- AppSec, Surface, Watch and Audit sign-in pages show their own name (login)
+- Exact masking docstring; contract checks proxy_common never forces allow_private (proxy)
+- Mask a token user name with an empty password, redact credentials in any case, contract reads the validator's AST (proxy)
+- Mask a token-only proxy userinfo, keep credentials out of refusals, leave omitted fields as they are (proxy)
+- The settings router reads proxy_common at call time (proxy)
+- SMTP credentials from the environment never go to a host saved in the app (shared)
+- SMTP host checked with ssrf_guard; an empty host clears the saved config (shared)
+- SMTP settings help says what an empty host really does (shared)
+- Honour hideAI in the managed settings drawer (shared)
+
+### Changed
+
+- The region check at save reuses _safe_bedrock_region (ai)
+- One proxy URL validator in proxy_common, shared by the internal routes and Pilot (proxy)
+
+### Documentation
+
+- What the shared token allows, translated refusals in the users section (users)
+
+### Tests
+
+- Every proxy_common copy, Pilot's included, passes allow_private on to ssrf_guard (contracts)
+
 ## 1.6.0 — 2026-10-15
 
 ### Added
