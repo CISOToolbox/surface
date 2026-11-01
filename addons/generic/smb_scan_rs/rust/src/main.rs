@@ -149,17 +149,52 @@ fn scan_text(text: &str, rules: &[(&str, &str, Regex)], custom: &[Regex]) -> Vec
 
 // ── Text extraction ──────────────────────────────────────────────
 fn xml_text(xml: &[u8]) -> String {
+    // An invalid byte would stop the reader for good: replace it instead.
+    let xml = String::from_utf8_lossy(xml);
+    let xml = xml.as_bytes();
     let mut reader = quick_xml::Reader::from_reader(xml);
+    // A bare `&` is kept as text, not an error that would drop the node.
+    reader.config_mut().allow_dangling_amp = true;
     let mut buf = Vec::new();
     let mut out = String::new();
+    // Entity references (`&amp;`, `&#65;`) arrive as their own events, between
+    // the text around them: glue them to it, or a secret holding one would be
+    // split in two and missed. Only within one text node: any tag in between
+    // keeps the separating space.
+    let mut adjacent = false;
+    let mut last_err = u64::MAX;
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Text(e)) => {
-                if let Ok(t) = e.unescape() { out.push_str(&t); out.push(' '); }
+                if adjacent && out.ends_with(' ') { out.pop(); }
+                out.push_str(&e.xml10_content());
+                out.push(' ');
+                adjacent = true;
+            }
+            Ok(quick_xml::events::Event::GeneralRef(r)) => {
+                if adjacent && out.ends_with(' ') { out.pop(); }
+                match r.resolve_char_ref() {
+                    Ok(Some(c)) => out.push(c),
+                    _ => match quick_xml::escape::resolve_predefined_entity(&r) {
+                        Some(s) => out.push_str(s),
+                        // Not an entity (a bare `&` followed by a `;` later
+                        // on): keep the raw text rather than drop it.
+                        None => { out.push('&'); out.push_str(&r); out.push(';'); }
+                    },
+                }
+                out.push(' ');
+                adjacent = true;
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+            // A malformed node must not hide the rest of the part: skip it,
+            // unless the reader cannot move past it.
+            Err(_) => {
+                let pos = reader.buffer_position();
+                if pos as usize >= xml.len() || pos == last_err { break; }
+                last_err = pos;
+                adjacent = false;
+            }
+            _ => adjacent = false,
         }
         buf.clear();
     }
@@ -183,7 +218,7 @@ fn pptx_text(data: &[u8]) -> String {
     if let Ok(mut z) = zip::ZipArchive::new(cursor) {
         for i in 0..z.len() {
             if let Ok(mut f) = z.by_index(i) {
-                let name = f.name().to_string();
+                let Ok(name) = f.name().map(|n| n.into_owned()) else { continue };
                 if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
                     let mut v = Vec::new();
                     if f.read_to_end(&mut v).is_ok() { out.push_str(&xml_text(&v)); }
@@ -453,4 +488,76 @@ fn main() {
             serde_json::json!({"limit": truncated, "inaccessible_dirs": inaccessible_dirs})));
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn zip_of(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in parts {
+            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(body.as_bytes()).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn xml_text_does_not_glue_across_tags() {
+        assert_eq!(xml_text(b"<t>foo</t><t>&amp;bar</t>"), "foo &bar ");
+        assert_eq!(xml_text(b"<t>a&amp;</t><t>b</t>"), "a& b ");
+        assert_eq!(xml_text(b"<t>tok=</t><t>&#97;bc</t>"), "tok= abc ");
+    }
+
+    #[test]
+    fn xml_text_reads_past_a_malformed_node() {
+        let t = xml_text(b"<t>R&D password=hunter22</t><t>after</t>");
+        assert!(t.contains("password=hunter22"), "{t:?}");
+        assert!(t.contains("after"), "{t:?}");
+        let t = xml_text(b"<t>R&D password=hunter22; x</t>");
+        assert!(t.contains("R&D password=hunter22; x"), "{t:?}");
+        let t = xml_text(b"<t>a\xffb</t><t>zz</t>");
+        assert!(t.contains("zz"), "{t:?}");
+    }
+
+    #[test]
+    fn xml_text_keeps_entities_inside_the_word() {
+        let t = xml_text(b"<p><t>pass&amp;word=s&#51;cret</t><t>next</t></p>");
+        assert!(t.contains("pass&word=s3cret"), "{t:?}");
+        assert!(t.contains("next"), "{t:?}");
+    }
+
+    #[test]
+    fn docx_body_is_read() {
+        let doc = zip_of(&[("word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>AKIAIOSFODNN7EXAMPLE</w:t></w:r></w:p></w:body></w:document>")]);
+        assert!(extract_text("docx", &doc).contains("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn pptx_slides_are_read() {
+        let deck = zip_of(&[
+            ("ppt/slides/slide1.xml", "<p:sld><a:t>first slide</a:t></p:sld>"),
+            ("ppt/notesSlides/notesSlide1.xml", "<p:notes><a:t>not a slide</a:t></p:notes>"),
+        ]);
+        let t = extract_text("pptx", &deck);
+        assert!(t.contains("first slide"), "{t:?}");
+        assert!(!t.contains("not a slide"), "{t:?}");
+    }
+
+    #[test]
+    fn xlsx_cells_are_read() {
+        let book = zip_of(&[
+            ("[Content_Types].xml", r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#),
+            ("_rels/.rels", r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#),
+            ("xl/workbook.xml", r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#),
+            ("xl/_rels/workbook.xml.rels", r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#),
+            ("xl/worksheets/sheet1.xml", r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>password=hunter2</t></is></c><c r="B1"><v>42</v></c></row></sheetData></worksheet>"#),
+        ]);
+        let t = extract_text("xlsx", &book);
+        assert!(t.contains("password=hunter2"), "{t:?}");
+        assert!(t.contains("42"), "{t:?}");
+    }
 }

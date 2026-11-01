@@ -46,7 +46,7 @@ build_arch() {
         export PKG_CONFIG_ALLOW_CROSS=1
         export PKG_CONFIG_PATH=/usr/lib/$(echo $triple | sed 's/-unknown//;s/-gnu/-gnu/')/pkgconfig
         export CARGO_TARGET_DIR=/work/target-$arch
-        cargo build --release --target $triple
+        cargo build --release --locked --target $triple
     "
     cp "$HERE/target-$arch/$triple/release/ciso-smb-scan" "$HERE/../bin/ciso-smb-scan-$arch"
     chmod +x "$HERE/../bin/ciso-smb-scan-$arch"
