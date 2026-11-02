@@ -195,6 +195,9 @@ _DOC = {
             '<li><strong>PDF</strong> : le corps n\'est <em>pas</em> extrait par le worker '
             'Rust (pas de bibliothèque équivalente à pdfminer) — les PDF restent flaggés '
             'par leur nom, sans lecture de leur contenu.</li>'
+            '<li><strong>Documents piégés</strong> : un document Office est décompressé '
+            'dans la limite de 100 Mo (5 000 diapositives pour un .pptx) ; au-delà, '
+            'le début est analysé et le fichier signalé « Document tronqué ».</li>'
             '<li><strong>Ruleset, masquage, plafonds</strong> (max_files / budget temps) et '
             'rattachement au host.</li>'
             '</ul>',
@@ -218,6 +221,9 @@ _DOC = {
             '<li><strong>PDF</strong>: bodies are <em>not</em> extracted by the Rust '
             'worker (no pdfminer-grade crate) — PDFs are still flagged by name, their '
             'content is not read.</li>'
+            '<li><strong>Crafted documents</strong>: an Office document is inflated '
+            'within 100 MB (5,000 slides for a .pptx); past that, the beginning is '
+            'scanned and the file is reported as "Document truncated".</li>'
             '<li><strong>Ruleset, masking, caps</strong> (max_files / time budget) and '
             'host roll-up.</li>'
             '</ul>',

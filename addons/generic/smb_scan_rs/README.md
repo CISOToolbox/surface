@@ -24,3 +24,10 @@ Same finding schema, secret ruleset, masking, caps (max_files / time_budget_s)
 and host roll-up. **Covered:** text/config/code + Office bodies (docx/xlsx/pptx).
 **Not covered:** PDF body extraction (no pdfminer-grade Rust crate) — PDFs are
 flagged by name only. Use the Python `smb_scan` add-on when PDF bodies matter.
+Office documents are inflated within a 100 MB budget per file (a few MB of zip
+can inflate to gigabytes) and a pptx is read up to 5,000 slides: past either,
+what was read is still scanned and the file is reported with an
+`smb_truncated` finding (`truncated_files` in the final `scanner_state`
+record). Workbooks are read as XML (shared strings, then sheets), without a
+spreadsheet library, whose cell ranges can allocate gigabytes from a tiny
+file. Measured peak: about 535 MB per document at worst.

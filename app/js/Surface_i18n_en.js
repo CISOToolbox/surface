@@ -467,6 +467,10 @@ if (typeof _registerTranslations === "function") {
         "finding.smb_scan.desc": "A '{rule}' secret was detected in a shared file. Excerpt: {match}",
         "finding.interesting_name.title": "Sensitive file by name: {file}",
         "finding.interesting_name.desc": "The filename or extension suggests sensitive data.",
+        "finding.smb_truncated.title": "Document truncated: {file}",
+        "finding.smb_truncated.desc": "The decompressed content exceeds {limit_mb} MB: only the first part was scanned for secrets.",
+        "finding.smb_truncated.slides.title": "Presentation truncated: {file}",
+        "finding.smb_truncated.slides.desc": "The presentation has more than {max_slides} slides: only the first ones were scanned for secrets.",
         // Wave 2 — TLS certificates (tls scanner)
         "finding.tls_expiring.title": "TLS certificate expiring soon on {target}",
         "finding.tls_expiring.desc": "The certificate for {target} is approaching expiry — plan its renewal.",

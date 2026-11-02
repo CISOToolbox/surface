@@ -482,6 +482,10 @@ if (typeof _registerTranslations === "function") {
         "finding.smb_scan.desc":                "Un secret de type « {rule} » a été détecté dans un fichier de partage. Extrait : {match}",
         "finding.interesting_name.title":       "Fichier sensible par son nom : {file}",
         "finding.interesting_name.desc":        "Le nom ou l'extension évoque des données sensibles.",
+        "finding.smb_truncated.title":          "Document tronqué : {file}",
+        "finding.smb_truncated.desc":           "Le contenu décompressé dépasse {limit_mb} Mo : seule la première partie a été analysée.",
+        "finding.smb_truncated.slides.title":   "Présentation tronquée : {file}",
+        "finding.smb_truncated.slides.desc":    "La présentation compte plus de {max_slides} diapositives : seules les premières ont été analysées.",
         // Vague 2 — certificats TLS (scanner tls)
         "finding.tls_expiring.title":           "Certificat TLS bientôt expiré sur {target}",
         "finding.tls_expiring.desc":            "Le certificat de {target} approche de son expiration — planifier le renouvellement.",
