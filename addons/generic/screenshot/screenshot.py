@@ -57,6 +57,10 @@ def _chromium_bypass() -> str:
 # crashes the scan — so enabling the scanner on an asset without the
 # deps installed is safe.
 
+# Redirects the screenshot follows, as a browser would, before giving up.
+_MAX_HOPS = 10
+
+
 def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
     target = _safe_target(target)
     findings: list[dict[str, Any]] = []
@@ -75,17 +79,17 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
         }]
 
     import base64
-    from urllib.parse import unquote, urlparse
+    from urllib.parse import unquote, urljoin, urlparse
 
     # Every sibling HTTP scanner sets follow_redirects=False and says why.
     # Chromium has no such switch: it follows 3xx, meta-refresh and JS
-    # navigations, resolving DNS itself, so a scanned host answering
+    # navigations, so a scanned host answering
     # "302 -> http://169.254.169.254/latest/meta-data/" would render cloud
     # metadata straight into the PNG stored on the finding — a readable
-    # exfiltration channel. Vet every request the page makes instead, with the
-    # same policy as the other scanners (LAN allowed, loopback/link-local/
-    # metadata/docker-siblings refused). Results are memoised: a page pulls
-    # dozens of sub-resources and each check costs a DNS round-trip.
+    # exfiltration channel. Vet every hop with the same policy as the other
+    # scanners (LAN allowed, loopback/link-local/metadata/docker-siblings
+    # refused). Results are memoised: a page pulls dozens of sub-resources and
+    # each check costs a DNS round-trip.
     _verdicts: dict[str, bool] = {}
 
     def _host_allowed(host: str) -> bool:
@@ -97,12 +101,78 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
                 _verdicts[host] = False
         return _verdicts[host]
 
+    def _url_allowed(u: str) -> bool:
+        host = (urlparse(u).hostname or "").lower()
+        return bool(host) and _host_allowed(host)
+
+    # Chromium routes the first request of a redirect chain only: from the
+    # second hop on it follows 3xx itself, unvetted. So the browser never sees
+    # a redirect: the route follows the chain here, one hop at a time, vets
+    # each Location before requesting it, and hands the browser the final
+    # answer under the first URL (page.url and relative links then refer to
+    # that first URL, not to where the chain ended).
     def _guard(route):
-        host = (urlparse(route.request.url).hostname or "").lower()
-        if not host or not _host_allowed(host):
-            logger.info("screenshot: blocked navigation to %s", route.request.url[:120])
+        req = route.request
+        url = req.url
+        if not _url_allowed(url):
+            logger.info("screenshot: blocked request to %s", url[:120])
             return route.abort()
-        return route.continue_()
+        method = req.method
+        headers = None  # the browser's own, until the chain changes host
+        try:
+            for _ in range(_MAX_HOPS + 1):
+                fetch = {"url": url, "method": method, "max_redirects": 0}
+                if headers is None:
+                    resp = route.fetch(**fetch)
+                else:
+                    resp = _cookieless().fetch(fetch.pop("url"), headers=headers, **fetch)
+                location = (resp.headers or {}).get("location")
+                if not (300 <= resp.status < 400 and location):
+                    return route.fulfill(response=resp)
+                nxt = urljoin(url, location)
+                if not _url_allowed(nxt):
+                    logger.info("screenshot: blocked redirect from %s to %s", url[:120], nxt[:120])
+                    return route.abort()
+                if headers is None and urlparse(nxt).hostname != urlparse(req.url).hostname:
+                    # Credentials stay with the host they were sent to: from
+                    # here on, no Authorization, and a request context of its
+                    # own, since route.fetch adds the browser's cookie jar
+                    # (where a host-only cookie also goes to subdomains).
+                    headers = {k: v for k, v in req.headers.items()
+                               if k.lower() not in ("cookie", "authorization")}
+                if resp.status not in (307, 308):
+                    method = "GET"
+                url = nxt
+        except Exception as e:  # noqa: BLE001 — a failed hop fails the request
+            logger.info("screenshot: request to %s failed: %s", url[:120], e)
+            return route.abort()
+        logger.info("screenshot: more than %d redirects from %s", _MAX_HOPS, req.url[:120])
+        return route.abort()
+
+    # One cookieless request context per browser launch, made on first use,
+    # with the launch's proxy and TLS policy.
+    _api: dict[str, Any] = {}
+
+    def _cookieless():
+        if "ctx" not in _api:
+            opts: dict[str, Any] = {"ignore_https_errors": True}
+            if _api.get("proxy"):
+                opts["proxy"] = _api["proxy"]
+            _api["ctx"] = _api["pw"].request.new_context(**opts)
+        return _api["ctx"]
+
+    # Backstop for whatever reaches the network without the route (a hop the
+    # router missed): a page that loaded anything from a refused host is not
+    # captured.
+    def _landed_safely(page, response, escaped: list[str]) -> bool:
+        if escaped or not _url_allowed(page.url):
+            return False
+        req = response.request if response is not None else None
+        while req is not None:
+            if not _url_allowed(req.url):
+                return False
+            req = req.redirected_from
+        return True
 
     proxy_failed = ""
     direct = bypasses_proxy(target, resolve_first_ip(target))
@@ -124,12 +194,22 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
                         launch["proxy"]["bypass"] = bypass
                 elif _proxy_for("https") or _proxy_for("http"):
                     launch["args"].append("--no-proxy-server")
+                _api.clear()
+                _api.update(pw=pw, proxy=launch.get("proxy"))
                 browser = pw.chromium.launch(**launch)
-                context = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 720})
+                context = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 720},
+                                              service_workers="block")
+                escaped: list[str] = []
+                context.on("requestfinished",
+                           lambda req: escaped.append(req.url) if not _url_allowed(req.url) else None)
                 context.route("**/*", _guard)
                 page = context.new_page()
                 page.set_default_timeout(8000)
-                page.goto(url, wait_until="domcontentloaded")
+                response = page.goto(url, wait_until="domcontentloaded")
+                if not _landed_safely(page, response, escaped):
+                    logger.info("screenshot: %s reached a refused destination, not captured", url)
+                    browser.close()
+                    continue
                 title = page.title()[:200]
                 png = page.screenshot(type="png", full_page=False)
                 browser.close()

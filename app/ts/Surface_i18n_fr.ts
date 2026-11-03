@@ -713,7 +713,7 @@ if (typeof _registerTranslations === "function") {
         "mon_modal.fs_pwd":         "Mot de passe SMB",
         "mon_modal.fs_pwd_ph":      "Mot de passe du compte de service",
         "mon_modal.fs_pwd_keep":    "•••••• (laisser vide pour conserver)",
-        "mon_modal.fs_creds_help":  "Identifiants par cible (chiffrés). Si vides, le compte de service global (SURFACE_SMB_*) est utilisé.",
+        "mon_modal.fs_creds_help":  "Identifiants par cible (chiffrés). Si vides, le compte de service global (SURFACE_SMB_*) est utilisé, pour un partage du réseau local uniquement. Changer de serveur efface le mot de passe enregistré.",
         "mon_modal.criticality":     "Criticité métier",
         "mon_modal.criticality_help":"Importance business de cet asset. Sert au calcul du risk score.",
         "mon_modal.crit_low":        "Faible",

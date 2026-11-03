@@ -295,6 +295,58 @@ def _check_network_allowed(net: ipaddress._BaseNetwork, original: str) -> None:
             )
 
 
+# The LAN proper: RFC1918 and IPv6 unique-local. Narrower than
+# `ip.is_private`, which also counts documentation and benchmarking blocks.
+_LAN_NETWORKS: tuple = tuple(
+    ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+
+
+def unc_host(value: str) -> str | None:
+    """Host of a file-share target (`\\\\host\\share`, `//host/share` or
+    `smb://host/share`), lower-cased; None when there is no share part."""
+    raw = (value or "").strip().replace("\\", "/")
+    if raw.lower().startswith("smb://"):
+        raw = raw[6:]
+    parts = [p for p in raw.lstrip("/").split("/") if p]
+    if len(parts) < 2:
+        return None
+    return parts[0].lower()
+
+
+def lan_only_address(host: str) -> str | None:
+    """The address to connect to when `host` is a LAN literal, or a name whose
+    every address is on the LAN; None otherwise (a name with one public
+    address, or that does not resolve). Decides where the deployment's own
+    credentials (a service account) may be sent: never to a host outside the
+    organisation — and, the address being returned, to that address only."""
+    bare = (host or "").strip().strip("[]")
+    try:
+        addrs = [bare] if _is_ip_literal(bare) else [i[4][0] for i in socket.getaddrinfo(bare, None) if i[4]]
+    except (socket.gaierror, UnicodeError):
+        return None
+    if not addrs:
+        return None
+    for a in addrs:
+        try:
+            ip = ipaddress.ip_address(a.split("%")[0])
+        except ValueError:
+            return None
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if not any(ip.version == n.version and ip in n for n in _LAN_NETWORKS):
+            return None
+    # IPv4 first: the SMB worker can only be pinned to an IPv4 address, and a
+    # resolver may well list an IPv6 ULA ahead of it.
+    addrs = [a.split("%")[0] for a in addrs]
+    return next((a for a in addrs if "." in a and ":" not in a), addrs[0])
+
+
+def resolves_to_lan_only(host: str) -> bool:
+    """`lan_only_address` as a yes/no."""
+    return lan_only_address(host) is not None
+
+
 # ═══════════════════════════════════════════════════════════════
 # Small env / DNS / HTTP utilities
 # ═══════════════════════════════════════════════════════════════

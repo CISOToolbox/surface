@@ -19,7 +19,7 @@ from src.database import async_session, get_db
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
-from src.scan_common import FOLLOW_REDIRECT_MODES
+from src.scan_common import FOLLOW_REDIRECT_MODES, resolves_to_lan_only, unc_host
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
 from src.audit import log_action
 
@@ -72,14 +72,9 @@ def _validate(kind: str, value: str) -> str:
         # servers (RFC1918 / internal DNS names) are legitimate, so we do NOT
         # resolve+SSRF-block like the other kinds — only reject loopback /
         # link-local / cloud-metadata literals (SMB to those is never valid).
-        raw = v.replace("\\", "/")
-        if raw.lower().startswith("smb://"):
-            raw = raw[6:]
-        raw = raw.lstrip("/")
-        parts = [p for p in raw.split("/") if p]
-        if len(parts) < 2:
+        host = unc_host(v)
+        if host is None:
             raise ValueError(f"Partage invalide (attendu \\\\serveur\\partage) : {value}")
-        host = parts[0].lower()
         # Prefix matching on the string was trivially sidestepped:
         # \\2130706433\share (decimal loopback), a hex/octal literal, or any
         # hostname with a 127.x A record all walked through — and the SMB
@@ -204,6 +199,19 @@ def _merge_config_secrets(new_config: dict | None, existing: dict | None) -> dic
     return cfg
 
 
+def _share_host(kind: str, value: str) -> str | None:
+    return unc_host(value) if kind == "file_share" else None
+
+
+def _require_admin_for_public_share(user, kind: str, value: str) -> None:
+    """A file share outside the LAN is an admin decision: the scan hands it
+    SMB credentials, and NTLM authentication to a host someone else runs can
+    be captured or relayed."""
+    host = _share_host(kind, value)
+    if host is not None and not resolves_to_lan_only(host):
+        require_admin(user)
+
+
 def _to_dict(a: MonitoredAsset) -> dict:
     return {
         "id": a.id, "kind": a.kind, "value": a.value, "label": a.label or "",
@@ -291,6 +299,7 @@ async def create_asset(
         canonical = _validate(body.kind, body.value)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _require_admin_for_public_share(user, body.kind, canonical)
     # Resolve enabled_scanners: validate against registry, fall back to defaults
     requested = body.enabled_scanners
     if requested is None:
@@ -345,6 +354,16 @@ async def update_asset(
             new_value = _validate(new_kind, new_value)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    # The edit form always sends kind and value: only a new destination is
+    # checked, so an editor can still edit the rest of an existing share.
+    host_changed = _share_host(a.kind, a.value) != _share_host(new_kind, new_value)
+    if host_changed:
+        _require_admin_for_public_share(user, new_kind, new_value)
+    # The stored SMB password belongs to the host it was entered for: a new
+    # host gets it only if the password is typed again.
+    existing_config = dict(a.config or {})
+    if host_changed:
+        existing_config.pop("smb_password_enc", None)
     a.kind = new_kind
     a.value = new_value
     if body.label is not None:
@@ -371,7 +390,9 @@ async def update_asset(
     if body.stealth_mode is not None:
         a.stealth_mode = bool(body.stealth_mode)
     if body.config is not None:
-        a.config = _merge_config_secrets(body.config, a.config or {})
+        a.config = _merge_config_secrets(body.config, existing_config)
+    elif host_changed:
+        a.config = existing_config
     await db.commit()
     await db.refresh(a)
     return _to_dict(a)

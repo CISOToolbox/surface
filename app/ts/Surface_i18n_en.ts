@@ -703,7 +703,7 @@ if (typeof _registerTranslations === "function") {
         "mon_modal.fs_pwd":         "SMB password",
         "mon_modal.fs_pwd_ph":      "Service-account password",
         "mon_modal.fs_pwd_keep":    "•••••• (leave empty to keep current)",
-        "mon_modal.fs_creds_help":  "Per-target credentials (encrypted). If empty, the global service account (SURFACE_SMB_*) is used.",
+        "mon_modal.fs_creds_help":  "Per-target credentials (encrypted). If empty, the global service account (SURFACE_SMB_*) is used, for a LAN share only. Changing the server erases the stored password.",
         "mon_modal.criticality":     "Business criticality",
         "mon_modal.criticality_help":"Business value of this asset. Used by the risk score formula.",
         "mon_modal.crit_low":        "Low",

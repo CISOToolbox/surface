@@ -26,6 +26,8 @@ import os
 import platform
 import subprocess
 
+from src.scan_common import lan_only_address, unc_host
+
 logger = logging.getLogger("surface-smb-rs")
 
 # The image bundles one binary per arch (ciso-smb-scan-<amd64|arm64>); pick the
@@ -64,6 +66,33 @@ _SINK_BATCH = int(os.getenv("SURFACE_SMB_RS_BATCH", "50") or "50")
 _STATUS_TYPES = {"smb_status", "scanner_state"}
 
 
+def _is_ipv4(addr: str) -> bool:
+    return addr.count(".") == 3 and ":" not in addr
+
+
+def _pinned_target(value: str, ip: str) -> tuple[str, tuple[str, str]]:
+    """`value` with its host replaced by `ip`, and (ip, host as written)."""
+    raw = value.strip().replace("\\", "/")
+    if raw.lower().startswith("smb://"):
+        raw = raw[6:]
+    parts = [p for p in raw.lstrip("/").split("/") if p]
+    return "\\\\" + "\\".join([ip] + parts[1:]), (ip, parts[0])
+
+
+def _unpin(obj, connect_to: str, value: str, ip: str, host: str):
+    """The worker's record with the pinned address put back as the name."""
+    if isinstance(obj, dict):
+        return {k: _unpin(v, connect_to, value, ip, host) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unpin(v, connect_to, value, ip, host) for v in obj]
+    if not isinstance(obj, str):
+        return obj
+    if obj == connect_to:
+        return value
+    out = obj.replace(f"\\\\{ip}\\", f"\\\\{host}\\")
+    return out[: -len(ip)] + host if out.endswith(f" : {ip}") else out
+
+
 def scan_smb_share_rs(value: str, config: dict | None = None, sink=None) -> list[dict]:
     config = config or {}
     if not os.path.isfile(_BIN) or not os.access(_BIN, os.X_OK):
@@ -71,19 +100,31 @@ def scan_smb_share_rs(value: str, config: dict | None = None, sink=None) -> list
                          f"Binary missing or not executable: {_BIN}. "
                          "Rebuild the image with the smb_scan_rs add-on.", value, {})]
 
-    user = (config.get("smb_username") or os.getenv("SURFACE_SMB_USERNAME", "")).strip()
-    domain = (config.get("smb_domain") or os.getenv("SURFACE_SMB_DOMAIN", "")).strip()
-    pw = os.getenv("SURFACE_SMB_PASSWORD", "")
+    # The deployment-wide service account (SURFACE_SMB_*) only ever goes to a
+    # LAN host: a share outside the organisation gets the credentials entered
+    # on its own target, or none — NTLM to a host someone else runs can be
+    # captured or relayed.
+    host = unc_host(value)
+    lan_ip = lan_only_address(host) if host else None
+    use_global = lan_ip is not None
+    env_user = os.getenv("SURFACE_SMB_USERNAME", "") if use_global else ""
+    env_domain = os.getenv("SURFACE_SMB_DOMAIN", "") if use_global else ""
+    user = (config.get("smb_username") or env_user).strip()
+    domain = (config.get("smb_domain") or env_domain).strip()
+    own_pw = ""
     if config.get("smb_password_enc"):
         try:
             from src.crypto import decrypt_secret
-            pw = decrypt_secret(config["smb_password_enc"]) or pw
+            own_pw = decrypt_secret(config["smb_password_enc"]) or ""
         except Exception as e:
             logger.warning("SMB password decrypt failed: %s", e)
+    pw = own_pw or (os.getenv("SURFACE_SMB_PASSWORD", "") if use_global else "")
     if not user or not pw:
-        return [_finding("info", "Missing SMB credentials",
-                         "Set credentials on the target, or define "
-                         "SURFACE_SMB_USERNAME / SURFACE_SMB_PASSWORD (+ DOMAIN).", value, {})]
+        hint = ("Set credentials on the target, or define "
+                "SURFACE_SMB_USERNAME / SURFACE_SMB_PASSWORD (+ DOMAIN)." if use_global else
+                "This share is not on the LAN: the SURFACE_SMB_* service account is "
+                "never sent to it. Set credentials on the target.")
+        return [_finding("info", "Missing SMB credentials", hint, value, {})]
 
     # Non-secret config forwarded to the worker (secrets go via env, never argv).
     worker_cfg = {
@@ -96,9 +137,16 @@ def scan_smb_share_rs(value: str, config: dict | None = None, sink=None) -> list
     # the same head every time.
     if config.get("smb_resume_after"):
         worker_cfg["resume_after"] = config["smb_resume_after"]
+    # The service account goes to the address just found on the LAN, not to
+    # whatever the name resolves to when the worker connects (DNS rebinding).
+    # The worker's output is mapped back to the name, so findings keep their
+    # identity. IPv4 only: the worker cannot take an IPv6 literal.
+    connect_to, pinned = value, None
+    if not own_pw and lan_ip and lan_ip != host and _is_ipv4(lan_ip):
+        connect_to, pinned = _pinned_target(value, lan_ip)
     env = dict(os.environ)
     env.update({
-        "SMB_TARGET": value,
+        "SMB_TARGET": connect_to,
         "SMB_USER": user,
         "SMB_PASS": pw,
         "SMB_DOMAIN": domain,
@@ -136,6 +184,8 @@ def scan_smb_share_rs(value: str, config: dict | None = None, sink=None) -> list
                 continue
             if not isinstance(f, dict):
                 continue
+            if pinned:
+                f = _unpin(f, connect_to, value, *pinned)
             if sink is not None and f.get("type") not in _STATUS_TYPES:
                 batch.append(f)
                 streamed += 1
@@ -206,7 +256,11 @@ _DOC = {
             '<p>Identique à l\'add-on SMB Python (mêmes champs : chemin, identifiants, '
             'extensions, taille max, regex), mais exécuté par un worker Rust hors-process '
             'pour ne pas ralentir l\'application sur de gros volumes. L\'extraction PDF '
-            'n\'est pas couverte par cette variante.</p>',
+            'n\'est pas couverte par cette variante.</p>'
+            '<p>Le compte de service du déploiement (<code>SURFACE_SMB_*</code>) ne sert '
+            'que pour un partage du réseau local (RFC1918) ; un partage hors du réseau '
+            'local exige ses propres identifiants et ne peut être ajouté que par un '
+            'administrateur.</p>',
     },
     "en": {
         "methodo":
@@ -232,7 +286,10 @@ _DOC = {
             '<p>Same as the Python SMB add-on (same fields: path, credentials, '
             'extensions, max size, regex) but run by an out-of-process Rust worker so it '
             'never slows the app on large volumes. PDF body extraction is not covered by '
-            'this variant.</p>',
+            'this variant.</p>'
+            '<p>The deployment service account (<code>SURFACE_SMB_*</code>) is only used '
+            'for a share on the local network (RFC1918); a share outside it needs its '
+            'own credentials and only an administrator can add it.</p>',
     },
 }
 

@@ -197,6 +197,7 @@ def _fake_playwright(monkeypatch, error="stop here", answers=()):
         def goto(self, url, **kw):
             if not url.startswith(tuple(f"{s}://" for s in answers)):
                 raise RuntimeError(error)
+            self.url = url
 
         def title(self):
             return "Portal"
@@ -206,7 +207,7 @@ def _fake_playwright(monkeypatch, error="stop here", answers=()):
 
     class _Browser:
         def new_context(self, **kw):
-            return types.SimpleNamespace(route=lambda *a: None, new_page=_Page)
+            return types.SimpleNamespace(route=lambda *a: None, on=lambda *a: None, new_page=_Page)
 
         def close(self):
             pass
