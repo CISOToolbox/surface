@@ -3,6 +3,71 @@
 Every release has its section here, written at release time from the
 changes since the previous one and published as the GitHub release notes.
 
+## 1.8.0 — 2026-11-07
+
+### Added
+
+- API errors carry status, reason and the version-conflict marker; shared handlers for a refused project save or change (shared)
+- Resolve the caller's role in a sibling module from Pilot (auth)
+- Add require_edit_role for routes that create business objects (auth)
+
+### Fixed
+
+- An answer without a reason (empty body, proxy error page) says so instead of showing raw HTML (shared)
+- A 400 is a refusal too, a 404 of a targeted change says its reason, a validation error is said field by field (shared)
+- Keep an unfinished account deletion pending and retryable
+- Import log_write from audit_common in delete-user (appsec,surface,watch)
+- Bump Mako to 1.4.3 and setuptools to 84.1.0 (deps)
+- Pin the SMB service account to the share's IPv4 address
+- Keep the browser's cookies off a redirect to another host
+- Keep the directory source setting out of the dispatcher (frontend)
+- Confirm a change of the directory source (frontend)
+- Declare the finding view's default triage handler (frontend)
+- Send the SMB service account to the vetted address
+- Check a file share's destination only when it changes
+- Follow the screenshot redirect chain inside the route
+- Keep unchanged and read-only roles when clamping to Pilot, and re-ask for a newer token (auth)
+- Vet every redirect hop of the screenshot add-on
+- Bind SMB credentials to the share's host
+- Restrict form targets to the origin in every module CSP (security)
+- Declare each module's event handlers (frontend)
+- Dispatch delegated events only to declared handlers (frontend)
+- Serve the API docs only when ENABLE_API_DOCS is set (suite)
+- Check the OIDC id_token issuer against OIDC_ISSUER when discovery omits it (auth)
+- Apply ALLOWED_EMAIL_DOMAINS and list only approved accounts in the directory
+- Lower module sessions to the roles Pilot currently grants (auth)
+- Read odd XML starts and cap resolved text at twice the budget
+- Keep large workbooks within the budget whole in the SMB scanner
+- Find workbook parts like a spreadsheet reader in the SMB scanner
+- Resolve shared strings cell by cell in the SMB scanner
+- Keep Latin-1 passwords and rich-text cells whole in the SMB scanner
+- Read workbooks as bounded XML in the SMB scanner
+- Bound decompression of Office documents in the SMB scanner
+- Keep unresolved references as text in the SMB scanner
+- Keep a bare ampersand as text in the SMB scanner
+- Keep tag boundaries and read past malformed XML in the SMB scanner
+- Zip 9.0.5, calamine 0.37 and quick-xml 0.42 in the SMB scanner
+- Authlib 1.9.1, pyasn1 0.6.5, dnspython 2.9.0 and joserfc 1.7.6 (deps)
+- Pin certifi 2026.10.19 as a transitive in every module (deps)
+- Certifi 2026.10.19, dropping the compromised emSign roots (deps)
+
+### Changed
+
+- Share the #rrggbb check of a colour read from data (frontend)
+
+### Documentation
+
+- A Watch scope owner is no longer a NOT NULL FK (shared)
+
+### Tests
+
+- Lock the resolved-text cap at twice the budget in the SMB scanner
+
+### Maintenance
+
+- Sync the AppSec recipients fix and the require_identity docstring to the copies and the standalone mirror (propagation)
+- Sync the API docs switch and posture tests to the standalone mirror (propagation)
+
 ## 1.7.1 — 2026-10-23
 
 ### Fixed
