@@ -63,21 +63,12 @@ changes since the previous one and published as the GitHub release notes.
 
 - Lock the resolved-text cap at twice the budget in the SMB scanner
 
-### Maintenance
-
-- Sync the AppSec recipients fix and the require_identity docstring to the copies and the standalone mirror (propagation)
-- Sync the API docs switch and posture tests to the standalone mirror (propagation)
-
 ## 1.7.1 — 2026-10-23
 
 ### Fixed
 
 - A composed character is dispatched once in the Firefox and Safari event order too (socle)
 - A character composed with a dead key or an IME is dispatched once, complete (socle)
-
-### Maintenance
-
-- Socle composition dedup (propagation)
 
 ## 1.7.0 — 2026-10-20
 
@@ -278,7 +269,7 @@ changes since the previous one and published as the GitHub release notes.
 - Js_analysis fetches the target's relative scripts
 - A silent proxy is the proxy's, a failed tunnel the target's; dotted exceptions; Chromium exceptions without port
 - The scanners through the proxy, follow-ups
-- Review follow-ups on the AI agent through the proxy and the restored proxy
+- Follow-ups on the AI agent through the proxy and the restored proxy
 - Nuclei's logged output hides the proxy credentials
 - The AI agent reaches a custom LLM through the outbound proxy
 - Nuclei's template update output stays in the logs, stdout included
@@ -326,7 +317,7 @@ changes since the previous one and published as the GitHub release notes.
 ### Maintenance
 
 - Proxy_common gains export_proxy (unused here)
-- Renumber the lookalike certificate alert FEAT-55
+- Renumber the lookalike certificate alert
 
 ## 1.5.2 — 2026-10-05
 
