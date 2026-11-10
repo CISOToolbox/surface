@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, alternative_origins, scan_client, target_request,
+    _DEFAULT_WEB_ORIGINS, _resolve_safe_target, alternative_origins, scan_client, target_request,
+    web_endpoints,
 )
 
 
@@ -57,8 +58,10 @@ _SENSITIVE_PATHS: list[tuple[str, str, str]] = [
 def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     """Probe a list of well-known sensitive paths on the target host.
     A 200 response whose body contains the expected marker is flagged
-    as a security finding. Probes both HTTP (80) and HTTPS (443), and
-    stops after 3 connection errors in a row to stay fast on dead hosts."""
+    as a security finding. Probes every web endpoint of the run
+    (``web_endpoints``); called directly, whichever of HTTPS (443) and
+    HTTP (80) answers first. Stops after 3 connection errors in a row on an
+    endpoint to stay fast on dead hosts."""
 
     # Full re-validation via _resolve_safe_target (same allowlist path as
     # _safe_target, with explicit lock of the resolved IP at call time).
@@ -68,29 +71,33 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
     # name travels in the Host header so name-based vhosts still answer.
     # Through the proxy, the name (target_request).
     locked_ip, target = _resolve_safe_target(target)
+    endpoints = web_endpoints()
+    if endpoints is None:
+        # Called directly: whichever scheme answers / (alternative_origins:
+        # one of the two answering is enough, the proxy refusing the other
+        # is no failure).
+        endpoints = []
+        with alternative_origins(), \
+                scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
+            for scheme, port in _DEFAULT_WEB_ORIGINS:
+                probe, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
+                try:
+                    r = client.get(f"{probe}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr},
+                                   extensions=_ext)
+                    if r.status_code < 500:
+                        endpoints = [(scheme, port)]
+                        break
+                except Exception:
+                    continue
     findings: list[dict[str, Any]] = []
-    schemes = [(443, "https"), (80, "http")]
+    for scheme, port in endpoints:
+        findings.extend(_probe_paths(target, locked_ip, scheme, port))
+    return findings
 
-    # Pick whichever scheme answers /: one of the two answering is enough
-    # (alternative_origins), the proxy refusing the other is no failure.
-    working: tuple[int, str] | None = None
-    with alternative_origins(), \
-            scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
-        for port, scheme in schemes:
-            probe, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
-            try:
-                r = client.get(f"{probe}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **_host_hdr},
-                               extensions=_ext)
-                if r.status_code < 500:
-                    working = (port, scheme)
-                    break
-            except Exception:
-                continue
-    if not working:
-        return []
-    port, scheme = working
+
+def _probe_paths(target: str, locked_ip: str | None, scheme: str, port: int) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     base, _host_hdr, _ext = target_request(target, locked_ip, scheme, port)
-
     with scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
         consecutive_errors = 0
         for path, marker, sev in _SENSITIVE_PATHS:
@@ -137,4 +144,4 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
 
 SURFACE_SCANNERS = {"sensitive_files": {"label": "Sensitive files exposure",
     "kinds": {"host"}, "callable": scan_host_sensitive_files, "returns_discovered": False,
-    "liveness": True}}
+    "web": True, "liveness": True}}

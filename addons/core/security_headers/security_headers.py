@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from src.scan_common import (
-    _resolve_safe_target, scan_client, fetch_page, follow_redirects_mode,
+    _resolve_safe_target, scan_client, fetch_page, follow_redirects_mode, https_web_ports,
 )
 
 
@@ -94,9 +94,9 @@ def _grade_headers(headers: dict[str, str]) -> tuple[str, list[str], list[str]]:
 
 
 def scan_host_security_headers(target: str, asset_config: dict | None = None) -> list[dict[str, Any]]:
-    """Fetch the HTTPS root (and its redirects, as the target's
-    ``follow_redirects`` says) and grade the security headers of the page
-    reached."""
+    """Fetch the HTTPS root of each HTTPS web endpoint (``https_web_ports``)
+    and its redirects, as the target's ``follow_redirects`` says, and grade
+    the security headers of the page reached."""
 
     # Directly, connect to the IP locked at validation time, not the name:
     # handing the hostname to httpx let it re-resolve, so the address that was
@@ -104,7 +104,14 @@ def scan_host_security_headers(target: str, asset_config: dict | None = None) ->
     # the Host header so name-based vhosts still answer. Through the proxy,
     # the name (target_request).
     locked_ip, target = _resolve_safe_target(target)
+    findings: list[dict[str, Any]] = []
+    for port in https_web_ports():
+        findings.extend(_grade_port(target, locked_ip, port, asset_config))
+    return findings
 
+
+def _grade_port(target: str, locked_ip: str | None, port: int,
+                asset_config: dict | None) -> list[dict[str, Any]]:
     def open_client(host: str, ip: str | None):
         # follow_redirects=False: a redirect target is not validated by httpx
         # (an SSRF bypass to cloud metadata or loopback); fetch_page
@@ -115,7 +122,7 @@ def scan_host_security_headers(target: str, asset_config: dict | None = None) ->
         with ExitStack() as stack:
             r, _host, url, stop = fetch_page(stack, {}, open_client, target, locked_ip,
                                        follow_redirects_mode(asset_config),
-                                       {"User-Agent": "Surface/0.3 (CISO Toolbox)"})
+                                       {"User-Agent": "Surface/0.3 (CISO Toolbox)"}, "https", port)
     except Exception:
         return []
 
@@ -138,7 +145,7 @@ def scan_host_security_headers(target: str, asset_config: dict | None = None) ->
         "severity": sev,
         "title": title,
         "description": desc,
-        "target": f"{target}:443",
+        "target": f"{target}:{port}",
         "evidence": {
             "grade": grade,
             "url": url,
@@ -156,4 +163,4 @@ def scan_host_security_headers(target: str, asset_config: dict | None = None) ->
 
 SURFACE_SCANNERS = {"security_headers": {"label": "Security headers grade",
     "kinds": {"host"}, "callable": scan_host_security_headers, "returns_discovered": False,
-    "wants_config": True, "liveness": True}}
+    "wants_config": True, "web": True, "liveness": True}}

@@ -545,6 +545,10 @@ if (typeof _registerTranslations === "function") {
         "finding.shodan_host_summary.desc": "Shodan a observé {ports_count} port(s) ouvert(s) sur cette cible via son scan passif d'Internet.",
         "finding.scanner_blocked.title": "Scanner bloqué sur {target} ({error_rate_pct}% d'erreurs)",
         "finding.scanner_blocked.desc": "De nombreuses requêtes ont été rejetées (WAF / anti-bot). Les résultats peuvent être partiels.",
+        "finding.web_scans_skipped.title": "Scans web non lancés sur {target} : aucun scan de ports dans ce passage",
+        "finding.web_scans_skipped.desc": "Les scanners web ne tournent que sur un port TCP ouvert où un serveur web répond, et les ports ouverts viennent du scan de ports du même passage. Activez un profil Nmap sur cette cible.",
+        "finding.web_scans_skipped.port_scan_failed.title": "Scans web non lancés sur {target} : le scan de ports a échoué",
+        "finding.web_scans_skipped.port_scan_failed.desc": "Les scanners web ne tournent que sur un port TCP ouvert où un serveur web répond, et le scan de ports de ce passage a échoué : aucun port web n'a pu être confirmé. Voir l'erreur du scan de ports.",
         "finding.nuclei.title": "Détection nuclei : {template_id}",
         "finding.nuclei.desc": "Le template nuclei {template_id} a produit une correspondance.",
         "finding.cve_no_version.title": "CVE lookup : {product} détecté sans version sur {target}",
@@ -634,6 +638,7 @@ if (typeof _registerTranslations === "function") {
         "kind.help.file_share": "Partage Windows SMB/CIFS — ex: \\\\serveur\\partage ou //serveur/partage",
         // ── Scanner labels (displayed in job listings) ─────
         "scanner.nmap": "Nmap (ports)",
+        "scanner.web_scans": "Scans web",
         "scanner.scheduled_host": "Scan host planifié",
         "scanner.scheduled_domain": "Scan domaine planifié",
         "scanner.manual_host": "Scan host manuel",

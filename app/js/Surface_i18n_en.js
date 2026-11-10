@@ -542,6 +542,10 @@ if (typeof _registerTranslations === "function") {
         "finding.shodan_host_summary.desc": "Shodan observed {ports_count} open port(s) on this target via its passive Internet scan.",
         "finding.scanner_blocked.title": "Scanner blocked on {target} ({error_rate_pct}% error rate)",
         "finding.scanner_blocked.desc": "Many requests were rejected (WAF / anti-bot). Results may be partial.",
+        "finding.web_scans_skipped.title": "Web scans not run on {target}: no port scan in this scan",
+        "finding.web_scans_skipped.desc": "Web scanners run only on an open TCP port where a web server answers, and the open ports come from the port scan of the same scan. Enable an Nmap profile on this target.",
+        "finding.web_scans_skipped.port_scan_failed.title": "Web scans not run on {target}: the port scan failed",
+        "finding.web_scans_skipped.port_scan_failed.desc": "Web scanners run only on an open TCP port where a web server answers, and the port scan of this scan failed: no web port could be confirmed. See the port scan's error.",
         "finding.nuclei.title": "nuclei detection: {template_id}",
         "finding.nuclei.desc": "The nuclei template {template_id} produced a match.",
         "finding.cve_no_version.title": "CVE lookup: {product} detected without version on {target}",
@@ -624,6 +628,7 @@ if (typeof _registerTranslations === "function") {
         "kind.help.file_share": "Windows SMB/CIFS share — e.g. \\\\server\\share or //server/share",
         // ── Scanner labels (displayed in job listings) ─────
         "scanner.nmap": "Nmap (ports)",
+        "scanner.web_scans": "Web scans",
         "scanner.scheduled_host": "Scheduled host scan",
         "scanner.scheduled_domain": "Scheduled domain scan",
         "scanner.manual_host": "Manual host scan",

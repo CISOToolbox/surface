@@ -56,6 +56,8 @@ SURFACE_SCANNERS = {
         "wants_prior_findings": False,# callable gets (value, prior_findings)
         "runs_after": [],             # scanners to run first when enabled with it
         "liveness": False,            # True if it can see the host answer (below)
+        "port_scan": False,           # finds the target's open ports (nmap)
+        "web": False,                 # reaches the target's web servers only
         "doc": _DOC,                  # optional in-app help — see §5
     },
 }
@@ -86,6 +88,18 @@ ran to its end (no `error`, `exception`, `scanner_error` or
 `scanner_timeout` finding, not inconclusive) records on the asset whether
 the host answered; a host silent for the configured number of days shows as
 inactive in the Hosts view (`src/host_liveness.py`).
+
+A `web` scanner runs only on an open TCP port where a web server answers. The
+dispatcher runs every `port_scan` scanner of the scan first, probes the open
+TCP ports they found (`scan_common.probe_web_endpoints`: any HTTP answer, over
+HTTPS then HTTP, confirms a port), and hands the confirmed `(scheme, port)` to
+the web scanners: they read them with `scan_common.web_origins()` and scan each
+one. Where the outbound proxy applies to the target, 443 and 80 are probed as
+well: a port scan cannot go through the proxy. No web endpoint: the web
+scanners do not run. No port scan in the scan, or a port scan that failed
+with no endpoint found: they do not run either, and a `web_scans_skipped`
+finding says so. Called
+outside the dispatcher, `web_origins()` gives https:443 then http:80.
 
 A scanner validates its `value` first. One that connects to it calls
 `scan_common._resolve_safe_target` (or `_safe_target`), which refuses a name

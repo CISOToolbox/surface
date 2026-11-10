@@ -22,6 +22,7 @@ from src.scan_common import (
     _safe_target,
     bypasses_proxy,
     resolve_first_ip,
+    web_origins,
 )
 
 
@@ -176,7 +177,8 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
 
     proxy_failed = ""
     direct = bypasses_proxy(target, resolve_first_ip(target))
-    for port, scheme in [(443, "https"), (80, "http")]:
+    # Each web endpoint of the run (https:443 then http:80 called directly).
+    for scheme, port in web_origins():
         url = f"{scheme}://{target}:{port}/"
         # Chromium reads *_proxy but drops a user:pass@ in it: give it the
         # proxy of this scheme explicitly, with the exceptions, or none (a
@@ -231,7 +233,7 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
             logger.info("screenshot failed for %s: %s", url, e)
             if proxy and ("ERR_PROXY" in str(e) or "ERR_TUNNEL" in str(e)):
                 proxy_failed = urlparse(proxy).hostname or "?"
-    if not findings and proxy_failed:  # neither scheme captured, the proxy said why
+    if not findings and proxy_failed:  # no endpoint captured, the proxy said why
         logger.warning("screenshot of %s through the outbound proxy %s failed", target, proxy_failed)
         findings.append({
             "scanner": "screenshot", "type": "scanner_error", "severity": "info",
@@ -243,4 +245,5 @@ def scan_host_screenshot(target: str) -> list[dict[str, Any]]:
 
 
 SURFACE_SCANNERS = {"screenshot": {"label": "HTTP screenshot capture (optional)",
-    "kinds": {"host"}, "callable": scan_host_screenshot, "returns_discovered": False}}
+    "kinds": {"host"}, "callable": scan_host_screenshot, "returns_discovered": False,
+    "web": True}}

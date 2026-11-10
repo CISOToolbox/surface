@@ -31,6 +31,7 @@ from src.scan_common import (  # noqa: F401  # re-exported for routes/scheduler 
     _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth, _EXCLUSIONS_CTX,
     _MULTI_LABEL_TLDS, _HOST_RE, _registrable, _normalize_host, _in_scope,
     take_proxy_failures, _LIVENESS_CTX, host_answered, host_inconclusive, proxy_applies, UnresolvedTarget,
+    _WEB_CTX, probe_web_endpoints,
 )
 
 
@@ -244,7 +245,7 @@ DEFAULT_SCANNERS_BY_KIND = {
 # may expose:
 #   SURFACE_SCANNERS = { "<name>": {label, kinds, callable, returns_discovered,
 #                                   [wants_config], [wants_prior_findings],
-#                                   [runs_after]} }
+#                                   [runs_after], [port_scan], [web]} }
 #   SURFACE_DEFAULT_SCANNERS = { "<kind>": ["<name>", ...] }   # optional
 # Entries are merged into SCANNER_REGISTRY / DEFAULT_SCANNERS_BY_KIND. A file
 # whose dependency is missing is skipped (logged), never fatal.
@@ -335,6 +336,7 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: boo
     _STEALTH_CTX.on = bool(stealth)
     _EXCLUSIONS_CTX.values = list(exclusions or [])
     _LIVENESS_CTX.hosts = set()
+    _WEB_CTX.endpoints = None
     try:
         return _run_scanners_inner(kind, value, enabled, findings, discovered, config or {}, sink)
     finally:
@@ -342,6 +344,7 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: boo
         _EXCLUSIONS_CTX.values = []
         _LIVENESS_CTX.hosts = None
         _LIVENESS_CTX.inconclusive = None
+        _WEB_CTX.endpoints = None
 
 
 def _order_by_dependencies(enabled: list[str]) -> list[str]:
@@ -350,12 +353,15 @@ def _order_by_dependencies(enabled: list[str]) -> list[str]:
     A chaining scanner (e.g. ct_logs reading this run's typosquat_domain
     findings) must see its producer's output whatever order the user picked.
     Scanners without a dependency keep their relative order; an unknown or
-    disabled dependency is ignored.
+    disabled dependency is ignored. A web scanner (``web``) runs after every
+    port scan (``port_scan``): its targets are the open ports found.
     """
     out = list(enabled)
+    port_scans = [n for n in enabled if (SCANNER_REGISTRY.get(n) or {}).get("port_scan")]
     for name in enabled:
         meta = SCANNER_REGISTRY.get(name) or {}
-        for dep in meta.get("runs_after", ()):
+        deps = list(meta.get("runs_after", ())) + (port_scans if meta.get("web") else [])
+        for dep in deps:
             if dep in out and out.index(dep) > out.index(name):
                 out.remove(dep)
                 out.insert(out.index(name), dep)
@@ -378,6 +384,8 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
     # Host liveness (FEAT-68): did a scanner able to see the host answer
     # (`"liveness": True`) run to its end without failing on our side?
     probed = False
+    web_ready: bool | None = None  # web endpoints probed, and any found
+    port_scan_failed = False       # a port scan of the run failed on our side
     for name in enabled:
         meta = SCANNER_REGISTRY.get(name)
         if not meta:
@@ -387,6 +395,11 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
         if kind not in meta["kinds"]:
             logger.warning("Scanner %s not applicable to kind=%s, skipping", name, kind)
             continue
+        if meta.get("web"):
+            if web_ready is None:
+                web_ready = _prepare_web_endpoints(value, enabled, findings, port_scan_failed)
+            if not web_ready:
+                continue
         start = len(findings)
         _LIVENESS_CTX.inconclusive = set()  # only this scanner's
         gone = False   # the name no longer resolves: the host cannot answer
@@ -423,16 +436,9 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
             })
         # The HTTP scanners swallow request errors: a proxy that failed them
         # is said here, or the scan would read as a clean one.
-        for target, proxy_host, cause, origin in take_proxy_failures():
-            logger.warning("%s: scan of %s through the outbound proxy %s failed on %s (%s): "
-                           "the results for this target are incomplete", name, target, proxy_host, origin, cause)
-            findings.append({
-                "scanner": name, "type": "scanner_error", "severity": "info",
-                "title": f"{name} could not scan {target} through the outbound proxy",
-                "description": (f"Requests to {origin} through the outbound proxy {proxy_host} failed "
-                                f"({cause}): the results for this target are incomplete."),
-                "target": target, "evidence": {"proxy_host": proxy_host, "cause": cause, "origin": origin},
-            })
+        findings.extend(_proxy_failure_findings(name))
+        if meta.get("port_scan") and any(f.get("type") in _SCANNER_FAILURE_TYPES for f in findings[start:]):
+            port_scan_failed = True
         if meta.get("liveness") and (gone or not (
                 any(f.get("type") in _SCANNER_FAILURE_TYPES for f in findings[start:])
                 or host_inconclusive(value)
@@ -460,3 +466,61 @@ def liveness_record(value: str, alive: bool) -> dict[str, Any]:
     persisted as a finding): whether the host answered (src/host_liveness.py)."""
     return {"scanner": "engine", "type": "scanner_state", "severity": "info", "title": "", "description": "",
             "target": value, "evidence": {"liveness": {"alive": alive}}}
+
+
+def _proxy_failure_findings(name: str) -> list[dict[str, Any]]:
+    out = []
+    for target, proxy_host, cause, origin in take_proxy_failures():
+        logger.warning("%s: scan of %s through the outbound proxy %s failed on %s (%s): "
+                       "the results for this target are incomplete", name, target, proxy_host, origin, cause)
+        out.append({
+            "scanner": name, "type": "scanner_error", "severity": "info",
+            "title": f"{name} could not scan {target} through the outbound proxy",
+            "description": (f"Requests to {origin} through the outbound proxy {proxy_host} failed "
+                            f"({cause}): the results for this target are incomplete."),
+            "target": target, "evidence": {"proxy_host": proxy_host, "cause": cause, "origin": origin},
+        })
+    return out
+
+
+def _prepare_web_endpoints(value: str, enabled: list[str], findings: list[dict[str, Any]],
+                           port_scan_failed: bool = False) -> bool:
+    """Before the first web scanner of a run: the open TCP ports the run's
+    port scan found, probed for a web server (``probe_web_endpoints``); the
+    confirmed (scheme, port) go to the web scanners through ``_WEB_CTX``.
+    Where the outbound proxy applies to the target, 443 and 80 are probed
+    too: a port scan cannot go through the proxy and may see nothing.
+    Without a port scan in the run, or when it failed and no endpoint was
+    found, no web scanner runs and a finding says so. Returns whether any
+    web endpoint was found."""
+    web = [n for n in enabled if (SCANNER_REGISTRY.get(n) or {}).get("web")]
+    if not any((SCANNER_REGISTRY.get(n) or {}).get("port_scan") for n in enabled):
+        findings.append({
+            "scanner": "web_scans", "type": "web_scans_skipped", "severity": "info",
+            "title": f"Web scans not run on {value}: no port scan in this scan",
+            "description": ("The web scanners run only on an open TCP port where a web server answers, "
+                            "and the open ports come from the port scan of the same scan. Enable an nmap "
+                            f"profile on this target. Not run: {', '.join(web)}."),
+            "target": value, "evidence": {"scanners": web},
+        })
+        return False
+    ports = sorted({int(f["evidence"]["port"]) for f in findings
+                    if f.get("type") == "open_port" and (f.get("evidence") or {}).get("port")
+                    and (f.get("evidence") or {}).get("protocol", "tcp") == "tcp"})
+    probed = sorted(set(ports) | {443, 80}) if proxy_applies(value) else ports
+    take_proxy_failures()
+    endpoints = probe_web_endpoints(value, probed) if probed else []
+    findings.extend(_proxy_failure_findings("web_scans"))
+    _WEB_CTX.endpoints = endpoints
+    if not endpoints and port_scan_failed:
+        findings.append({
+            "scanner": "web_scans", "type": "web_scans_skipped", "severity": "info",
+            "title": f"Web scans not run on {value}: the port scan failed",
+            "description": ("The web scanners run only on an open TCP port where a web server answers, "
+                            "and the port scan of this scan failed: no web port could be confirmed. "
+                            f"Not run: {', '.join(web)}."),
+            "target": value, "evidence": {"scanners": web, "variant": "port_scan_failed"},
+        })
+    logger.info("web endpoints of %s: %s (open TCP ports: %s)", value,
+                ", ".join(f"{s}:{p}" for s, p in endpoints) or "none", ports or "none")
+    return bool(endpoints)

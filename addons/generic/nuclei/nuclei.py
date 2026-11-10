@@ -22,6 +22,7 @@ os.environ.setdefault("NUCLEI_TEMPLATES_DIR", "/opt/nuclei-templates")
 from src.scan_common import logger
 from src.scan_common import (
     _safe_target, _STEALTH_BROWSER_UA, _is_stealth, _proxy_for, bypasses_proxy, resolve_first_ip,
+    web_endpoints, web_origin_url,
 )
 from src.scanners import _nuclei_tuning
 
@@ -134,10 +135,9 @@ def _nuclei_stats(stderr: str) -> tuple[int, int]:
 
 
 def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critical") -> list[dict[str, Any]]:
-    """Run nuclei against the target with default templates.
-
-    Tries https:// then http:// if the target has no scheme. Streams JSONL output
-    so we can parse incrementally even on big runs.
+    """Run nuclei against the target with default templates, once per web
+    endpoint of the run (``web_endpoints``); called directly, on
+    https://target. A target given as a URL is scanned as given.
     """
     target = _safe_target(target)
     nuclei_path = shutil.which("nuclei")
@@ -149,7 +149,26 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
             "target": target, "evidence": {},
         }]
 
-    url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+    endpoints = web_endpoints()
+    if target.startswith(("http://", "https://")):
+        runs = [(target, target)]
+    elif endpoints is None:
+        runs = [(f"https://{target}", target)]
+    else:
+        # A finding of a run names the endpoint: the host on a default
+        # port (the target nuclei findings always had, so their dedup keys
+        # stay), host:port otherwise.
+        runs = [(web_origin_url(target, scheme, port).rstrip("/"),
+                 target if port == {"https": 443, "http": 80}[scheme] else f"{target}:{port}")
+                for scheme, port in endpoints]
+    findings: list[dict[str, Any]] = []
+    for url, url_target in runs:
+        findings.extend(_run_nuclei(nuclei_path, url, url_target, severity_filter))
+    return findings
+
+
+def _run_nuclei(nuclei_path: str, url: str, target: str, severity_filter: str) -> list[dict[str, Any]]:
+    """One nuclei run against ``url``; its findings name ``target``."""
     tuning = _nuclei_tuning()
     stealth = _is_stealth()
     if stealth:
@@ -312,13 +331,15 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
             })
         elif requests:
             if requests >= 50 and errors / max(requests, 1) >= 0.5:
-                pct = round(100 * errors / requests)
+                # nuclei can count more errors than requests (a failed
+                # request and its retries): a rate is at most 100 %.
+                pct = min(100, round(100 * errors / requests))
                 findings.append({
                     "scanner": "nuclei", "type": "scanner_blocked", "severity": "info",
                     "title": f"Nuclei scan blocked on {url} ({pct}% error rate)",
                     "description": (
                         f"Nuclei issued {requests} requests against {url} and "
-                        f"{errors} were rejected ({pct}%). The target likely sits "
+                        f"counted {errors} errors ({pct}%). The target likely sits "
                         "behind a WAF / anti-bot that drops automated probes. "
                         "Findings below are partial — the absence of "
                         "vulnerabilities does NOT mean the host is clean. "
@@ -344,6 +365,7 @@ def scan_nuclei(target: str, severity_filter: str = "info,low,medium,high,critic
 
 
 SURFACE_SCANNERS = {"nuclei": {"label": "Nuclei (templates DAST)",
-    "kinds": {"host"}, "callable": scan_nuclei, "returns_discovered": False}}
+    "kinds": {"host"}, "callable": scan_nuclei, "returns_discovered": False,
+    "web": True}}
 # Optional (generic) add-on, but default-on for host scans when included.
 SURFACE_DEFAULT_SCANNERS = {"host": ["nuclei"]}

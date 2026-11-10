@@ -433,6 +433,15 @@ def bypasses_proxy(host: str, ip: str | None = None) -> bool:
     return False
 
 
+# Statuses a proxy answers forwarded plain HTTP with on its own: a gateway
+# error. A refusal (403: a port or destination it does not allow) may be the
+# proxy's too, but also the target's own page (no index, an access-denied
+# bucket): only the web probe, which asks nothing more of a port, sets it
+# aside.
+_PROXY_GATEWAY_STATUSES = (502, 503, 504)
+_PROXY_OWN_STATUSES = (403, *_PROXY_GATEWAY_STATUSES)
+
+
 def _proxy_for(scheme: str) -> str:
     """The proxy the environment sets for a scheme, ALL_PROXY as fallback."""
     proxies = urllib.request.getproxies_environment()
@@ -490,8 +499,9 @@ def follow_redirects_mode(asset_config: dict | None) -> str:
 
 
 def fetch_page(stack, clients: dict, open_client, target: str, locked_ip: str,
-               mode: str, headers: dict[str, str]):
-    """GET the target's root, then its redirects as ``mode`` allows: the page
+               mode: str, headers: dict[str, str], scheme: str = "https", port: int | None = None):
+    """GET the target's root (on ``scheme`` and ``port``, https on its
+    default port unless said), then its redirects as ``mode`` allows: the page
     a browser would show. httpx never follows a redirect itself (its target
     is not validated): each hop is validated as a target is
     (``_resolve_safe_target``, once per host), pinned to its address with
@@ -508,7 +518,9 @@ def fetch_page(stack, clients: dict, open_client, target: str, locked_ip: str,
 
     name = target.lower().strip("[]")
     target_reg = None if _is_ip_literal(name) else _registrable(name) or name
-    host, ip, scheme, port, path = name, locked_ip, "https", None, "/"
+    if port == {"https": 443, "http": 80}.get(scheme):
+        port = None
+    host, ip, path = name, locked_ip, "/"
     visited: set[str] = set()
     previous = None
 
@@ -751,7 +763,7 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
             # A gateway error on forwarded plain HTTP is most likely the
             # proxy's own: it does not show that the target was reached, nor
             # hide a refused CONNECT on https.
-            if not (response.status_code in (502, 503, 504) and request.url.scheme == "http"
+            if not (response.status_code in _PROXY_GATEWAY_STATUSES and request.url.scheme == "http"
                     and not direct and _proxy_for("http")):
                 self.failures.pop(origin(request.url), None)
                 self.answered.add(origin(request.url))
@@ -855,6 +867,91 @@ def _excluded_host(host: str, ip: str | None) -> bool:
         return False
     from src.models import is_excluded  # models pulls SQLAlchemy: not at import
     return is_excluded([host, ip or ""], exclusions)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Web endpoints of the run (the web scanners' targets)
+# ═══════════════════════════════════════════════════════════════
+# A web scanner runs only on an open TCP port where a web server answers.
+# `run_enabled_scanners` probes the ports the run's port scan found open and
+# sets the confirmed (scheme, port) here, like the stealth flag. None means
+# no dispatcher set it (a scanner called directly): the scanner keeps its
+# own default origins.
+_WEB_CTX = threading.local()
+_DEFAULT_WEB_ORIGINS: list[tuple[str, int]] = [("https", 443), ("http", 80)]
+
+
+def web_endpoints() -> list[tuple[str, int]] | None:
+    endpoints = getattr(_WEB_CTX, "endpoints", None)
+    return None if endpoints is None else list(endpoints)
+
+
+def web_origins() -> list[tuple[str, int]]:
+    """The (scheme, port) a web scanner reaches: the run's confirmed web
+    endpoints, or https:443 then http:80 outside a dispatcher run."""
+    endpoints = web_endpoints()
+    return list(_DEFAULT_WEB_ORIGINS) if endpoints is None else endpoints
+
+
+def https_web_ports() -> list[int]:
+    """The ports of the run's HTTPS web endpoints, 443 outside a dispatcher
+    run: the page scanners read the site over HTTPS (port 80 mostly
+    redirects there)."""
+    return [p for s, p in web_origins() if s == "https"] if web_endpoints() is not None else [443]
+
+
+def web_origin_url(target: str, scheme: str, port: int) -> str:
+    """``scheme://target[:port]/`` by name, the port left out when it is the
+    scheme's default."""
+    bare = target.strip("[]")
+    netloc = f"[{bare}]" if ":" in bare else bare
+    if port != {"https": 443, "http": 80}.get(scheme):
+        netloc = f"{netloc}:{port}"
+    return f"{scheme}://{netloc}/"
+
+
+def probe_web_endpoints(target: str, ports: list[int]) -> list[tuple[str, int]]:
+    """The (scheme, port) among ``ports`` where a web server answers ``/``:
+    any HTTP response, whatever its status, confirms the port; a TLS or
+    connection failure does not. HTTPS is tried first, HTTP first on 80; one
+    scheme per port. Redirects are not followed (the probe only asks whether
+    HTTP answers). Reaches the target as every scanner does (locked address,
+    outbound proxy and its exceptions). Once a web endpoint is found, the
+    proxy's refusals on the other ports are not failures: the probe explores
+    ports the proxy may rightly refuse (a CONNECT to a port it does not
+    allow). With none found, they are, as an unreachable proxy or one that
+    wants credentials always is: they go to ``take_proxy_failures`` as for
+    a scanner, or the web scans would vanish without a word."""
+    try:
+        locked_ip, target = _resolve_safe_target(target)
+    except ValueError:
+        return []
+    proxied_http = bool(_proxy_for("http")) and not bypasses_proxy(target, locked_ip)
+    found: list[tuple[str, int]] = []
+    for port in sorted(set(ports)):
+        schemes = ("http", "https") if port == 80 else ("https", "http")
+        with alternative_origins(), \
+                scan_client(target, locked_ip, verify=False, follow_redirects=False, timeout=3.0) as client:
+            for scheme in schemes:
+                base, host_hdr, ext = target_request(target, locked_ip, scheme, port)
+                try:
+                    r = client.get(f"{base}/", headers={"User-Agent": "Surface/0.3 (CISO Toolbox)", **host_hdr},
+                                   extensions=ext)
+                except Exception:
+                    continue
+                # Forwarded plain HTTP: a refusal or a gateway error is most
+                # likely the proxy's own (a port it does not allow, a target
+                # it cannot reach), it does not show the target answers.
+                if scheme == "http" and r.status_code in _PROXY_OWN_STATUSES and proxied_http:
+                    continue
+                found.append((scheme, port))
+                break
+    failures, _ = _proxy_sink()
+    if found and target in failures:
+        failures[target] = {origin: failure for origin, failure in failures[target].items()
+                            if not failure[1].startswith("ProxyError") or "407" in failure[1]}
+    return found
+
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -33,6 +33,7 @@ import os
 import socket
 import sys
 import threading
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -251,6 +252,30 @@ def test_alternative_schemes_answered_on_one_are_not_a_proxy_failure(monkeypatch
                         {"callable": http_like, "kinds": ["host"], "returns_discovered": False})
     findings, _ = scanners.run_enabled_scanners("host", "portal.medsecure.example", ["http_like"])
     assert [f for f in findings if f["type"] != "scanner_state"] == []  # the liveness record aside
+
+
+def test_a_403_on_forwarded_http_is_the_targets_answer(monkeypatch):
+    # No 443 behind the proxy (the CONNECT fails), and the target answers
+    # plain HTTP with its own 403 (no index, an access-denied bucket): the
+    # scan went through, the https failure is no proxy failure.
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.medsecure.example:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.medsecure.example:3128")
+
+    def handler(request):
+        if request.url.scheme == "https":
+            raise httpx.ProxyError("502 Bad Gateway", request=request)
+        return httpx.Response(403)
+
+    scan_common.take_proxy_failures()
+    with patch.object(scan_common, "bypasses_proxy", return_value=False), scan_common.alternative_origins():
+        for scheme in ("https", "http"):
+            try:
+                with scan_client("h.example", "10.0.0.5", transport=httpx.MockTransport(handler)) as c:
+                    c.get(f"{scheme}://h.example/")
+                    break
+            except httpx.HTTPError:
+                continue
+    assert scan_common.take_proxy_failures() == []
 
 
 @pytest.mark.parametrize("https_fails", [True, False])

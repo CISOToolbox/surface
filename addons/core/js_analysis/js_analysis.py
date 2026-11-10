@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from src.scan_common import (
     _resolve_safe_target, scan_client, target_request, _registrable, _is_ip_literal,
-    fetch_page, follow_redirects_mode, logger, _excluded_host,
+    fetch_page, follow_redirects_mode, logger, _excluded_host, https_web_ports,
 )
 
 
@@ -55,8 +55,8 @@ def _mask_secret(value: str, severity: str) -> str:
 
 
 def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list[dict[str, Any]]:
-    """Fetch / on the target (and its redirects, as the target's
-    ``follow_redirects`` says), extract <script src> URLs, download each
+    """Fetch / on each HTTPS web endpoint of the target (``https_web_ports``)
+    and its redirects, as the target's ``follow_redirects`` says, extract <script src> URLs, download each
     (capped), grep each for secret/endpoint patterns. Emits one finding
     per unique (pattern, match) tuple across all JS files."""
 
@@ -68,110 +68,114 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
     locked_ip, target = _resolve_safe_target(target)
     ua = {"User-Agent": "Surface/0.3 (CISO Toolbox)"}
     js_bodies: list[tuple[str, str]] = []
+    notes: list[dict[str, Any]] = []  # pages whose scripts were not read
 
     def open_client(host: str, ip: str | None):
         # follow_redirects=False: fetch_page validates each hop itself.
         return scan_client(host, ip, verify=False, follow_redirects=False, timeout=5.0)
 
-    try:
-        with ExitStack() as stack:
-            # {host: (client, the address it was validated at)}, the page's
-            # hops included.
-            clients: dict = {}
-            r, name, page_url, stop = fetch_page(stack, clients, open_client, target, locked_ip,
-                                                 follow_redirects_mode(asset_config), ua)
-            if stop:
-                # Said, or the scan would read as a clean one.
-                return [{
-                    "scanner": "js_analysis",
-                    "type": "js_not_analysed",
-                    "severity": "info",
-                    "title": f"JavaScript not analysed on {target}: the home page redirect was not followed",
-                    "description": (f"The home page answers HTTP {r.status_code} to {stop[0]}, not followed: "
-                                    f"{stop[1]}. No script was read."),
-                    "target": target,
-                    "evidence": {"url": page_url, "status_code": r.status_code,
-                                 "location": stop[0], "reason": stop[1]},
-                }]
-            if r.status_code != 200:
-                return []
-            html = r.text or ""
-            # Extract every script src
-            src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
-            raw_urls = src_re.findall(html)
-            # Relative URLs are the page's: resolved against its URL by name,
-            # not the address it was fetched at.
-            resolved = [urljoin(page_url, u) for u in raw_urls]
-
-            # SSRF guard: reject any script URL that (a) is not http(s),
-            # (b) lives on a different registrable domain than the page's
-            # host (an IP: is another host), or
-            # (c) has a hostname that fails _resolve_safe_target (internal
-            # IP / loopback / docker sibling / metadata). The attacker
-            # controls the HTML so we cannot trust src values.
-            # Hosts as urlparse gives them: lower case, no brackets (``name``,
-            # the page's host, comes so). An address has no domain, only its
-            # own scripts.
-            target_reg = None if _is_ip_literal(name) else _registrable(name) or name
-            # The cap counts the scripts fetched: a foreign script, a refused
-            # host's or a duplicate takes no place. A refused host is checked
-            # once; past as many refused hosts as scripts, no new host is
-            # resolved, the hosts already open are still read.
-            fetched: set[str] = set()
-            refused: set[str] = set()
-            for u in resolved:
-                if len(fetched) >= _JS_MAX_FILES:
-                    break
-                try:
-                    parsed = urlparse(u)
-                    port = parsed.port  # raises on an invalid port
-                    host = parsed.hostname or ""
-                    if parsed.scheme not in ("http", "https") or not host:
-                        continue
-                    if host != name and (target_reg is None or (_registrable(host) or host) != target_reg):
-                        continue
-                    if u in fetched or host in refused:
-                        continue
-                    # Resolved once per host: its client's routing and the
-                    # URL rest on the same address.
-                    if host not in clients:
-                        if len(refused) >= _JS_MAX_FILES:
-                            continue
-                        try:
-                            ip = _resolve_safe_target(host)[0]
-                            if _excluded_host(host, ip):
-                                raise ValueError("host in the scan blocklist")
-                        except ValueError as e:
-                            refused.add(host)
-                            logger.info("scan of %s: scripts of %s not fetched (%s)", target, host, e)
-                            continue
-                        clients[host] = (stack.enter_context(open_client(host, ip)), ip)
-                    fetched.add(u)
-                    host_client, ip = clients[host]
-                    script_base, headers, ext = target_request(host, ip, parsed.scheme, port)
-                    path = ((parsed.path or "/") + (f";{parsed.params}" if parsed.params else "")
-                            + (f"?{parsed.query}" if parsed.query else ""))
-                    # Size-bounded download
-                    with host_client.stream("GET", script_base + path, headers={**ua, **headers},
-                                              extensions=ext, timeout=4.0) as resp:
-                        if resp.status_code != 200:
-                            continue
-                        chunks: list[bytes] = []
-                        total = 0
-                        for chunk in resp.iter_bytes(8192):
-                            chunks.append(chunk)
-                            total += len(chunk)
-                            if total >= _JS_MAX_BYTES:
-                                break
-                        body = b"".join(chunks).decode("utf-8", errors="ignore")
-                    js_bodies.append((u, body))
-                except Exception:
+    # Each HTTPS web endpoint's home page; a script read twice counts once.
+    for port in https_web_ports():
+        try:
+            with ExitStack() as stack:
+                # {host: (client, the address it was validated at)}, the page's
+                # hops included.
+                clients: dict = {}
+                r, name, page_url, stop = fetch_page(stack, clients, open_client, target, locked_ip,
+                                                     follow_redirects_mode(asset_config), ua, "https", port)
+                if stop:
+                    # Said, or the scan would read as a clean one.
+                    notes.append({
+                        "scanner": "js_analysis",
+                        "type": "js_not_analysed",
+                        "severity": "info",
+                        "title": f"JavaScript not analysed on {target}: the home page redirect was not followed",
+                        "description": (f"The home page answers HTTP {r.status_code} to {stop[0]}, not followed: "
+                                        f"{stop[1]}. No script was read."),
+                        "target": target,
+                        "evidence": {"url": page_url, "status_code": r.status_code,
+                                     "location": stop[0], "reason": stop[1]},
+                    })
                     continue
-    except Exception as e:
-        # The scripts read until then are still analysed.
-        logger.info("scan of %s: JavaScript analysis stopped (%s: %s)", target, type(e).__name__, e)
+                if r.status_code != 200:
+                    continue
+                html = r.text or ""
+                # Extract every script src
+                src_re = _re.compile(r'<script[^>]+src="([^"]+)"', _re.IGNORECASE)
+                raw_urls = src_re.findall(html)
+                # Relative URLs are the page's: resolved against its URL by name,
+                # not the address it was fetched at.
+                resolved = [urljoin(page_url, u) for u in raw_urls]
 
-    findings: list[dict[str, Any]] = []
+                # SSRF guard: reject any script URL that (a) is not http(s),
+                # (b) lives on a different registrable domain than the page's
+                # host (an IP: is another host), or
+                # (c) has a hostname that fails _resolve_safe_target (internal
+                # IP / loopback / docker sibling / metadata). The attacker
+                # controls the HTML so we cannot trust src values.
+                # Hosts as urlparse gives them: lower case, no brackets (``name``,
+                # the page's host, comes so). An address has no domain, only its
+                # own scripts.
+                target_reg = None if _is_ip_literal(name) else _registrable(name) or name
+                # The cap counts the scripts fetched: a foreign script, a refused
+                # host's or a duplicate takes no place. A refused host is checked
+                # once; past as many refused hosts as scripts, no new host is
+                # resolved, the hosts already open are still read.
+                fetched: set[str] = set()
+                refused: set[str] = set()
+                for u in resolved:
+                    if len(fetched) >= _JS_MAX_FILES:
+                        break
+                    try:
+                        parsed = urlparse(u)
+                        port = parsed.port  # raises on an invalid port
+                        host = parsed.hostname or ""
+                        if parsed.scheme not in ("http", "https") or not host:
+                            continue
+                        if host != name and (target_reg is None or (_registrable(host) or host) != target_reg):
+                            continue
+                        if u in fetched or host in refused:
+                            continue
+                        # Resolved once per host: its client's routing and the
+                        # URL rest on the same address.
+                        if host not in clients:
+                            if len(refused) >= _JS_MAX_FILES:
+                                continue
+                            try:
+                                ip = _resolve_safe_target(host)[0]
+                                if _excluded_host(host, ip):
+                                    raise ValueError("host in the scan blocklist")
+                            except ValueError as e:
+                                refused.add(host)
+                                logger.info("scan of %s: scripts of %s not fetched (%s)", target, host, e)
+                                continue
+                            clients[host] = (stack.enter_context(open_client(host, ip)), ip)
+                        fetched.add(u)
+                        host_client, ip = clients[host]
+                        script_base, headers, ext = target_request(host, ip, parsed.scheme, port)
+                        path = ((parsed.path or "/") + (f";{parsed.params}" if parsed.params else "")
+                                + (f"?{parsed.query}" if parsed.query else ""))
+                        # Size-bounded download
+                        with host_client.stream("GET", script_base + path, headers={**ua, **headers},
+                                                  extensions=ext, timeout=4.0) as resp:
+                            if resp.status_code != 200:
+                                continue
+                            chunks: list[bytes] = []
+                            total = 0
+                            for chunk in resp.iter_bytes(8192):
+                                chunks.append(chunk)
+                                total += len(chunk)
+                                if total >= _JS_MAX_BYTES:
+                                    break
+                            body = b"".join(chunks).decode("utf-8", errors="ignore")
+                        js_bodies.append((u, body))
+                    except Exception:
+                        continue
+        except Exception as e:
+            # The scripts read until then are still analysed.
+            logger.info("scan of %s: JavaScript analysis stopped (%s: %s)", target, type(e).__name__, e)
+
+    findings: list[dict[str, Any]] = list(notes)
     seen: set[tuple[str, str]] = set()
     for url, body in js_bodies:
         for label, pattern, sev in _JS_SECRET_PATTERNS:
@@ -203,4 +207,4 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
 
 SURFACE_SCANNERS = {"js_analysis": {"label": "JavaScript bundle analysis (secrets & endpoints)",
     "kinds": {"host"}, "callable": scan_host_js_analysis, "returns_discovered": False,
-    "wants_config": True, "liveness": True}}
+    "wants_config": True, "web": True, "liveness": True}}

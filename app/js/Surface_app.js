@@ -810,6 +810,7 @@ window.AI_APP_CONFIG = {
         }
         var key = {
             "nmap": "scanner.nmap",
+            "web_scans": "scanner.web_scans",
             "scheduled-host": "scanner.scheduled_host",
             "scheduled-domain": "scanner.scheduled_domain",
             "scheduled-discovery": "scanner.scheduled_discovery",

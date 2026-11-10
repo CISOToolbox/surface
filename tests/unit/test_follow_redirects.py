@@ -55,6 +55,20 @@ def _env(monkeypatch):
 
 
 @pytest.fixture
+def https_443(monkeypatch):
+    """A dispatcher run whose port scan finds 443 open and serving HTTPS: the
+    web scanners run on it (they run only on a confirmed web endpoint)."""
+    from src import scanners
+    monkeypatch.setitem(scanners.SCANNER_REGISTRY, "__ports", {
+        "label": "ports", "kinds": {"host"}, "returns_discovered": False, "port_scan": True,
+        "callable": lambda v: [{"scanner": "nmap", "type": "open_port", "severity": "info", "title": "",
+                                "description": "", "target": v, "evidence": {"port": 443, "protocol": "tcp"}}],
+    })
+    monkeypatch.setattr(scanners, "probe_web_endpoints", lambda target, ports: [("https", 443)])
+    return "__ports"
+
+
+@pytest.fixture
 def site(monkeypatch):
     """Every request lands in a recorder, as (route, url, Host, SNI). ``pages``
     maps (Host, path) to a response, or an exception to raise; anything else
@@ -286,11 +300,11 @@ def test_security_headers_without_following_grades_the_redirect(site):
     assert finding["evidence"]["url"] == f"https://{_TARGET}/"
 
 
-def test_the_dispatcher_hands_the_targets_config_to_both_scanners(site):
+def test_the_dispatcher_hands_the_targets_config_to_both_scanners(site, https_443):
     from src import scanners
     seen, pages = site
     pages[(_TARGET, "/")] = _redirect("/home")
-    scanners.run_enabled_scanners("host", _TARGET, ["js_analysis", "security_headers"],
+    scanners.run_enabled_scanners("host", _TARGET, [https_443, "js_analysis", "security_headers"],
                                   config={"follow_redirects": "none"})
     assert _urls(seen) == ["https://93.184.216.34/", "https://93.184.216.34/"]
 
@@ -358,7 +372,7 @@ def test_an_ip_target_does_not_follow_another_address_on_the_same_domain(site):
 
 
 @pytest.mark.parametrize("exclusion", ["www.medsecure.example", "medsecure.example", "93.184.216.0/24"])
-def test_a_hop_to_an_excluded_host_is_not_contacted(site, exclusion):
+def test_a_hop_to_an_excluded_host_is_not_contacted(site, exclusion, https_443):
     from src import scanners
     seen, pages = site
     monkey_target = "shop.example.net"
@@ -366,20 +380,20 @@ def test_a_hop_to_an_excluded_host_is_not_contacted(site, exclusion):
     try:
         pages[(monkey_target, "/")] = _redirect("https://www.medsecure.example/home")
         pages[("www.medsecure.example", "/home")] = _page(headers=_HEADERS)
-        findings, _d = scanners.run_enabled_scanners("host", monkey_target, ["security_headers"],
+        findings, _d = scanners.run_enabled_scanners("host", monkey_target, [https_443, "security_headers"],
                                                      config={"follow_redirects": "all"}, exclusions=[exclusion])
     finally:
         del _ADDRESSES[monkey_target]
     assert _urls(seen) == ["https://198.51.100.7/"]
-    # The run also ends with its host-liveness control record (FEAT-68).
     assert [(f["evidence"]["url"], f["evidence"]["redirect_reason"]) for f in findings
-            if f["type"] != "scanner_state"] == [(f"https://{monkey_target}/", "host in the scan blocklist")]
+            if f["scanner"] == "security_headers"] == [
+        (f"https://{monkey_target}/", "host in the scan blocklist")]
 
 
-def test_the_blocklist_of_a_run_does_not_outlive_it(site):
+def test_the_blocklist_of_a_run_does_not_outlive_it(site, https_443):
     from src import scanners
     seen, pages = site
-    scanners.run_enabled_scanners("host", _TARGET, ["security_headers"], exclusions=["www.medsecure.example"])
+    scanners.run_enabled_scanners("host", _TARGET, [https_443, "security_headers"], exclusions=["www.medsecure.example"])
     pages[(_TARGET, "/")] = _redirect("https://www.medsecure.example/home")
     pages[("www.medsecure.example", "/home")] = _page(headers=_HEADERS)
     seen.clear()
