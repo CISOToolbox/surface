@@ -371,8 +371,9 @@ def test_a_hop_to_an_excluded_host_is_not_contacted(site, exclusion):
     finally:
         del _ADDRESSES[monkey_target]
     assert _urls(seen) == ["https://198.51.100.7/"]
-    assert [(f["evidence"]["url"], f["evidence"]["redirect_reason"]) for f in findings] == [
-        (f"https://{monkey_target}/", "host in the scan blocklist")]
+    # The run also ends with its host-liveness control record (FEAT-68).
+    assert [(f["evidence"]["url"], f["evidence"]["redirect_reason"]) for f in findings
+            if f["type"] != "scanner_state"] == [(f"https://{monkey_target}/", "host in the scan blocklist")]
 
 
 def test_the_blocklist_of_a_run_does_not_outlive_it(site):

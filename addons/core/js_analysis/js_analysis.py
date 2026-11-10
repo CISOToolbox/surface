@@ -203,4 +203,4 @@ def scan_host_js_analysis(target: str, asset_config: dict | None = None) -> list
 
 SURFACE_SCANNERS = {"js_analysis": {"label": "JavaScript bundle analysis (secrets & endpoints)",
     "kinds": {"host"}, "callable": scan_host_js_analysis, "returns_discovered": False,
-    "wants_config": True}}
+    "wants_config": True, "liveness": True}}

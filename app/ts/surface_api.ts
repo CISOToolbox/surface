@@ -120,6 +120,8 @@ window.SurfaceAPI = {
     updateMeasure: function(id, data) { return _fetch("/measures/" + id, { method: "PATCH", body: data as Record<string, unknown> }); },
     deleteMeasure: function(id) { return _fetch("/measures/" + id, { method: "DELETE" }); },
     smtpConfig: function() { return _fetch("/reports/smtp/config"); },
+    livenessSettings: function() { return _fetch("/monitored-assets/liveness-settings"); },
+    saveLivenessSettings: function(days) { return _fetch("/monitored-assets/liveness-settings", { method: "PUT", body: { inactive_after_days: days } }); },
     smtpSetConfig: function(data) { return _fetch("/reports/smtp/config", { method: "PUT", body: data as Record<string, unknown> }); },
     sendEmailDigest: function() { return _fetch("/reports/email-digest/send", { method: "POST" }); },
 };

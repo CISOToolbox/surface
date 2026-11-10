@@ -9,15 +9,16 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request, APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.crypto import encrypt_secret
 from src.database import async_session, get_db
+from src import host_liveness
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
-from src.models import MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
+from src.models import AppSettings, MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
 from src.scan_common import FOLLOW_REDIRECT_MODES, resolves_to_lan_only, unc_host
 from src.scanners import DEFAULT_SCANNERS_BY_KIND, SCANNER_REGISTRY, addon_help_docs, available_scanners_for_kind, resolve_first_ip, run_enabled_scanners
@@ -212,7 +213,12 @@ def _require_admin_for_public_share(user, kind: str, value: str) -> None:
         require_admin(user)
 
 
-def _to_dict(a: MonitoredAsset) -> dict:
+async def _inactive_after_days(db: AsyncSession) -> int:
+    row = await db.get(AppSettings, host_liveness.SETTING_KEY)
+    return host_liveness.parse_inactive_after_days(row.value if row else None)
+
+
+def _to_dict(a: MonitoredAsset, inactive_after_days: int) -> dict:
     return {
         "id": a.id, "kind": a.kind, "value": a.value, "label": a.label or "",
         "notes": a.notes or "", "enabled": a.enabled,
@@ -225,6 +231,10 @@ def _to_dict(a: MonitoredAsset) -> dict:
         "config": _redact_config_out(a.config or {}),
         "resolved_ip": a.resolved_ip,
         "last_scan_at": a.last_scan_at, "created_at": a.created_at,
+        # FEAT-68 — the host's last answer, and since when it is silent once
+        # that passes the setting (null otherwise).
+        "last_alive_at": a.last_alive_at,
+        "inactive_since": host_liveness.inactive_since(a, inactive_after_days, datetime.now(timezone.utc)),
     }
 
 
@@ -284,7 +294,37 @@ async def list_assets(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(MonitoredAsset).order_by(MonitoredAsset.created_at.desc()))
-    return [_to_dict(a) for a in result.scalars().all()]
+    days = await _inactive_after_days(db)
+    return [_to_dict(a, days) for a in result.scalars().all()]
+
+
+class LivenessSettings(BaseModel):
+    inactive_after_days: int = Field(ge=host_liveness.MIN_INACTIVE_AFTER_DAYS, le=host_liveness.MAX_INACTIVE_AFTER_DAYS)
+
+
+def _liveness_settings_out(days: int) -> dict:
+    return {"inactive_after_days": days, "default": host_liveness.DEFAULT_INACTIVE_AFTER_DAYS,
+            "min": host_liveness.MIN_INACTIVE_AFTER_DAYS, "max": host_liveness.MAX_INACTIVE_AFTER_DAYS}
+
+
+@router.get("/liveness-settings")
+async def get_liveness_settings(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """FEAT-68 — after how many days without an answer a host is inactive."""
+    return _liveness_settings_out(await _inactive_after_days(db))
+
+
+@router.put("/liveness-settings")
+async def put_liveness_settings(body: LivenessSettings, request: Request,
+                                user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    require_admin(user)
+    row = await db.get(AppSettings, host_liveness.SETTING_KEY)
+    if row is None:
+        db.add(AppSettings(key=host_liveness.SETTING_KEY, value=str(body.inactive_after_days)))
+    else:
+        row.value = str(body.inactive_after_days)
+    await log_action(db, user, request, "settings.hosts_inactive_after_days", target=str(body.inactive_after_days))
+    await db.commit()
+    return _liveness_settings_out(body.inactive_after_days)
 
 
 @router.post("", status_code=201)
@@ -332,7 +372,7 @@ async def create_asset(
     await log_action(db, user, request, "asset.create", target=canonical)
     await db.commit()
     await db.refresh(a)
-    return _to_dict(a)
+    return _to_dict(a, await _inactive_after_days(db))
 
 
 @router.patch("/{asset_id}")
@@ -364,6 +404,9 @@ async def update_asset(
     existing_config = dict(a.config or {})
     if host_changed:
         existing_config.pop("smb_password_enc", None)
+    # Another target: the old one's answers say nothing about it.
+    forget_liveness = (new_kind, new_value) != (a.kind, a.value)
+    was_enabled = a.enabled
     a.kind = new_kind
     a.value = new_value
     if body.label is not None:
@@ -381,6 +424,12 @@ async def update_asset(
         ]
     if body.tags is not None:
         a.tags = _clean_tags(body.tags)
+    # A host back from being disabled was not scanned meanwhile; one no
+    # scanner left can see answer is never flagged — its old silence neither.
+    scanners = list(a.enabled_scanners or []) or DEFAULT_SCANNERS_BY_KIND.get(a.kind, [])
+    if (forget_liveness or (a.enabled and not was_enabled)
+            or not any(SCANNER_REGISTRY.get(s, {}).get("liveness") for s in scanners)):
+        host_liveness.forget(a)
     if body.criticality is not None:
         crit = body.criticality.lower()
         if crit in _VALID_CRITICALITY:
@@ -395,7 +444,7 @@ async def update_asset(
         a.config = existing_config
     await db.commit()
     await db.refresh(a)
-    return _to_dict(a)
+    return _to_dict(a, await _inactive_after_days(db))
 
 
 @router.delete("/{asset_id}", status_code=204)

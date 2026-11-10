@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.host_liveness import apply_liveness
 from src.models import Finding
 
 logger = logging.getLogger("surface.dedup")
@@ -234,7 +235,9 @@ def apply_scanner_state(asset: Any, findings: list[dict[str, Any]]) -> tuple[lis
     never reach the findings table; instead they persist scanner-side state on
     the asset and let the caller mark a capped scan "partial" (with an "arrêté
     après X fichiers" note) instead of "completed". Generic on purpose: any
-    future stateful scanner can reuse it.
+    future stateful scanner can reuse it. The dispatcher ends a host scan with
+    one carrying ``liveness`` (``{"alive": bool}``), recorded on the asset
+    (src/host_liveness.py).
 
     ``state`` is the merged evidence dict of the scanner_state record, or None
     when no scanner emitted one (e.g. host scans). The asset's JSON config is
@@ -252,7 +255,9 @@ def apply_scanner_state(asset: Any, findings: list[dict[str, Any]]) -> tuple[lis
                 cfg[k] = v
             for k in (ev.get("config_unset") or []):
                 cfg.pop(k, None)
-            state = ev
+            if "liveness" in ev and asset is not None:
+                apply_liveness(asset, bool(ev["liveness"].get("alive")), datetime.now(timezone.utc))
+            state = {**(state or {}), **ev}
             patched = True
             continue
         out.append(f)

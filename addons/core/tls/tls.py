@@ -8,7 +8,7 @@ from typing import Any
 from src.scan_common import logger
 from src.scan_common import (
     _safe_target, _is_ip_literal, _tls_ssl_context, _warn_unproxied,
-    _registrable, _normalize_host, _in_scope,
+    _registrable, _normalize_host, _in_scope, note_alive, note_inconclusive, is_local_network_error,
 )
 
 
@@ -158,6 +158,7 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
     try:
         ctx = _tls_ssl_context()
         with socket.create_connection((target, port), timeout=5) as sock:
+            note_alive(target)  # the host accepted the connection
             with ctx.wrap_socket(sock, server_hostname=target) as ssock:
                 cert = ssock.getpeercert()
                 der = ssock.getpeercert(binary_form=True)
@@ -362,9 +363,15 @@ def scan_host_tls(target: str) -> tuple[list[dict[str, Any]], list[str]]:
                 "evidence": {**details, "san_dns_names": sans, "san_in_scope": discovered, "error": err_str},
             })
         return findings, discovered
-    except (socket.timeout, ConnectionRefusedError, OSError):
+    except ConnectionRefusedError:
+        note_alive(target)  # a reset is the host answering
+        return [], []
+    except (socket.timeout, OSError) as e:
+        if is_local_network_error(e):
+            note_inconclusive(target)
         return [], []
 
 
 SURFACE_SCANNERS = {"tls": {"label": "TLS certificate (+ SAN discovery)",
-    "kinds": {"domain", "host"}, "callable": scan_host_tls, "returns_discovered": True}}
+    "kinds": {"domain", "host"}, "callable": scan_host_tls, "returns_discovered": True,
+    "liveness": "direct"}}

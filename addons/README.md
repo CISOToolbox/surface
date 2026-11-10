@@ -55,6 +55,7 @@ SURFACE_SCANNERS = {
         "wants_config": True,         # callable gets (value, asset_config)
         "wants_prior_findings": False,# callable gets (value, prior_findings)
         "runs_after": [],             # scanners to run first when enabled with it
+        "liveness": False,            # True if it can see the host answer (below)
         "doc": _DOC,                  # optional in-app help — see §5
     },
 }
@@ -71,6 +72,20 @@ SURFACE_DEFAULT_SCANNERS = {"file_share": ["<name>"]}  # default scanners per ki
 in this scan. A scanner that chains off another one names it in `runs_after`
 (e.g. `ct_logs` → `["typosquatting"]`): when both are enabled, the dispatcher
 runs the named scanner first, whatever order the asset lists them in.
+
+A scanner that can see a host answer sets `"liveness": True` and calls
+`scan_common.note_alive(host)` when it does: a port open or closed, a TCP
+connection accepted. Any HTTP answer through `scan_client`, or a connection
+the target accepted, is noted on its own. A scanner that opens raw sockets
+(it cannot go through the outbound proxy) sets `"liveness": "direct"`
+instead: where the proxy applies to the host, its silence does not count.
+A scanner that could not tell for a reason of the scanning machine (no
+route, no address family: `scan_common.is_local_network_error`) calls
+`scan_common.note_inconclusive(host)`. A host scan in which such a scanner
+ran to its end (no `error`, `exception`, `scanner_error` or
+`scanner_timeout` finding, not inconclusive) records on the asset whether
+the host answered; a host silent for the configured number of days shows as
+inactive in the Hosts view (`src/host_liveness.py`).
 
 A scanner validates its `value` first. One that connects to it calls
 `scan_common._resolve_safe_target` (or `_safe_target`), which refuses a name

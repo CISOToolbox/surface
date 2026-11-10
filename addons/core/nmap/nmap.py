@@ -76,9 +76,12 @@ def scan_host_ports(target: str, profile: str = "quick") -> list[dict[str, Any]]
 
 SURFACE_SCANNERS = {
     "nmap_quick": {"label": "Nmap (top 100 ports)", "kinds": {"host"},
-        "callable": lambda t: scan_host_ports(t, profile="quick"), "returns_discovered": False},
+        "callable": lambda t: scan_host_ports(t, profile="quick"), "returns_discovered": False,
+        "liveness": "direct"},
     "nmap_standard": {"label": "Nmap (top 1000 + service detection)", "kinds": {"host"},
-        "callable": lambda t: scan_host_ports(t, profile="standard"), "returns_discovered": False},
+        "callable": lambda t: scan_host_ports(t, profile="standard"), "returns_discovered": False,
+        "liveness": "direct"},
     "nmap_deep": {"label": "Nmap (all ports + service detection)", "kinds": {"host", "ip_range"},
-        "callable": lambda t: scan_host_ports(t, profile="deep"), "returns_discovered": False},
+        "callable": lambda t: scan_host_ports(t, profile="deep"), "returns_discovered": False,
+        "liveness": "direct"},
 }

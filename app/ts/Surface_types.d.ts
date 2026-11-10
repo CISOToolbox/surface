@@ -58,7 +58,14 @@ interface SurfaceMonitoredAsset {
     resolved_ip?: string;
     last_scan_at?: string;
     created_at?: string;
+    /** FEAT-68 — the host's last answer to a scan. */
+    last_alive_at?: string | null;
+    /** FEAT-68 — since when the host is silent, once past the setting. */
+    inactive_since?: string | null;
 }
+
+/** FEAT-68 — after how many days without an answer a host is inactive. */
+interface SurfaceLivenessSettings { inactive_after_days: number; default: number; min: number; max: number; }
 
 interface SurfaceExclusion {
     id: string;
@@ -306,6 +313,8 @@ interface SurfaceAPIShape {
     updateMeasure(id: string, data: Partial<SurfaceMeasure>): Promise<SurfaceMeasure>;
     deleteMeasure(id: string): Promise<null>;
     smtpConfig(): Promise<SurfaceSmtpConfig>;
+    livenessSettings(): Promise<SurfaceLivenessSettings>;
+    saveLivenessSettings(days: number): Promise<SurfaceLivenessSettings>;
     smtpSetConfig(data: SurfaceSmtpConfig): Promise<unknown>;
     sendEmailDigest(): Promise<{ recipients?: string[] }>;
 }
@@ -436,6 +445,7 @@ interface Window {
     // Hosts
     _setHostSearch?: (v: string) => void;
     _hostsSetView?: (view: string) => void;
+    _toggleHostsInactive?: () => void;
     _clearHostSearch?: () => void;
     _openHost?: (id: string) => void;
     _backToHosts?: () => void;
@@ -460,6 +470,7 @@ interface Window {
     _surfaceSaveNuclei?: () => Promise<string | null>;
     _surfaceSaveShodan?: () => Promise<string | null>;
     _surfaceSaveSmtp?: () => Promise<string | null>;
+    _surfaceSaveLiveness?: () => Promise<string | null>;
     _nucleiUpdateTemplates?: () => void;
     _sendSmtpDigestNow?: () => void;
 }

@@ -45,6 +45,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from src import host_liveness
 from src.findings_dedup import compute_dedup_key, insert_many
 from src.models import Finding, MonitoredAsset
 
@@ -127,6 +128,7 @@ class HostResolver:
                 scanners = list(found.enabled_scanners or [])
                 if not found.enabled and not scanners:
                     found.enabled = True        # heal the old-model artefact
+                    host_liveness.forget(found)  # re-enabled: no old silence
                 if self.connector not in scanners:
                     scanners.append(self.connector)
                 found.enabled_scanners = scanners

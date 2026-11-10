@@ -136,4 +136,5 @@ def scan_host_sensitive_files(target: str) -> list[dict[str, Any]]:
 
 
 SURFACE_SCANNERS = {"sensitive_files": {"label": "Sensitive files exposure",
-    "kinds": {"host"}, "callable": scan_host_sensitive_files, "returns_discovered": False}}
+    "kinds": {"host"}, "callable": scan_host_sensitive_files, "returns_discovered": False,
+    "liveness": True}}

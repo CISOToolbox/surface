@@ -156,4 +156,4 @@ def scan_host_security_headers(target: str, asset_config: dict | None = None) ->
 
 SURFACE_SCANNERS = {"security_headers": {"label": "Security headers grade",
     "kinds": {"host"}, "callable": scan_host_security_headers, "returns_discovered": False,
-    "wants_config": True}}
+    "wants_config": True, "liveness": True}}

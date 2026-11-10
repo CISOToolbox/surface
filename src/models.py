@@ -206,6 +206,12 @@ class MonitoredAsset(Base):
     # so the normal fast scan stays the default.
     stealth_mode = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     last_scan_at = Column(DateTime(timezone=True), nullable=True)
+    # Host liveness (FEAT-68), kept by the scans whose scanners can see the
+    # host answer (an open or closed port, a TLS connection, an HTTP answer):
+    # the last scan it answered, and the first scan it left unanswered since
+    # (NULL while it answers). See src/host_liveness.py.
+    last_alive_at = Column(DateTime(timezone=True), nullable=True)
+    unanswered_since = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
 

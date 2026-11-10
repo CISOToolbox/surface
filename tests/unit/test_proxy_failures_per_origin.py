@@ -214,7 +214,7 @@ def test_one_finding_per_target_names_the_refused_origin(monkeypatch):
     monkeypatch.setitem(scanners.SCANNER_REGISTRY, "two_refused",
                         {"callable": two_refused, "kinds": ["host"], "returns_discovered": False})
     findings, _ = scanners.run_enabled_scanners("host", _TARGET, ["two_refused"])
-    [finding] = findings
+    [finding] = [f for f in findings if f["type"] != "scanner_state"]  # the liveness record aside
     assert finding["evidence"]["origin"] == f"https://{_TARGET}:8443"
     assert f"https://{_TARGET}:8443" in finding["description"]
 

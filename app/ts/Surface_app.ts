@@ -50,16 +50,19 @@ window.AI_APP_CONFIG = {
             window._ctSettingsRegister({ id: "surface-nuclei", holder: "surface-nuclei-section", save: function() { return window._surfaceSaveNuclei!(); } });
             window._ctSettingsRegister({ id: "surface-shodan", holder: "surface-shodan-section", save: function() { return window._surfaceSaveShodan!(); } });
             window._ctSettingsRegister({ id: "surface-smtp", holder: "surface-smtp-section", save: function() { return window._surfaceSaveSmtp!(); } });
+            window._ctSettingsRegister({ id: "surface-liveness", holder: "surface-liveness-section", save: function() { return window._surfaceSaveLiveness!(); } });
         }
         var nucleiBody  = '<div id="surface-nuclei-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
         var shodanBody  = '<div id="surface-shodan-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
         var smtpBody    = '<div id="surface-smtp-section"   class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
+        var livenessBody = '<div id="surface-liveness-section" class="surface-settings-inner"><div class="surface-settings-muted">' + loading + '</div></div>';
 
         return (
             section(tzTitle,     tzHtml) +
             section(nucleiTitle, nucleiBody) +
             section(shodanTitle, shodanBody) +
             section(smtpTitle,   smtpBody) +
+            section(tt("liveness.section"), livenessBody) +
             (window._ctProxySettingsBody ? section(tt("settings.proxy.title"), window._ctProxySettingsBody()) : "") +
             (window._ctUsersSettingsBody ? section(tt("settings.users.title"), window._ctUsersSettingsBody()) : "")
         );
@@ -275,6 +278,7 @@ var _selectedHostReturnPanel: string | null = null;        // panel to return to
 var _hostSelectedFinding: SurfaceFinding | null = null; // Finding shown inline in host detail view
 var _hostHideFP = true;      // Host detail: hide false-positive findings by default
 var _hostSearch = "";        // free-text filter for the Hosts panel
+var _hostsInactiveOnly = false;  // FEAT-68: Hosts panel shows only the inactive hosts
 var _bulkSelection: Record<string, boolean> = {};     // { [finding_id]: true } — checked rows in findings table
 var _monitoredBulkSelection: Record<string, boolean> = {}; // { [asset_id]: true } — checked rows in surveillance table
 var _monitoredSearch = "";   // free-text search for the Surveillance panel
@@ -3963,6 +3967,9 @@ function _renderHosts(c: HTMLElement) {
     h += '<input type="text" class="surface-filter ct-minw-320 ct-flex-1" placeholder="' + esc(t("hosts.search.placeholder")) + '"';
     h += ' id="host-search" value="' + esc(_hostSearch) + '" data-input="_setHostSearch" data-pass-value autocomplete="off">';
     h += '<button class="ct-btn mt-8 ct-hidden" data-write data-variant="primary" id="host-search-clear" data-click="_clearHostSearch"' + (_hostSearch ? '' : '') + '>x</button>';
+    h += '<button class="ct-btn" id="host-inactive-toggle" data-click="_toggleHostsInactive" aria-pressed="' + _hostsInactiveOnly + '"'
+       + (_hostsInactiveOnly ? ' data-variant="primary"' : '') + ' title="' + esc(t("hosts.inactive_filter_title")) + '">'
+       + _icon("clock", 14) + ' ' + esc(t("hosts.inactive_filter")) + '</button>';
     h += '</div>';
 
     // Empty wrapper the search handler refreshes in-place
@@ -4003,6 +4010,8 @@ function _hostsTableHtml(entries: { primary: SurfaceMonitoredAsset; aliases: Sur
         if (entry.aliases.length) {
             h += ' <span class="ct-muted ct-text-meta">+' + entry.aliases.length + '</span>';
         }
+        var inactive = _inactiveBadge(_entryInactiveSince(entry), a.last_alive_at);
+        if (inactive) h += ' ' + inactive;
         if (a.label) h += '<div class="ct-muted ct-text-meta">' + esc(a.label) + '</div>';
         h += '</td>';
         h += '<td><span class="ct-badge" data-size="sm" data-tone="'
@@ -4022,6 +4031,39 @@ function _hostsTableHtml(entries: { primary: SurfaceMonitoredAsset; aliases: Sur
     h += '</tbody></table>';
     return h;
 }
+
+// FEAT-68 — a card (a host and its same-IP aliases) is inactive when none of
+// its hosts answers any more: since the most recent of their silences. Null
+// as long as one of them answers, or for a share or a domain.
+function _entryInactiveSince(entry: { primary: SurfaceMonitoredAsset; aliases: SurfaceMonitoredAsset[] }): string | null {
+    var members = [entry.primary].concat(entry.aliases);
+    var since: string | null = null;
+    for (var i = 0; i < members.length; i++) {
+        var m = members[i]!;
+        if (m.kind !== "host" || !m.inactive_since) return null;
+        if (!since || Date.parse(m.inactive_since) > Date.parse(since)) since = m.inactive_since;
+    }
+    return since;
+}
+
+function _inactiveBadge(since: string | null | undefined, lastAlive: string | null | undefined): string {
+    if (!since) return "";
+    var days = Math.max(0, Math.floor((Date.now() - Date.parse(since)) / 86400000));
+    var title = t("hosts.inactive_title").replace("{since}", _fmtDate(since))
+        .replace("{last}", lastAlive ? _fmtDate(lastAlive) : t("hosts.inactive_never"));
+    return '<span class="ct-badge" data-size="sm" data-tone="medium" title="' + esc(title) + '">'
+        + esc(t("hosts.inactive_badge").replace("{n}", String(days))) + '</span>';
+}
+
+window._toggleHostsInactive = function() {
+    _hostsInactiveOnly = !_hostsInactiveOnly;
+    var btn = document.getElementById("host-inactive-toggle");
+    if (btn) {
+        if (_hostsInactiveOnly) btn.setAttribute("data-variant", "primary"); else btn.removeAttribute("data-variant");
+        btn.setAttribute("aria-pressed", String(_hostsInactiveOnly));
+    }
+    _refreshHostCards();
+};
 
 function _refreshHostCards() {
     var wrap = document.getElementById("host-cards-wrap");
@@ -4075,6 +4117,9 @@ function _refreshHostCards() {
         entries.push({ primary: members[0]!, aliases: members.slice(1), ip: ip });
     });
 
+    var inactiveCount = entries.filter(function(e) { return !!_entryInactiveSince(e); }).length;
+    if (_hostsInactiveOnly) entries = entries.filter(function(e) { return !!_entryInactiveSince(e); });
+
     // Precompute each card's aggregated counts ONCE (union over primary +
     // aliases, deduped) — reused by the sort and the render below, so we never
     // rescan all findings per comparison.
@@ -4097,10 +4142,11 @@ function _refreshHostCards() {
     var _disabledCount = entries.filter(function(e) { return e.primary.enabled === false; }).length;
 
     var shownHosts = entries.reduce(function(n, e) { return n + 1 + e.aliases.length; }, 0);
-    var h = '<div class="ct-text-label ct-muted ct-mb-2">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups")) + '</div>';
+    var h = '<div class="ct-text-label ct-muted ct-mb-2">' + shownHosts + ' / ' + hosts.length + ' ' + esc(t("hosts.count")) + ' · ' + entries.length + ' ' + esc(t("hosts.groups"))
+        + (inactiveCount ? ' · ' + inactiveCount + ' ' + esc(t("hosts.inactive_count")) : '') + '</div>';
 
-    if (!filtered.length) {
-        h += '<div class="ct-empty-state">' + esc(hosts.length ? t("hosts.no_match") : t("hosts.empty")) + '</div>';
+    if (!filtered.length || !entries.length) {
+        h += '<div class="ct-empty-state">' + esc(!hosts.length ? t("hosts.empty") : !entries.length && filtered.length ? t("hosts.no_inactive") : t("hosts.no_match")) + '</div>';
         wrap.innerHTML = h;
         return;
     }
@@ -4135,6 +4181,7 @@ function _refreshHostCards() {
         if (isShare) h += '<span class="ct-badge" data-size="sm" data-tone="medium">' + esc(t("hosts.badge.share")) + '</span>';
         if (a.kind === "domain") h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(_kindLabel("domain")) + '</span>';
         if (!a.enabled) h += '<span class="ct-badge" data-size="sm" data-tone="neutral">' + esc(t("hosts.badge.disabled")) + '</span>';
+        h += _inactiveBadge(_entryInactiveSince(entry), a.last_alive_at);
         if (autoDiscovered) h += '<span class="ct-badge" data-size="sm" data-tone="accent">' + esc(t("hosts.source.auto")) + '</span>';
         else h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(t("hosts.source.manual")) + '</span>';
         if (a.criticality && a.criticality !== "medium") {
@@ -4317,6 +4364,7 @@ function _renderHostDetail(c: HTMLElement) {
     h += '<span class="ct-ref" data-size="sm">' + esc(_kindLabel(a.kind)) + '</span>';
     h += '<h2 class="ct-m-0 ct-flex-1">' + esc(isShare ? hostKey : a.value) + '</h2>';
     if (isShare) h += '<span class="ct-badge" data-size="sm" data-tone="medium">' + esc(t("hosts.badge.share")) + '</span>';
+    h += _inactiveBadge(a.inactive_since, a.last_alive_at);
     if (autoDiscovered) h += '<span class="ct-badge" data-size="sm" data-tone="accent">' + esc(t("hosts.source.auto")) + '</span>';
     else h += '<span class="ct-badge" data-size="sm" data-tone="info">' + esc(t("hosts.source.manual")) + '</span>';
     if (a.criticality && a.criticality !== "medium") {
@@ -4842,6 +4890,7 @@ document.addEventListener("DOMContentLoaded", function() {
             setTimeout(_surfaceWireNucleiSection, 0);
             setTimeout(_surfaceWireShodanSection, 0);
             setTimeout(_surfaceWireSmtpSection, 0);
+            setTimeout(_surfaceWireLivenessSection, 0);
             return r;
         };
     }
@@ -4964,6 +5013,40 @@ window._surfaceSaveShodan = function(): Promise<string | null> {
         if (res) res.innerHTML = "";
         return e.message || t("common.error");
     });
+};
+
+// ═══════════════════════════════════════════════════════════════
+// INACTIVE HOSTS SETTING (FEAT-68)
+// ═══════════════════════════════════════════════════════════════
+// After how many days without an answer to the scans a host is flagged
+// inactive (possibly decommissioned) in the Hosts view.
+
+function _surfaceWireLivenessSection() {
+    var holder = document.getElementById("surface-liveness-section");
+    if (!holder) return;
+    SurfaceAPI.livenessSettings().then(function(cfg) {
+        holder!.innerHTML = '<div class="surface-settings-help">' + esc(t("liveness.help")) + '</div>'
+            + '<div class="surface-settings-grid">'
+            + '<label class="surface-settings-label" for="surface-liveness-days">' + esc(t("liveness.days")) + '</label>'
+            + '<input type="number" id="surface-liveness-days" class="surface-settings-input" value="' + esc(String(cfg.inactive_after_days))
+            + '" min="' + esc(String(cfg.min)) + '" max="' + esc(String(cfg.max)) + '">'
+            + '</div>'
+            + '<div class="surface-settings-help">' + esc(t("liveness.bounds").replace("{def}", String(cfg.default))
+                .replace("{min}", String(cfg.min)).replace("{max}", String(cfg.max))) + '</div>';
+    }).catch(function() {
+        holder!.innerHTML = '<div class="surface-settings-muted">' + esc(t("liveness.load_error")) + '</div>';
+    });
+}
+
+/** Saved by the settings panel's Save button: null when saved, else the error. */
+window._surfaceSaveLiveness = function(): Promise<string | null> {
+    var el = document.getElementById("surface-liveness-days") as HTMLInputElement | null;
+    var days = el ? parseInt(el.value, 10) : NaN;
+    if (isNaN(days)) return Promise.resolve(t("liveness.invalid"));
+    return SurfaceAPI.saveLivenessSettings(days).then(function() {
+        // The flags depend on it: reload the hosts.
+        return SurfaceAPI.listMonitored().then(function(d) { _monitored = d || []; if (_panel === "hosts") renderPanel(); return null; });
+    }).catch(function(e) { return e.message || t("liveness.invalid"); });
 };
 
 // ═══════════════════════════════════════════════════════════════

@@ -223,6 +223,7 @@ def test_a_proxy_failure_is_a_finding_of_the_scanner(monkeypatch, caplog):
     warned = [r.getMessage() for r in caplog.records if "outbound proxy" in r.getMessage()]
     assert len(warned) == 1 and "headers_like" in warned[0] and "proxy.medsecure.example" in warned[0]
     assert "s3cret" not in warned[0]
+    findings = [f for f in findings if f["type"] != "scanner_state"]  # the liveness record aside
     assert [(f["scanner"], f["type"], f["target"]) for f in findings] == [
         ("headers_like", "scanner_error", "portal.medsecure.example")]
     assert findings[0]["evidence"]["proxy_host"] == "proxy.medsecure.example"
@@ -249,7 +250,7 @@ def test_alternative_schemes_answered_on_one_are_not_a_proxy_failure(monkeypatch
     monkeypatch.setitem(scanners.SCANNER_REGISTRY, "http_like",
                         {"callable": http_like, "kinds": ["host"], "returns_discovered": False})
     findings, _ = scanners.run_enabled_scanners("host", "portal.medsecure.example", ["http_like"])
-    assert findings == []
+    assert [f for f in findings if f["type"] != "scanner_state"] == []  # the liveness record aside
 
 
 @pytest.mark.parametrize("https_fails", [True, False])

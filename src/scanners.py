@@ -30,7 +30,7 @@ from src.scan_common import (  # noqa: F401  # re-exported for routes/scheduler 
     _severity_for_port, HIGH_RISK_SERVICES, CRITICAL_SERVICES, _parse_nmap_xml, _tls_ssl_context,
     _STEALTH_CTX, _STEALTH_BROWSER_UA, _is_stealth, _EXCLUSIONS_CTX,
     _MULTI_LABEL_TLDS, _HOST_RE, _registrable, _normalize_host, _in_scope,
-    take_proxy_failures,
+    take_proxy_failures, _LIVENESS_CTX, host_answered, host_inconclusive, proxy_applies, UnresolvedTarget,
 )
 
 
@@ -334,11 +334,14 @@ def run_enabled_scanners(kind: str, value: str, enabled: list[str], stealth: boo
     enabled = _order_by_dependencies(enabled)
     _STEALTH_CTX.on = bool(stealth)
     _EXCLUSIONS_CTX.values = list(exclusions or [])
+    _LIVENESS_CTX.hosts = set()
     try:
         return _run_scanners_inner(kind, value, enabled, findings, discovered, config or {}, sink)
     finally:
         _STEALTH_CTX.on = False
         _EXCLUSIONS_CTX.values = []
+        _LIVENESS_CTX.hosts = None
+        _LIVENESS_CTX.inconclusive = None
 
 
 def _order_by_dependencies(enabled: list[str]) -> list[str]:
@@ -372,6 +375,9 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
     with `wants_sink=True` receives it and streams findings to it as they are
     discovered (so a killed/long scan keeps what it found); such a scanner
     returns only the findings it did NOT sink (status/summary)."""
+    # Host liveness (FEAT-68): did a scanner able to see the host answer
+    # (`"liveness": True`) run to its end without failing on our side?
+    probed = False
     for name in enabled:
         meta = SCANNER_REGISTRY.get(name)
         if not meta:
@@ -381,6 +387,9 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
         if kind not in meta["kinds"]:
             logger.warning("Scanner %s not applicable to kind=%s, skipping", name, kind)
             continue
+        start = len(findings)
+        _LIVENESS_CTX.inconclusive = set()  # only this scanner's
+        gone = False   # the name no longer resolves: the host cannot answer
         try:
             if meta.get("wants_sink"):
                 # Streaming scanner: gets the per-scanner config + the sink and
@@ -405,6 +414,7 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
             else:
                 findings.extend(result or [])
         except Exception as e:
+            gone = isinstance(e, UnresolvedTarget) and e.reason in ("no_name", "no_address")
             logger.exception("Scanner %s crashed for %s/%s", name, kind, value)
             findings.append({
                 "scanner": name, "type": "exception", "severity": "info",
@@ -423,5 +433,30 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
                                 f"({cause}): the results for this target are incomplete."),
                 "target": target, "evidence": {"proxy_host": proxy_host, "cause": cause, "origin": origin},
             })
+        if meta.get("liveness") and (gone or not (
+                any(f.get("type") in _SCANNER_FAILURE_TYPES for f in findings[start:])
+                or host_inconclusive(value)
+                or (meta["liveness"] == "direct" and proxy_applies(value)))):
+            probed = True
 
+    # An answer seen counts even from a scanner whose silence would not.
+    if kind == "host" and (probed or host_answered(value)):
+        findings.append(liveness_record(value, host_answered(value)))
     return findings, discovered
+
+
+# A scanner that reports one of these did not get to see whether the host
+# answers — unless it failed because the name no longer resolves (no such
+# name, no address): a decommissioned host, which cannot answer. Nor did one
+# that marked the host inconclusive (an error of the scanning machine), nor a
+# raw-socket scanner (`"liveness": "direct"`) under an outbound proxy that
+# applies to the host: where only the proxy may go out, its silence is the
+# network's, not the host's (an answer it sees still counts).
+_SCANNER_FAILURE_TYPES = {"error", "exception", "scanner_error", "scanner_timeout"}
+
+
+def liveness_record(value: str, alive: bool) -> dict[str, Any]:
+    """The control record a host scan ends with (a ``scanner_state``, never
+    persisted as a finding): whether the host answered (src/host_liveness.py)."""
+    return {"scanner": "engine", "type": "scanner_state", "severity": "info", "title": "", "description": "",
+            "target": value, "evidence": {"liveness": {"alive": alive}}}

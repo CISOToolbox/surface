@@ -18,6 +18,7 @@ importing it never pulls a heavy or optional dependency at boot.
 """
 from __future__ import annotations
 
+import errno
 import ipaddress
 import logging
 import os
@@ -438,11 +439,16 @@ def _proxy_for(scheme: str) -> str:
     return proxies.get(scheme) or proxies.get("all") or ""
 
 
+def proxy_applies(target: str) -> bool:
+    """Whether the environment's outbound proxy applies to ``target``."""
+    return bool(_proxy_for("https") or _proxy_for("http")) and not bypasses_proxy(target, resolve_first_ip(target))
+
+
 def _warn_unproxied(scanner: str, target: str) -> None:
     """Log that a raw-socket scanner reaches ``target`` directly although a
     proxy applies to it: an HTTP proxy carries HTTP, not port scans or TLS
     handshakes (nmap's --proxies is applied by nsock to NSE and -sV only)."""
-    if (_proxy_for("https") or _proxy_for("http")) and not bypasses_proxy(target, resolve_first_ip(target)):
+    if proxy_applies(target):
         logger.warning("%s: an outbound proxy is set, but %s cannot use it: "
                        "it reaches %s directly", scanner, scanner, target)
 
@@ -680,6 +686,8 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
             # the first of the run), and the origins that answered.
             self.failures: dict[str, tuple[str, str]] = {}
             self.answered: set[str] = set()
+            # A connection the target accepted, whatever came of it after.
+            self.reached = False
 
         def _warn(self, request, cause: str) -> None:
             proxy = "" if direct else _proxy_for(request.url.scheme)
@@ -687,7 +695,7 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                 self.failures.setdefault(origin(request.url), (urlparse(proxy).hostname or "?", cause))
 
         def send(self, request, **kw):
-            stage = {"connect": False, "tls": False}
+            stage = {"connect": False, "tcp": False, "tls": False}
             outer = request.extensions.get("trace")
 
             def trace(event: str, info: dict) -> None:
@@ -695,6 +703,8 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                 # CONNECT on it, then the tunnel's TLS handshake.
                 if event == "connection.connect_tcp.started":
                     stage["connect"] = True
+                elif event == "connection.connect_tcp.complete":
+                    stage["tcp"] = True
                 elif event == "proxy.start_tls.started":
                     stage["tls"] = True
                 if outer:
@@ -722,6 +732,12 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
                             " through the outbound proxy" if proxied else "", cause)
                 if not tunnel:
                     self._warn(request, cause)
+                if is_local_network_error(e):
+                    note_inconclusive(host)
+                # Directly, the TCP connection is the target's; through the
+                # proxy, a tunnel it opened (the TLS handshake started) is.
+                elif stage["tls"] if proxied else stage["tcp"]:
+                    self.reached = True
                 raise
             # Plain HTTP is forwarded, so a proxy refusing it answers in the
             # target's place: a 407 is the proxy's, never the target's page.
@@ -746,6 +762,10 @@ def scan_client(host: str, ip: str | None = None, **kwargs: Any):
             yield client
         finally:
             _record_proxy_outcome(host, client.failures, client.answered)
+            # An answer from the target itself (not the proxy's gateway error),
+            # or a connection it accepted.
+            if client.answered or client.reached:
+                note_alive(host)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -767,6 +787,56 @@ _STEALTH_BROWSER_UA = (
 
 def _is_stealth() -> bool:
     return bool(getattr(_STEALTH_CTX, "on", False))
+
+
+# Host liveness (FEAT-68): the hosts that answered during the run, set by
+# `run_enabled_scanners` like the stealth flag. A scanner that sees a host
+# answer (a port open or closed, a TCP connection, an HTTP answer) notes it;
+# outside a dispatcher run, nothing is kept.
+_LIVENESS_CTX = threading.local()
+
+
+def _host_key(host: str) -> str:
+    return (host or "").strip().strip("[]").rstrip(".").lower()
+
+
+def note_alive(host: str) -> None:
+    hosts = getattr(_LIVENESS_CTX, "hosts", None)
+    if hosts is not None:
+        hosts.add(_host_key(host))
+
+
+def host_answered(host: str) -> bool:
+    return _host_key(host) in (getattr(_LIVENESS_CTX, "hosts", None) or ())
+
+
+def note_inconclusive(host: str) -> None:
+    """A scanner could not tell whether ``host`` answers for a reason on our
+    side (no route from here, no such address family): its silence proves
+    nothing. The dispatcher clears the mark before each scanner."""
+    hosts = getattr(_LIVENESS_CTX, "inconclusive", None)
+    if hosts is not None:
+        hosts.add(_host_key(host))
+
+
+def host_inconclusive(host: str) -> bool:
+    return _host_key(host) in (getattr(_LIVENESS_CTX, "inconclusive", None) or ())
+
+
+# Socket errors raised by the scanning machine itself, not by the target.
+_LOCAL_ERRNOS = {errno.ENETUNREACH, errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL}
+
+
+def is_local_network_error(exc: BaseException | None) -> bool:
+    """Whether ``exc`` (or an error it was raised from, as httpx wraps them)
+    is a socket error of the scanning machine: no route, no address family."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, OSError) and exc.errno in _LOCAL_ERRNOS:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 # The scan blocklist (ScanExclusion values) of the run, set by
@@ -866,7 +936,12 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
             "description": str(e), "target": fallback_target, "evidence": {},
         }]
 
-    for host in root.findall("host"):
+    hosts = root.findall("host")
+    if not hosts:
+        # With -Pn nmap lists every target it could address: none means it
+        # could not (a name without an address of its family), not silence.
+        note_inconclusive(fallback_target)
+    for host in hosts:
         addr_el = host.find("address")
         addr = addr_el.get("addr") if addr_el is not None else fallback_target
         hostname_el = host.find("hostnames/hostname")
@@ -882,6 +957,12 @@ def _parse_nmap_xml(xml_text: str, fallback_target: str) -> list[dict[str, Any]]
             continue
 
         ports_el = host.find("ports")
+        # A port open or closed (a reset) is the host answering. With -Pn,
+        # nmap reports every host "up": its state proves nothing.
+        if ports_el is not None and (
+                any(st.get("state") in ("open", "closed") for st in ports_el.findall("port/state"))
+                or any(ep.get("state") == "closed" for ep in ports_el.findall("extraports"))):
+            note_alive(fallback_target)
         open_ports = []
         if ports_el is not None:
             for p in ports_el.findall("port"):
