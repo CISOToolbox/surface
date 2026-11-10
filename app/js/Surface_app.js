@@ -3108,6 +3108,7 @@ window.AI_APP_CONFIG = {
         var linked = null;
         if (f.measure_id)
             linked = _measures.find(function (x) { return x.id === f.measure_id; }) || null;
+        var host = _findingHostAsset(f);
         var fd = Object.assign({}, f, { title: _findingTitle(f), description: _findingDesc(f) });
         c.innerHTML = ct_finding_view.render(fd, {
             infoRows: _defenderInfoRows(f),
@@ -3119,7 +3120,9 @@ window.AI_APP_CONFIG = {
             // Offered only to an account the server would let request one.
             derogationHandler: ct_nonconformity.canWrite() ? "_requestDerogationDetail" : undefined,
             linkedMeasure: linked || undefined,
-            cardClass: "surface-card"
+            cardClass: "surface-card",
+            // The target opens the host it names; back returns to this finding.
+            targetAction: host ? { handler: "_openMonitoredDetail", args: [host.id], title: t("fd.open_host") } : undefined
         });
     }
     // ── Non-conformities and derogations (FEAT-45) ─────────────────
@@ -3256,7 +3259,9 @@ window.AI_APP_CONFIG = {
     // v0.3 — AI triage button: sends the finding to the configured LLM
     // (via ai_common.js) and asks for a structured JSON response.
     window._aiTriageFinding = async function () {
-        var f = _selectedFinding;
+        // The finding on screen: in a host's page, the one opened there — the
+        // Findings panel may still hold the finding the host was reached from.
+        var f = _panel === "hosts" ? _hostSelectedFinding : _selectedFinding;
         if (!f)
             return;
         var box = document.getElementById("ai-triage-result");
@@ -3323,7 +3328,10 @@ window.AI_APP_CONFIG = {
                 return;
             return SurfaceAPI.triageFinding(finding.id, payload).then(function () {
                 showStatus(t("triage.status_prefix") + " " + _statusLabel(payload.status));
-                _selectedFinding = null;
+                // From a host's page, the finding the user came from stays for the
+                // back button (which refreshes it); elsewhere, the triaged detail closes.
+                if (_panel !== "hosts" && _selectedFinding && _selectedFinding.id === finding.id)
+                    _selectedFinding = null;
                 _loadAndRender();
             }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
         });
@@ -3814,6 +3822,22 @@ window.AI_APP_CONFIG = {
         return (_monitored || []).filter(function (a) {
             return a.kind === "file_share" && _shareHostname(a.value) === k;
         }).sort(function (a, b) { return (a.value || "").localeCompare(b.value || ""); });
+    }
+    // The monitored asset whose detail a finding's target opens: a host the
+    // target names, else a file share, else the domain or ip_range rolling it up.
+    // Among several matches of a kind, the one named exactly by the target wins
+    // over a match through the resolved IP or a parent domain.
+    function _findingHostAsset(f) {
+        var hostPart = _targetHostPart(f.target || "");
+        var kinds = ["host", "file_share", "domain", "ip_range"];
+        for (var i = 0; i < kinds.length; i++) {
+            var hits = _monitored.filter(function (a) { return a.kind === kinds[i] && _findingMatchesAsset(f, a); });
+            if (!hits.length)
+                continue;
+            hits.sort(function (x, y) { return (x.value || "").localeCompare(y.value || ""); });
+            return hits.find(function (a) { return (a.value || "").toLowerCase() === hostPart; }) || hits[0];
+        }
+        return null;
     }
     // Host/IP part of a finding target, minus any trailing :port. Lower-cased.
     // "93.184.216.34:443" -> "93.184.216.34" ; "host.tld:8080" -> "host.tld".
@@ -4332,6 +4356,15 @@ window.AI_APP_CONFIG = {
             _panel = _selectedHostReturnPanel;
             _selectedHostReturnPanel = null;
         }
+        // Back to a finding: its current triage state (it may have been triaged
+        // from the host's page). The list row carries no screenshot, so the
+        // evidence stays the one the detail fetched.
+        if (_panel === "findings" && _selectedFinding) {
+            var cur = _selectedFinding;
+            var fresh = _findings.find(function (x) { return x.id === cur.id; });
+            if (fresh)
+                _selectedFinding = Object.assign({}, cur, fresh, { evidence: cur.evidence });
+        }
         renderPanel();
     };
     // NB: hostValue is never passed by the caller (dead param inherited from the source).
@@ -4370,7 +4403,8 @@ window.AI_APP_CONFIG = {
         var score = _riskScoreFor(a, counts);
         var tier = _riskTier(score);
         var h = '<div class="ct-row ct-row-wrap ct-mb-3">';
-        var backLabel = _selectedHostReturnPanel === "monitored" ? t("host.back_monitored") : t("host.back");
+        var backLabel = _selectedHostReturnPanel === "monitored" ? t("host.back_monitored")
+            : _selectedHostReturnPanel === "findings" ? t("host.back_finding") : t("host.back");
         h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="_backToHosts">' + _icon("arrow_left", 14) + ' ' + esc(backLabel) + '</button>';
         h += '<span class="ct-ref" data-size="sm">' + esc(_kindLabel(a.kind)) + '</span>';
         h += '<h2 class="ct-m-0 ct-flex-1">' + esc(isShare ? hostKey : a.value) + '</h2>';

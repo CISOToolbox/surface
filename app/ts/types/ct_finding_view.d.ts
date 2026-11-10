@@ -50,6 +50,9 @@
  *   linkedMeasure   — optional { id, title, statut, responsable,
  *                     echeance } to render as the third card
  *   cardClass       — CSS class used for each card (default "surface-card")
+ *   targetAction    — optional { handler, args, title }: the target becomes
+ *                     a link calling that global fn with those args (Surface:
+ *                     open the host the finding belongs to)
  *
  * openTriageModal opts:
  *   directoryUrl, sourceUrl — picker config (see ct_measure_modal)
@@ -60,7 +63,7 @@
  *     { status: "false_positive", triage_notes }
  *     { status: "new", triage_notes? }
  *
- * Depends on ct_modal, ct_measure_modal, ct_userpicker, esc(), _icon(), t().
+ * Depends on ct_modal, ct_measure_modal, ct_userpicker, esc(), _da(), _icon(), t().
  */
 /** Finding object rendered by ct_finding_view (subset actually read). */
 interface CtFvFinding {
@@ -114,6 +117,12 @@ interface CtFvRenderOpts {
     showFixed?: boolean;
     linkedMeasure?: CtFvLinkedMeasure;
     cardClass?: string;
+    /** Makes the target a link: global fn name, its args, the link's tooltip. */
+    targetAction?: {
+        handler: string;
+        args: unknown[];
+        title?: string;
+    };
 }
 /** Options for ct_finding_view.openTriageModal(). */
 interface CtFvTriageModalOpts {

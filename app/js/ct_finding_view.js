@@ -50,6 +50,9 @@
  *   linkedMeasure   — optional { id, title, statut, responsable,
  *                     echeance } to render as the third card
  *   cardClass       — CSS class used for each card (default "surface-card")
+ *   targetAction    — optional { handler, args, title }: the target becomes
+ *                     a link calling that global fn with those args (Surface:
+ *                     open the host the finding belongs to)
  *
  * openTriageModal opts:
  *   directoryUrl, sourceUrl — picker config (see ct_measure_modal)
@@ -60,7 +63,7 @@
  *     { status: "false_positive", triage_notes }
  *     { status: "new", triage_notes? }
  *
- * Depends on ct_modal, ct_measure_modal, ct_userpicker, esc(), _icon(), t().
+ * Depends on ct_modal, ct_measure_modal, ct_userpicker, esc(), _da(), _icon(), t().
  */
 (function () {
     "use strict";
@@ -141,7 +144,12 @@
             row(_t("fd.scanner", "Scanner"), f.scanner);
         if (f.type)
             row(_t("fd.type", "Type"), f.type);
-        row(_t("fd.target", "Cible"), f.target || "-", false, "font-family:monospace;word-break:break-all");
+        var ta = opts.targetAction;
+        var target = ta && f.target
+            ? '<button type="button" class="ct-link-btn" data-click="' + esc(ta.handler) + '" data-args=\'' + _da.apply(null, ta.args) + '\''
+                + (ta.title ? ' title="' + esc(ta.title) + '"' : '') + '>' + esc(f.target) + '</button>'
+            : esc(f.target || "-");
+        row(_t("fd.target", "Cible"), '<span class="ct-mono ct-break-all">' + target + '</span>', true);
         if (f.cve_id)
             row("CVE", f.cve_id);
         if (f.application_name)
