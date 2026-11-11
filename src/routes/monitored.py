@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.crypto import encrypt_secret
 from src.database import async_session, get_db
-from src import host_liveness
+from src import finding_assets, host_liveness
 from src.findings_dedup import alert_keys, apply_scanner_state, diff_summary, insert_many, make_thread_sink, merge_counts
 from src.models import AppSettings, MonitoredAsset, ScanExclusion, ScanJob, User, is_excluded
 from src.rate_limit import check_scan_quota
@@ -296,6 +296,16 @@ async def list_assets(
     result = await db.execute(select(MonitoredAsset).order_by(MonitoredAsset.created_at.desc()))
     days = await _inactive_after_days(db)
     return [_to_dict(a, days) for a in result.scalars().all()]
+
+
+@router.get("/finding-counts")
+async def finding_counts(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-69 — the Hosts cards' counts over every finding: per asset, and
+    per group of hosts sharing a resolved IP (one card)."""
+    return await finding_assets.asset_counts(db)
 
 
 class LivenessSettings(BaseModel):

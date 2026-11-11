@@ -4,9 +4,11 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+from src.finding_match import KEY_LEN, match_keys
 
 
 class Base(DeclarativeBase):
@@ -98,6 +100,15 @@ class Finding(Base):
     # Deduplication: same dedup_key across rescans means same finding.
     # Format: "<scanner>|<type>|<target>" (computed at insert time).
     dedup_key = Column(String(500), nullable=True, unique=True, index=True)
+    # FEAT-69 — what the finding is matched to the monitored assets on,
+    # derived from target and evidence on every write (see below and
+    # src/finding_match.py). Never set by hand.
+    match_host = Column(String(KEY_LEN), nullable=False, default="", server_default=text("''"))
+    match_share = Column(String(KEY_LEN), nullable=False, default="", server_default=text("''"))
+    match_evhost = Column(String(KEY_LEN), nullable=False, default="", server_default=text("''"))
+    match_evaddr = Column(String(KEY_LEN), nullable=False, default="", server_default=text("''"))
+    match_host_ip4 = Column(BigInteger, nullable=True)
+    match_evaddr_ip4 = Column(BigInteger, nullable=True)
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("NOW()"))
@@ -107,9 +118,25 @@ class Finding(Base):
         Index("ix_findings_scanner", "scanner"),
         Index("ix_findings_target", "target"),
         Index("ix_findings_created_at", "created_at"),
+        Index("ix_findings_match_host", "match_host"),
+        Index("ix_findings_match_share", "match_share"),
+        Index("ix_findings_match_evhost", "match_evhost"),
+        Index("ix_findings_match_evaddr", "match_evaddr"),
+        Index("ix_findings_match_host_ip4", "match_host_ip4"),
+        Index("ix_findings_match_evaddr_ip4", "match_evaddr_ip4"),
     )
 
     measure = relationship("Measure", back_populates="finding", uselist=False, cascade="all, delete-orphan")
+
+
+# Every ORM write of a finding refreshes its match keys, whichever path wrote
+# it (scan dedup, manual creation, connector, internal import). No code writes
+# findings through bulk UPDATE/INSERT statements, which would bypass this.
+@event.listens_for(Finding, "before_insert")
+@event.listens_for(Finding, "before_update")
+def _refresh_match_keys(_mapper, _connection, f: Finding) -> None:
+    for name, value in match_keys(f.target, f.evidence).items():
+        setattr(f, name, value)
 
 
 # ── Measures (auto-created from to_fix findings) ───────────────

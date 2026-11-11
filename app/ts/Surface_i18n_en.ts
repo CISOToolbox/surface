@@ -436,6 +436,9 @@ if (typeof _registerTranslations === "function") {
         "host.findings_title":     "Associated findings",
         "host.findings_empty":     "No finding associated with this host. Run a scan to generate some.",
         "host.hide_fp":            "Hide {n} false positive(s)",
+        "host.findings_range":     "{from}–{to} of {total}",
+        "host.page_prev":          "Previous",
+        "host.page_next":          "Next",
         "host.delete_confirm":     "Delete this host? Associated findings will stay in the DB but won't be linked to a monitored asset anymore.",
 
         // ── Findings panel ─────────────────────────────────

@@ -53,6 +53,14 @@
             }
             return _fetch("/findings" + qs);
         },
+        // FEAT-69 — a page of a host page's findings (the host and its same-IP
+        // aliases), most severe first, and the dashboard's figures, both over
+        // every finding.
+        findingsOfAssets: function (assetIds, offset, limit, hideFp) {
+            var qs = assetIds.map(function (id) { return "&asset_id=" + encodeURIComponent(id); }).join("");
+            return _fetch("/findings?limit=" + limit + "&offset=" + offset + (hideFp ? "&status_not=false_positive" : "") + qs);
+        },
+        findingStats: function (tz) { return _fetch("/findings/stats" + (tz ? "?tz=" + encodeURIComponent(tz) : "")); },
         deleteFinding: function (id) { return _fetch("/findings/" + id, { method: "DELETE" }); },
         // Non-conformities and derogations (shared register served by this module)
         listNonconformities: function (status) { return _fetch("/nonconformities" + (status ? "?status=" + encodeURIComponent(status) : "")); },
@@ -90,6 +98,7 @@
             return _fetch("/scans/bulk-import", { method: "POST", body: { findings: findings } });
         },
         listMonitored: function () { return _fetch("/monitored-assets"); },
+        findingCounts: function () { return _fetch("/monitored-assets/finding-counts"); },
         scannersCatalog: function () { return _fetch("/monitored-assets/scanners-catalog"); },
         createMonitored: function (data) { return _fetch("/monitored-assets", { method: "POST", body: data }); },
         updateMonitored: function (id, data) { return _fetch("/monitored-assets/" + id, { method: "PATCH", body: data }); },

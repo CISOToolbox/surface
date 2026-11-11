@@ -131,8 +131,26 @@ interface SurfaceTimelineBucket {
 interface SurfaceHostCounts {
     total: number; active: number; open: number;
     critical: number; high: number; medium: number; low: number; info: number;
-    false_positive: number; fixed: number;
+    false_positive: number; fixed: number; closed_upstream: number; derogated: number;
     [key: string]: number;
+}
+
+// FEAT-69 — the cards' counts over every finding: per asset, and per group of
+// hosts sharing a resolved IP (one card).
+interface SurfaceAssetCounts {
+    assets: Record<string, SurfaceHostCounts>;
+    ip_groups: Record<string, SurfaceHostCounts>;
+}
+
+// FEAT-69 — the dashboard's figures over every finding (GET /api/findings/stats).
+interface SurfaceFindingStats {
+    by_severity: Record<SurfaceSeverity, number>;
+    by_status: Record<SurfaceFindingStatus, number>;
+    recent_24h: number;
+    top_hosts: { host: string; max_sev: number; total: number }[];
+    top_types: { type: string; count: number }[];
+    top_scanners: { scanner: string; count: number }[];
+    timeline: (Omit<SurfaceTimelineBucket, "label">)[];
 }
 
 /* ── Payloads API ──────────────────────────────────────────────── */
@@ -265,6 +283,9 @@ interface SurfaceAPIShape {
     post(url: string, body?: unknown): Promise<any>;
     put(url: string, body?: unknown): Promise<any>;
     listFindings(filters?: Record<string, string>): Promise<SurfaceFinding[]>;
+    findingsOfAssets(assetIds: string[], offset: number, limit: number, hideFp: boolean): Promise<SurfaceFinding[]>;
+    findingStats(tz: string): Promise<SurfaceFindingStats>;
+    findingCounts(): Promise<SurfaceAssetCounts>;
     deleteFinding(id: string): Promise<null>;
     listNonconformities(status?: string): Promise<{ items: CtNcRecord[]; total: number }>;
     createNonconformity(body: Record<string, unknown>): Promise<CtNcRecord>;
@@ -444,6 +465,7 @@ interface Window {
 
     // Hosts
     _setHostSearch?: (v: string) => void;
+    _hostFindingsPage?: (dir: number) => void;
     _hostsSetView?: (view: string) => void;
     _toggleHostsInactive?: () => void;
     _showAllFindings?: () => void;

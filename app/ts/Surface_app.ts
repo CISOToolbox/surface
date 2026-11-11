@@ -271,6 +271,14 @@ window._TZ_OPTIONS_GLOBAL = [
 
 var _panel = "dashboard";
 var _findings: SurfaceFinding[] = [];
+// FEAT-69 — figures the server computes over every finding: the cards'
+// counts, the dashboard, and the findings of the host page being viewed.
+var _assetCounts: SurfaceAssetCounts = { assets: {}, ip_groups: {} };
+var _findingStats: SurfaceFindingStats | null = null;
+var _hostFindings: { key: string; list: SurfaceFinding[] | null } | null = null;
+var _HOST_FINDINGS_PAGE = 100;
+var _hostFindingsHost = "";   // the host page _hostFindingsOffset is for
+var _hostFindingsOffset = 0;
 var _monitored: SurfaceMonitoredAsset[] = [];
 var _exclusions: SurfaceExclusion[] = [];   // scan blocklist (host/IP/CIDR/domain)
 var _jobs: SurfaceScanJob[] = [];
@@ -341,11 +349,14 @@ function _loadAndRender() {
     var p2 = SurfaceAPI.listMeasures().then(function(d) { _measures = d || []; }).catch(function() { _measures = []; });
     var p3 = SurfaceAPI.listMonitored().then(function(d) { _monitored = d || []; }).catch(function() { _monitored = []; loaded = false; });
     var p4 = SurfaceAPI.listJobs().then(function(d) { _jobs = d || []; }).catch(function() { _jobs = []; });
+    var p7 = SurfaceAPI.findingCounts().then(function(d) { _assetCounts = d || { assets: {}, ip_groups: {} }; }).catch(function() { _assetCounts = { assets: {}, ip_groups: {} }; loaded = false; });
+    var p8 = SurfaceAPI.findingStats(_browserZone()).then(function(d) { _findingStats = d || null; }).catch(function() { _findingStats = null; loaded = false; });
+    _hostFindings = null;  // the host page fetches its list again
     var p6 = SurfaceAPI.listExclusions().then(function(d) { _exclusions = d || []; }).catch(function() { _exclusions = []; });
     var p5 = _scannersCatalog
         ? Promise.resolve()
         : SurfaceAPI.scannersCatalog().then(function(d) { _scannersCatalog = d || {}; }).catch(function() { _scannersCatalog = {}; });
-    return Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { _dataLoadedAt = loaded && gen === _dataStaleGen ? Date.now() : 0; renderPanel(); });
+    return Promise.all([p1, p2, p3, p4, p5, p6, p7, p8]).then(function() { _dataLoadedAt = loaded && gen === _dataStaleGen ? Date.now() : 0; renderPanel(); });
 }
 
 // The module role lands after a couple of round trips: whatever was drawn
@@ -1984,13 +1995,6 @@ window._scanAllMonitored = function() {
 
 var _DAY_MS = 86400000;
 var _SEV_ORDER: SurfaceSeverity[] = ["critical", "high", "medium", "low", "info"];
-var _SEV_RANK: Record<SurfaceSeverity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-
-function _dayKey(d: Date) {
-    // YYYY-MM-DD in local time
-    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
-    return y + "-" + (m < 10 ? "0" + m : m) + "-" + (dd < 10 ? "0" + dd : dd);
-}
 
 function _daysAgo(iso: string | undefined) {
     if (!iso) return Infinity;
@@ -1999,135 +2003,37 @@ function _daysAgo(iso: string | undefined) {
     return Math.floor((Date.now() - then) / _DAY_MS);
 }
 
-function _dashStats() {
-    // bySev   — severity breakdown of actionable findings (new/to_fix),
-    //           includes info for display
-    // active  — actionable findings EXCLUDING info (drives alert counts)
-    // byStatus— raw status counts (all severities)
-    var bySev: Record<SurfaceSeverity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    var byStatus: Record<SurfaceFindingStatus, number> = { new: 0, false_positive: 0, to_fix: 0, fixed: 0, closed_upstream: 0, derogated: 0 };
-    var active: SurfaceFinding[] = [];
-    _findings.forEach(function(f) {
-        if (byStatus[f.status] != null) byStatus[f.status]++;
-        if (f.status === "new" || f.status === "to_fix") {
-            if (bySev[f.severity] != null) bySev[f.severity]++;
-            if (f.severity !== "info") active.push(f);
-        }
-    });
-    return { bySev: bySev, byStatus: byStatus, active: active };
+// The dashboard's figures come from the server, over every finding
+// (GET /api/findings/stats); the timeline's days start at the browser's
+// midnight, as they did when the browser computed them.
+function _browserZone(): string {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; }
 }
+
+var _NO_STATS: SurfaceFindingStats = {
+    by_severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+    by_status: { new: 0, false_positive: 0, to_fix: 0, fixed: 0, closed_upstream: 0, derogated: 0 },
+    recent_24h: 0, top_hosts: [], top_types: [], top_scanners: [], timeline: [],
+};
+function _stats(): SurfaceFindingStats { return _findingStats || _NO_STATS; }
 
 function _topHostsByFindings(n: number) {
-    // Aggregate actionable findings per host.value (excluding info
-    // so audit-only findings don't push a host into the "at risk" list).
-    var map: Record<string, { host: string; total: number; maxSev: number; id?: string; kind?: string }> = {};
-    _findings.forEach(function(f) {
-        if (f.status !== "new" && f.status !== "to_fix") return;
-        if (f.severity === "info") return;
-        // Group on the host the finding ATTACHES to: connector findings carry
-        // an opaque stable target (machineId|cveId|product) and name their
-        // host in the evidence — keying on the raw target filled this widget
-        // with unreadable strings, the documented symptom of the first
-        // delivery. Recommendations are org-wide: no host, skip them.
-        if (f.type === "defender_recommendation") return;
-        var ev: any = f.evidence || {};
-        var tgt = String(ev.hostname || ev.host || ev.address || "").toLowerCase()
-               || (f.target || "").split(":")[0];
-        if (!tgt || tgt.indexOf("|") >= 0) return;
-        if (!map[tgt]) map[tgt] = { host: tgt, total: 0, maxSev: 9 };
-        map[tgt]!.total++;
-        var r = _SEV_RANK[f.severity];
-        if (r != null && r < map[tgt]!.maxSev) map[tgt]!.maxSev = r;
-    });
-    var list = Object.keys(map).map(function(k) { return map[k]!; });
-    list.sort(function(a, b) {
-        if (a.maxSev !== b.maxSev) return a.maxSev - b.maxSev;
-        return b.total - a.total;
-    });
-    // Resolve host id if the target matches a monitored host
-    list.forEach(function(row) {
+    // Open findings above info, grouped on the host a finding names (its
+    // evidence, else its target), worst severity first. Linked to the
+    // monitored host of that name, when there is one.
+    return _stats().top_hosts.slice(0, n).map(function(row) {
         var m = _monitored.find(function(a) { return a.value === row.host; });
-        if (m) { row.id = m.id; row.kind = m.kind; }
+        return { host: row.host, total: row.total, maxSev: row.max_sev, id: m ? m.id : undefined, kind: m ? m.kind : undefined };
     });
-    return list.slice(0, n);
 }
 
-function _topFindingTypes(n: number) {
-    // Actionable types only — info findings (scan_clean, ct_discovery,
-    // tls_valid...) would otherwise dominate the list with noise.
-    var map: Record<string, number> = {};
-    _findings.forEach(function(f) {
-        if (f.status !== "new" && f.status !== "to_fix") return;
-        if (f.severity === "info") return;
-        var k = f.type || "other";
-        map[k] = (map[k] || 0) + 1;
+function _timelineDaily(): SurfaceTimelineBucket[] {
+    // Per day, oldest first: findings of each severity created by the end of
+    // the day (cumulative), and findings triaged during it.
+    return _stats().timeline.map(function(d) {
+        var parts = d.key.split("-");
+        return Object.assign({ label: parseInt(parts[2]!, 10) + "/" + parseInt(parts[1]!, 10) }, d);
     });
-    return Object.keys(map).map(function(k) { return { type: k, count: map[k]! }; })
-        .sort(function(a, b) { return b.count - a.count; })
-        .slice(0, n);
-}
-
-function _topScanners(n: number) {
-    var map: Record<string, number> = {};
-    _findings.forEach(function(f) {
-        var k = f.scanner || "manual";
-        map[k] = (map[k] || 0) + 1;
-    });
-    return Object.keys(map).map(function(k) { return { scanner: k, count: map[k]! }; })
-        .sort(function(a, b) { return b.count - a.count; })
-        .slice(0, n);
-}
-
-function _timelineDaily(days: number) {
-    // Returns [{key, label, critical, high, medium, low, info, triaged}]
-    // for the last `days` days, inclusive of today. The severity columns are
-    // CUMULATIVE — each entry reflects the total number of findings of that
-    // severity that existed at the end of the day, not just the ones created
-    // that day. That way the curve never drops on a quiet day.
-    // `triaged` stays a daily count: the line overlay accumulates it
-    // separately to show triage velocity.
-    var out: SurfaceTimelineBucket[] = [];
-    var now = new Date();
-    now.setHours(23, 59, 59, 999);
-    var msPerDay = _DAY_MS;
-    var dayLabels: { key: string; label: string; endTs: number }[] = [];
-    var dayEnds: number[] = [];
-    for (var i = days - 1; i >= 0; i--) {
-        var d = new Date(now.getTime() - i * msPerDay);
-        dayLabels.push({
-            key: _dayKey(d),
-            label: d.getDate() + "/" + (d.getMonth() + 1),
-            endTs: d.getTime(),
-        });
-        dayEnds.push(d.getTime());
-    }
-
-    // Pre-extract finding timestamps once so the loop stays O(N + days)
-    var prepped = _findings.map(function(f) {
-        return {
-            sev: f.severity,
-            created: f.created_at ? new Date(f.created_at).getTime() : 0,
-            triaged: f.triaged_at ? new Date(f.triaged_at).getTime() : 0,
-        };
-    });
-
-    dayLabels.forEach(function(slot, idx) {
-        var bucket: SurfaceTimelineBucket = { key: slot.key, label: slot.label,
-            critical: 0, high: 0, medium: 0, low: 0, info: 0, triaged: 0 };
-        var end = slot.endTs;
-        prepped.forEach(function(f) {
-            if (f.created && f.created <= end && bucket[f.sev] != null) {
-                bucket[f.sev]++;
-            }
-            // Daily triaged count: only triaged_at falling on this day
-            if (f.triaged) {
-                var dayStart = end - msPerDay + 1;
-                if (f.triaged >= dayStart && f.triaged <= end) bucket.triaged++;
-            }
-        });
-        out.push(bucket);
-    });
-    return out;
 }
 
 function _surfaceInventory() {
@@ -2236,13 +2142,7 @@ function _coverageGaps() {
 // ═══════════════════════════════════════════════════════════════
 
 function _renderDashboard(c: HTMLElement) {
-    var stats = _dashStats();
-    // "Nouveaux 24h" counter excludes info — it's meant to flag fresh
-    // actionable findings, not routine scan summaries.
-    var recent24 = _findings.filter(function(f) {
-        if (f.severity === "info") return false;
-        return f.created_at && new Date(f.created_at).getTime() > Date.now() - _DAY_MS;
-    });
+    var stats = _stats();
 
     var h = '<div class="dash-header">';
     h += '<h2 class="ct-m-0">' + esc(t("dash.title")) + '</h2>';
@@ -2253,7 +2153,7 @@ function _renderDashboard(c: HTMLElement) {
     h += '</div></div>';
 
     // ── A. Critical banner ────────────────────────────────────
-    h += _dashBanner(stats, recent24);
+    h += _dashBanner(stats);
 
     // ── B. Timeline 30 days ───────────────────────────────────
     h += _dashTimeline();
@@ -2314,9 +2214,11 @@ function _statCard(value: number | string, label: string, cls: string) {
 }
 
 // ── A. Critical banner split into two dash-cards ──────────────
-function _dashBanner(stats: ReturnType<typeof _dashStats>, recent24: SurfaceFinding[]) {
-    var crit = stats.bySev.critical;
-    var high = stats.bySev.high;
+function _dashBanner(stats: SurfaceFindingStats) {
+    // "New 24h" excludes info: it flags fresh actionable findings, not
+    // routine scan summaries.
+    var crit = stats.by_severity.critical;
+    var high = stats.by_severity.high;
     var topHosts = _topHostsByFindings(3);
 
     // Left card color reflects the severity of the situation.
@@ -2335,9 +2237,9 @@ function _dashBanner(stats: ReturnType<typeof _dashStats>, recent24: SurfaceFind
       // Severity-count tiles carry their tone only when the count is > 0.
       h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (crit > 0 ? ' data-tone="critical"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["critical"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.critical")) + '</div><div class="ct-kpi-value">' + crit + '</div></div></div>';
       h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (high > 0 ? ' data-tone="high"' : '') + ' data-click="_dashGotoSeverity" data-args=\'["high"]\'><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("sev.high")) + '</div><div class="ct-kpi-value">' + high + '</div></div></div>';
-      h += '<div class="ct-kpi ct-clickable" data-emphasis="value" data-tone="info" data-click="_dashGotoRecent"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("dash.new_24h")) + '</div><div class="ct-kpi-value">' + recent24.length + '</div></div></div>';
+      h += '<div class="ct-kpi ct-clickable" data-emphasis="value" data-tone="info" data-click="_dashGotoRecent"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("dash.new_24h")) + '</div><div class="ct-kpi-value">' + stats.recent_24h + '</div></div></div>';
       // FEAT-45 — under derogation: its own category, neither open nor handled.
-      h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (stats.byStatus.derogated > 0 ? ' data-tone="neutral"' : '') + ' data-click="selectPanel" data-args=\'["nonconformities"]\' title="' + esc(t("dash.derogated_help")) + '"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("status.derogated")) + '</div><div class="ct-kpi-value">' + stats.byStatus.derogated + '</div></div></div>';
+      h += '<div class="ct-kpi ct-clickable" data-emphasis="value"' + (stats.by_status.derogated > 0 ? ' data-tone="neutral"' : '') + ' data-click="selectPanel" data-args=\'["nonconformities"]\' title="' + esc(t("dash.derogated_help")) + '"><div class="ct-kpi-tone"></div><div class="ct-kpi-body"><div class="ct-kpi-label">' + esc(t("status.derogated")) + '</div><div class="ct-kpi-value">' + stats.by_status.derogated + '</div></div></div>';
     h += '</div>';
     h += '</div>';
 
@@ -2366,7 +2268,7 @@ function _dashBanner(stats: ReturnType<typeof _dashStats>, recent24: SurfaceFind
 
 // ── B. Timeline 30 days ───────────────────────────────────────
 function _dashTimeline() {
-    var days = _timelineDaily(30);
+    var days = _timelineDaily();
     // Match the canonical severity badge palette (Surface.css .sev-*).
     // Same hues used everywhere in the app — filter pills, badges, host
     // counters — so the chart reads instantly.
@@ -2510,7 +2412,7 @@ function _dashTopHosts() {
 }
 
 function _dashTopTypes() {
-    var rows = _topFindingTypes(5);
+    var rows = _stats().top_types;
     var h = '<div class="dash-card">';
     h += '<div class="dash-card-head">' + _icon("zap", 16) + ' ' + esc(t("dash.top_types")) + '</div>';
     if (!rows.length) {
@@ -2530,7 +2432,7 @@ function _dashTopTypes() {
 }
 
 function _dashTopScanners() {
-    var rows = _topScanners(5);
+    var rows = _stats().top_scanners;
     var h = '<div class="dash-card">';
     h += '<div class="dash-card-head">' + _icon("target", 16) + ' ' + esc(t("dash.top_scanners")) + '</div>';
     if (!rows.length) {
@@ -2918,7 +2820,7 @@ window._bulkSurfaceToFix = function(scope) {
     var ids = Array.from(ct_bulkbar.getSelection(scope));
     if (!ids.length) return;
     if (ids.length > 10000) { showStatus("Sélection trop grande : " + ids.length + " findings (max 10000 par remédiation). Réduisez la sélection.", true); return; }
-    var selected = _findings.filter(function(f) { return ids.indexOf(f.id) >= 0; });
+    var selected = ids.map(_findingById).filter(function(f): f is SurfaceFinding { return !!f; });
     // Interpolate {n} — t() returns the raw key/value, no placeholder handling.
     var interp = function(key: string, fallback: string) {
         var v = (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
@@ -3335,7 +3237,7 @@ window._triageDetail = function(status) {
 };
 
 window._quickTriage = function(id, status) {
-    var f = _findings.find(function(x) { return x.id === id; });
+    var f = _findingById(id);
     if (!f) return;
     _runSurfaceTriage(f, status);
 };
@@ -3907,52 +3809,6 @@ function _findingMatchesAsset(f: SurfaceFinding, a: SurfaceMonitoredAsset): bool
     return false;
 }
 
-// The findings of the loaded list keyed by what a host matches on (the
-// target's host part, the evidence hostname, the evidence address), built
-// once per list: a Hosts page no longer walks every finding for every asset.
-// Other kinds (domain rollup, CIDR, share) still go through the full test.
-var _hostIndex: { of: SurfaceFinding[]; by: Record<string, SurfaceFinding[]> } | null = null;
-function _findingsHostIndex(): Record<string, SurfaceFinding[]> {
-    if (_hostIndex && _hostIndex.of === _findings) return _hostIndex.by;
-    var by: Record<string, SurfaceFinding[]> = Object.create(null);
-    var add = function(kind: string, key: string, f: SurfaceFinding) {
-        if (!key) return;
-        var k = kind + ":" + key;
-        (by[k] || (by[k] = [])).push(f);
-    };
-    _findings.forEach(function(f) {
-        var ev: any = f.evidence || {};
-        add("host", _targetHostPart(f.target || ""), f);
-        add("evhost", String(ev.hostname || ev.host || "").toLowerCase(), f);
-        add("evaddr", String(ev.address || "").toLowerCase(), f);
-    });
-    _hostIndex = { of: _findings, by: by };
-    return by;
-}
-
-// The loaded findings that belong to any of `assets`, each once, in list
-// order — the same set as testing _findingMatchesAsset on every finding.
-function _findingsOfAssets(assets: SurfaceMonitoredAsset[]): SurfaceFinding[] {
-    var hit = new Set<SurfaceFinding>();
-    var by = _findingsHostIndex();
-    var take = function(k: string) { (by[k] || []).forEach(function(f) { hit.add(f); }); };
-    var others = assets.filter(function(a) {
-        if (a.kind !== "host") return true;
-        var val = (a.value || "").toLowerCase();
-        var rip = (a.resolved_ip || "").toLowerCase();
-        if (val) { take("host:" + val); take("evhost:" + val); }
-        if (rip) { take("host:" + rip); take("evaddr:" + rip); }
-        return false;
-    });
-    if (others.length) {
-        _findings.forEach(function(f) {
-            if (hit.has(f)) return;
-            for (var i = 0; i < others.length; i++) { if (_findingMatchesAsset(f, others[i]!)) { hit.add(f); return; } }
-        });
-    }
-    return _findings.filter(function(f) { return hit.has(f); });
-}
-
 // A host plus its same-IP aliases: findings keyed by a shared resolved IP
 // belong to all of them, so a card and its detail count/list the same set.
 function _assetAliases(a: SurfaceMonitoredAsset): SurfaceMonitoredAsset[] {
@@ -4005,33 +3861,28 @@ function _hostsViewAssets(): SurfaceMonitoredAsset[] {
     return hostAssets.concat(shareAssets, disabledDomains);
 }
 
-// Aggregate finding counts over a set of assets (a host + its aliases, or a
-// domain + itself). A finding matching several assets in the set is counted
-// ONCE (union), so card and detail totals never double up.
+// A card's finding counts, computed by the server over every finding
+// (GET /api/monitored-assets/finding-counts): one asset, or a host and its
+// same-IP aliases, where a finding of the shared IP counts ONCE (union), so
+// card and detail totals never double up.
 //   `total`          — all findings on these assets (audit)
 //   `active`         — new/to_fix + not info (actionable work)
 //   `open`           — displayed as "N à traiter" — MUST exclude info so
 //                      informational findings (tls_valid, scan_clean,
 //                      ct_discovery, shodan_no_data...) never require triage.
 //   `critical..info` — per-severity counts of new/to_fix only
-//   `false_positive` / `fixed` — separated for audit display
+//   `false_positive` / `fixed` / `closed_upstream` / `derogated` — nothing
+//                      to triage, separated for audit display
 function _countFindingsForAssets(assets: SurfaceMonitoredAsset[]): SurfaceHostCounts {
     var out: SurfaceHostCounts = {
         total: 0, active: 0, open: 0,
         critical: 0, high: 0, medium: 0, low: 0, info: 0,
-        false_positive: 0, fixed: 0,
+        false_positive: 0, fixed: 0, closed_upstream: 0, derogated: 0,
     };
-    _findingsOfAssets(assets).forEach(function(f) {
-        out.total++;
-        if (f.status === "false_positive") { out.false_positive++; return; }
-        if (f.status === "fixed")          { out.fixed++;          return; }
-        // status === new | to_fix beyond this point
-        if (out[f.severity] != null) out[f.severity]++;
-        if (f.severity === "info") return;  // info: no action counter
-        out.active++;
-        out.open++;
-    });
-    return out;
+    var first = assets[0];
+    if (!first) return out;
+    var counts = assets.length > 1 ? _assetCounts.ip_groups[first.resolved_ip || ""] : _assetCounts.assets[first.id];
+    return Object.assign(out, counts || {});
 }
 // Single-asset convenience wrapper (does NOT fold in aliases — callers that
 // want the shared-IP rollup pass _assetGroup(a) to _countFindingsForAssets).
@@ -4384,6 +4235,7 @@ window._openHost = function(id) {
     _selectedHost = a;
     _selectedHostReturnPanel = null;   // opened from the Hosts grid → back goes there
     _bulkSelection = {};  // fresh selection when entering the host detail
+    _hostFindingsHost = "";   // its findings from the first page
     renderPanel();
 };
 
@@ -4398,6 +4250,7 @@ window._openMonitoredDetail = function(id) {
     _selectedHost = a;
     _hostSelectedFinding = null;
     _bulkSelection = {};
+    _hostFindingsHost = "";   // its findings from the first page
     renderPanel();
 };
 
@@ -4436,6 +4289,34 @@ function _renderHostFindingInline(c: HTMLElement, hostValue?: string) {
         linkedMeasure: linked || undefined,
         cardClass: "surface-card"
     });
+}
+
+// A page of the host page's findings, fetched for the host and its same-IP
+// aliases over every finding (not only the loaded list), most severe first:
+// null while the request runs, and the page is drawn again when it lands. A
+// reload of the data drops it; another host starts at its first page, and a
+// list that shrank (triage, deletion) brings the page back to its last one.
+function _hostFindingsOf(group: SurfaceMonitoredAsset[], total: number): SurfaceFinding[] | null {
+    var ids = group.map(function(a) { return a.id; });
+    var host = ids.slice().sort().join(",");
+    if (host !== _hostFindingsHost) { _hostFindingsHost = host; _hostFindingsOffset = 0; }
+    var last = Math.max(0, Math.floor((total - 1) / _HOST_FINDINGS_PAGE) * _HOST_FINDINGS_PAGE);
+    if (_hostFindingsOffset > last) _hostFindingsOffset = last;
+    var key = host + "|" + _hostFindingsOffset + "|" + (_hostHideFP ? 1 : 0);
+    if (_hostFindings && _hostFindings.key === key) return _hostFindings.list;
+    var entry: { key: string; list: SurfaceFinding[] | null } = { key: key, list: null };
+    _hostFindings = entry;
+    SurfaceAPI.findingsOfAssets(ids, _hostFindingsOffset, _HOST_FINDINGS_PAGE, _hostHideFP).then(function(d) { entry.list = d || []; }).catch(function(e) {
+        entry.list = [];
+        showStatus((e && e.message) || t("common.error"), true);
+    }).then(function() { if (_hostFindings === entry && _selectedHost) renderPanel(); });
+    return null;
+}
+
+// A finding of the loaded list, or of the host page's, which reaches past it.
+function _findingById(id: string): SurfaceFinding | null {
+    var byId = function(x: SurfaceFinding) { return x.id === id; };
+    return _findings.find(byId) || ((_hostFindings && _hostFindings.list) || []).find(byId) || null;
 }
 
 function _renderHostDetail(c: HTMLElement) {
@@ -4588,8 +4469,9 @@ function _renderHostDetail(c: HTMLElement) {
     }
 
     // Findings summary + list. Severity stats count only active findings
-    // (new / to_fix). False positives and fixed are kept as separate tiles
-    // for audit visibility without polluting the main severity counters.
+    // (new / to_fix). False positives, fixed, closed upstream and derogated
+    // are kept as separate tiles for audit visibility without polluting the
+    // main severity counters.
     h += '<h3 class="ct-mt-5">' + esc(t("host.findings_title")) + '</h3>';
     if (counts.total) {
         h += '<div class="ct-kpigrid ct-mb-4">';
@@ -4601,20 +4483,22 @@ function _renderHostDetail(c: HTMLElement) {
         h += _statCard(counts.info,     t("sev.info"),     counts.info     ? "stat-info"     : "stat-muted");
         if (counts.false_positive) h += _statCard(counts.false_positive, t("dash.false_positive"), "stat-muted");
         if (counts.fixed) h += _statCard(counts.fixed, t("status.fixed"), "stat-muted");
+        if (counts.closed_upstream) h += _statCard(counts.closed_upstream, t("status.closed_upstream"), "stat-muted");
+        if (counts.derogated) h += _statCard(counts.derogated, t("status.derogated"), "stat-muted");
         h += '</div>';
     }
 
-    var hostFindingsAll = _findingsOfAssets(detailGroup);
-    var fpCount = hostFindingsAll.filter(function(f) { return f.status === "false_positive"; }).length;
-    var hostFindings = _hostHideFP ? hostFindingsAll.filter(function(f) { return f.status !== "false_positive"; }) : hostFindingsAll;
-
-    // Sort: severity desc, then date desc
-    var sevOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-    hostFindings.sort(function(f1, f2) {
-        var d = (sevOrder[f1.severity] || 9) - (sevOrder[f2.severity] || 9);
-        if (d !== 0) return d;
-        return (f2.created_at || "").localeCompare(f1.created_at || "");
-    });
+    var fpCount = counts.false_positive;
+    var listTotal = counts.total - (_hostHideFP ? fpCount : 0);
+    var hostFindingsAll = _hostFindingsOf(detailGroup, listTotal);
+    if (!hostFindingsAll) {
+        h += '<div class="ct-empty-state">' + esc(t("common.loading")) + '</div>';
+        c.innerHTML = h;
+        return;
+    }
+    // The server sorts (severity, then date) and leaves the false positives
+    // out when hidden; the counts give the size of the list.
+    var hostFindings = hostFindingsAll;
 
     if (fpCount > 0) {
         h += '<div class="ct-flex ct-items-center ct-gap-2 ct-mb-2 ct-text-meta ct-muted">';
@@ -4660,6 +4544,15 @@ function _renderHostDetail(c: HTMLElement) {
                   show: function(f) { return f.status !== "false_positive"; } }
             ]
         });
+    }
+
+    if (listTotal > _HOST_FINDINGS_PAGE) {
+        var from = _hostFindingsOffset + 1, to = _hostFindingsOffset + hostFindings.length;
+        h += '<div class="ct-flex ct-items-center ct-gap-2 ct-mt-2 ct-text-meta ct-muted">';
+        h += '<span>' + esc(t("host.findings_range").replace("{from}", String(from)).replace("{to}", String(to)).replace("{total}", String(listTotal))) + '</span>';
+        h += '<button type="button" class="ct-btn" data-click="_hostFindingsPage" data-args=\'[-1]\'' + (_hostFindingsOffset > 0 ? '' : ' disabled') + '>' + esc(t("host.page_prev")) + '</button>';
+        h += '<button type="button" class="ct-btn" data-click="_hostFindingsPage" data-args=\'[1]\'' + (to < listTotal ? '' : ' disabled') + '>' + esc(t("host.page_next")) + '</button>';
+        h += '</div>';
     }
 
     c.innerHTML = h;
@@ -4716,8 +4609,14 @@ window._triageHostFindingDetail = function(newStatus) {
 // handler still resolves to the new flow.
 window._triageHostFinding = window._triageHostFindingDetail;
 
+window._hostFindingsPage = function(dir) {
+    _hostFindingsOffset = Math.max(0, _hostFindingsOffset + dir * _HOST_FINDINGS_PAGE);
+    renderPanel();
+};
+
 window._toggleHostHideFP = function() {
     _hostHideFP = !_hostHideFP;
+    _hostFindingsOffset = 0;
     _bulkSelection = {};
     renderPanel();
 };
@@ -4728,7 +4627,7 @@ window._toggleHostHideFP = function() {
 window._toggleHostBulkAll = function() {};
 
 window._openFindingFromHost = function(id) {
-    var f = _findings.find(function(x) { return x.id === id; });
+    var f = _findingById(id);
     if (!f) return;
     // Fetch full evidence (with png_b64) then render inline in host detail
     SurfaceAPI.get("/api/findings/" + id).then(function(full) {

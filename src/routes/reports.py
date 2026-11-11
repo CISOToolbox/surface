@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src import finding_assets
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
 from src.database import get_db
 from src.mailer_common import smtp_deliver
@@ -148,44 +149,8 @@ async def _aggregate_report(db: AsyncSession) -> dict[str, Any]:
     domains_count = kind_counts.get("domain", 0)
     assets_total = sum(kind_counts.values())
 
-    # --- top 10 hosts by active-finding severity, bounded by LIMIT ---
-    # Group by the host a finding names in its evidence, else the host portion
-    # of target (capped to the first ':' for port): a finding whose target is
-    # opaque (connector, per-certificate) but names its host must not become
-    # a pseudo host.
-    host_expr = func.coalesce(
-        func.nullif(Finding.evidence["hostname"].as_string(), ""),
-        func.split_part(Finding.target, ":", 1),
-    ).label("host")
-    crit_expr = func.sum(case((Finding.severity == "critical", 1), else_=0)).label("crit")
-    high_expr = func.sum(case((Finding.severity == "high", 1), else_=0)).label("high")
-    med_expr = func.sum(case((Finding.severity == "medium", 1), else_=0)).label("med")
-    low_expr = func.sum(case((Finding.severity == "low", 1), else_=0)).label("low")
-    info_expr = func.sum(case((Finding.severity == "info", 1), else_=0)).label("info_")
-    total_expr = func.count().label("total")
-    host_rows = (await db.execute(
-        select(host_expr, crit_expr, high_expr, med_expr, low_expr, info_expr, total_expr)
-        .where(Finding.status.in_(("new", "to_fix")))
-        .where(Finding.target.isnot(None))
-        .where(Finding.target != "")
-        .group_by(host_expr)
-        .order_by(crit_expr.desc(), high_expr.desc(), total_expr.desc())
-        .limit(10)
-    )).all()
-    top_hosts = [
-        {
-            "value": row.host or "",
-            "counts": {
-                "critical": int(row.crit or 0),
-                "high": int(row.high or 0),
-                "medium": int(row.med or 0),
-                "low": int(row.low or 0),
-                "info": int(row.info_ or 0),
-                "total": int(row.total or 0),
-            },
-        }
-        for row in host_rows if row.host
-    ]
+    # --- top 10 hosts: the dashboard's list (FEAT-69) ---
+    top_hosts = [{"value": h["host"], "counts": h["counts"]} for h in await finding_assets.top_hosts(db, 10)]
 
     # --- scan health (last 7d) via GROUP BY ---
     job_rows = (await db.execute(

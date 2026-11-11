@@ -439,6 +439,9 @@ if (typeof _registerTranslations === "function") {
         "host.findings_title":     "Findings associés",
         "host.findings_empty":     "Aucun finding associé à ce host. Lancez un scan pour en générer.",
         "host.hide_fp":            "Masquer les {n} faux positif(s)",
+        "host.findings_range":     "{from}–{to} sur {total}",
+        "host.page_prev":          "Précédent",
+        "host.page_next":          "Suivant",
         "host.delete_confirm":     "Supprimer ce host ? Les findings associés resteront dans la base mais ne seront plus rattachés à un asset surveillé.",
 
         // ── Findings panel ─────────────────────────────────

@@ -4,13 +4,14 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.orm import selectinload
 
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
+from src import finding_assets
 from src.database import get_db
 from src.models import Finding, Measure, User
 from src.rate_limit import check_scan_quota
@@ -46,18 +47,30 @@ async def list_findings(
     status: str | None = None,
     severity: str | None = None,
     scanner: str | None = None,
+    status_not: list[str] = Query(default_factory=list),
+    asset_id: list[uuid.UUID] = Query(default_factory=list),
     limit: int = 500,
     offset: int = 0,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The findings, newest first. With `asset_id` (repeatable: a host and
+    its same-IP aliases), those of these assets only, most severe first.
+    `status_not` (repeatable) leaves out these statuses."""
     _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed", "closed_upstream", "derogated"}
     _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)
-    q = select(Finding).options(selectinload(Finding.measure)).order_by(Finding.created_at.desc())
+    q = select(Finding).options(selectinload(Finding.measure))
+    if asset_id:
+        assets = await finding_assets.assets_by_ids(db, asset_id)
+        q = q.where(finding_assets.assets_condition(assets)).order_by(finding_assets.SEVERITY_RANK)
+    q = q.order_by(Finding.created_at.desc(), Finding.id)
     if status and status in _VALID_STATUSES:
         q = q.where(Finding.status == status)
+    excluded = [s for s in status_not if s in _VALID_STATUSES]
+    if excluded:
+        q = q.where(Finding.status.notin_(excluded))
     if severity and severity in _VALID_SEVERITIES:
         q = q.where(Finding.severity == severity)
     if scanner:
@@ -66,6 +79,17 @@ async def list_findings(
     result = await db.execute(q)
     findings = result.scalars().all()
     return [_to_dict(f, include_evidence=False) for f in findings]
+
+
+@router.get("/stats")
+async def findings_stats(
+    tz: str | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """FEAT-69 — the dashboard's figures over every finding; `tz` is the
+    viewer's IANA zone, where the timeline's days start."""
+    return await finding_assets.dashboard_stats(db, tz)
 
 
 @router.get("/screenshots")

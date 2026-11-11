@@ -11,7 +11,7 @@ _ctDeclareHandlers([
     "_closeMonitoredModal", "_closeScannersDialog", "_configureConnector", "_dashGotoHost",
     "_dashGotoRecent", "_dashGotoScanner", "_dashGotoSeverity", "_deleteConnectorInstance",
     "_deleteFindingDetail", "_deleteHostFromDetail", "_deleteJob", "_deleteMonitored",
-    "_editMonitoredDialog", "_editSurfaceMeasureRow", "_hostsSetView", "_logout", "_newMonitoredDialog",
+    "_editMonitoredDialog", "_editSurfaceMeasureRow", "_hostFindingsPage", "_hostsSetView", "_logout", "_newMonitoredDialog",
     "_nucleiResetTuning", "_nucleiUpdateTemplates", "_onTimezoneChange", "_openFindingFromHost",
     "_openFindingRow", "_openFindingRowFromHost", "_openHost", "_openMonitoredDetail",
     "_openNotifPrefs", "_quickTriageFpRow", "_quickTriageRow", "_removeExclusion",
