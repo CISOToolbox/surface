@@ -126,17 +126,17 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
     """
     t = (t or "").strip()
     if not t:
-        raise ValueError("Cible requise")
+        raise ValueError("Target required")
     if len(t) > 253:
-        raise ValueError("Cible trop longue")
+        raise ValueError("Target too long")
     if not re.match(r"^[A-Za-z0-9._\-/:\[\]]+$", t):
-        raise ValueError(f"Cible invalide (caracteres non autorises) : {t}")
+        raise ValueError(f"Invalid target (characters not allowed): {t}")
     # A leading '-' would be parsed by nmap as an option, not a target
     # (`-Pn`, `-sU`, `-r`… all satisfy the charset above). No hostname,
     # IP or CIDR ever starts with a dash. Defence in depth: the argv
     # builders also pass `--` before the target.
     if t.startswith("-"):
-        raise ValueError(f"Cible invalide (ne peut pas commencer par '-') : {t}")
+        raise ValueError(f"Invalid target (cannot start with '-'): {t}")
 
     raw = t
     if "://" in raw:
@@ -144,7 +144,7 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
         raw = parsed.hostname or raw
     host_only = raw
     if "/" in host_only and not re.match(r"^[0-9a-fA-F:.]+/\d{1,3}$", host_only):
-        raise ValueError(f"Cible invalide (chemin inattendu) : {t}")
+        raise ValueError(f"Invalid target (unexpected path): {t}")
 
     # Strip brackets for IPv6 literals like [::1] before further checks
     bare = host_only.strip("[]")
@@ -154,13 +154,13 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
         bare = bare.split(":")[0]
     bare = bare.split("/")[0].lower()
     if bare in _DOCKER_SIBLING_NAMES:
-        raise ValueError(f"Cible interne bloquee : {bare} (scan lateral non autorise)")
+        raise ValueError(f"Internal target blocked: {bare} (lateral scan not allowed)")
 
     if "/" in host_only:
         try:
             net = ipaddress.ip_network(host_only.strip("[]"), strict=False)
         except ValueError as e:
-            raise ValueError(f"Plage CIDR invalide : {e}")
+            raise ValueError(f"Invalid CIDR range: {e}")
         _check_network_allowed(net, original=t)
         return None, t
 
@@ -184,7 +184,7 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
         errno = getattr(e, "errno", None)
         reason = ("no_address" if errno == getattr(socket, "EAI_NODATA", None)
                   else "no_name" if errno == socket.EAI_NONAME else "lookup_failed")
-        raise UnresolvedTarget(f"Cible non resolvable : {bare} ({e})", reason, t)
+        raise UnresolvedTarget(f"Target does not resolve: {bare} ({e})", reason, t)
 
     resolved = [info[4][0] for info in infos if info[4]]
     locked: str | None = None
@@ -199,7 +199,7 @@ def _resolve_safe_target(t: str, allow_unresolved: bool = False) -> tuple[str | 
     if locked is None:
         if allow_unresolved:
             return None, t
-        raise UnresolvedTarget(f"Cible non resolvable : {bare} (aucune adresse exploitable)", "no_address", t)
+        raise UnresolvedTarget(f"Target does not resolve: {bare} (no usable address)", "no_address", t)
     return locked, t
 
 
@@ -246,17 +246,17 @@ def _check_ip_allowed(ip: ipaddress._BaseAddress, original: str) -> None:
     """Raise ValueError if the IP is on the blocklist. Allows public + private LAN."""
     ip_str = str(ip)
     if ip_str in _METADATA_IPS:
-        raise ValueError(f"Cible metadata cloud bloquee : {ip_str}")
+        raise ValueError(f"Cloud metadata target blocked: {ip_str}")
     if ip.is_loopback:
-        raise ValueError(f"Cible loopback bloquee : {ip_str} (non pertinent depuis un conteneur)")
+        raise ValueError(f"Loopback target blocked: {ip_str} (meaningless from a container)")
     if ip.is_link_local:
-        raise ValueError(f"Cible link-local bloquee : {ip_str} (risque metadata cloud)")
+        raise ValueError(f"Link-local target blocked: {ip_str} (cloud metadata risk)")
     if ip.is_unspecified:
-        raise ValueError(f"Cible 0.0.0.0/:: bloquee")
+        raise ValueError("Target 0.0.0.0/:: blocked")
     if ip.is_multicast:
-        raise ValueError(f"Cible multicast bloquee : {ip_str}")
+        raise ValueError(f"Multicast target blocked: {ip_str}")
     if ip.is_reserved:
-        raise ValueError(f"Cible dans un bloc reserve : {ip_str}")
+        raise ValueError(f"Target in a reserved block: {ip_str}")
     # is_private == RFC1918 (10/8, 172.16/12, 192.168/16) — ALLOWED by user choice
     # is_global == public IP — ALLOWED
 
@@ -292,7 +292,7 @@ def _check_network_allowed(net: ipaddress._BaseNetwork, original: str) -> None:
     for blocked in _BLOCKED_NETWORKS:
         if net.version == blocked.version and net.overlaps(blocked):
             raise ValueError(
-                f"Plage {net} interdite : elle recouvre le bloc reserve {blocked}"
+                f"Range {net} not allowed: it overlaps the reserved block {blocked}"
             )
 
 

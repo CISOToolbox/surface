@@ -48,7 +48,7 @@ def _validate(kind: str, value: str) -> str:
         raise ValueError("value is required")
     if kind == "domain":
         if not _DOMAIN_RE.match(v):
-            raise ValueError(f"Domaine invalide : {v}")
+            raise ValueError(f"Invalid domain: {v}")
         v = v.lower()
         # A domain is a discovery seed (CT logs, DNS brute-force, SAN): its apex
         # need not resolve — MX-only, freshly registered, or subdomain-only
@@ -61,13 +61,13 @@ def _validate(kind: str, value: str) -> str:
             ipaddress.ip_address(v)
         except ValueError:
             if not _DOMAIN_RE.match(v):
-                raise ValueError(f"Host invalide (attendu IP ou nom DNS) : {v}")
+                raise ValueError(f"Invalid host (expected an IP address or a DNS name): {v}")
             v = v.lower()
     elif kind == "ip_range":
         try:
             ipaddress.ip_network(v, strict=False)
         except ValueError as e:
-            raise ValueError(f"Plage CIDR invalide : {e}")
+            raise ValueError(f"Invalid CIDR range: {e}")
     elif kind == "file_share":
         # Accept \\host\share, //host/share or smb://host/share. Internal file
         # servers (RFC1918 / internal DNS names) are legitimate, so we do NOT
@@ -75,7 +75,7 @@ def _validate(kind: str, value: str) -> str:
         # link-local / cloud-metadata literals (SMB to those is never valid).
         host = unc_host(v)
         if host is None:
-            raise ValueError(f"Partage invalide (attendu \\\\serveur\\partage) : {value}")
+            raise ValueError(f"Invalid share (expected \\\\server\\share): {value}")
         # Prefix matching on the string was trivially sidestepped:
         # \\2130706433\share (decimal loopback), a hex/octal literal, or any
         # hostname with a 127.x A record all walked through — and the SMB
@@ -87,10 +87,10 @@ def _validate(kind: str, value: str) -> str:
         try:
             _resolve_safe_target(host)
         except ValueError as e:
-            raise ValueError(f"Hôte de partage bloqué : {e}")
+            raise ValueError(f"Share host blocked: {e}")
         return v
     else:
-        raise ValueError(f"Type inconnu : {kind}")
+        raise ValueError(f"Unknown kind: {kind}")
 
     # SSRF check (loopback, link-local, cloud metadata, docker siblings)
     _safe_target(v)

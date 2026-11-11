@@ -211,10 +211,10 @@ async def triage_finding(
     # Per-status validation: false_positive requires a justification, to_fix requires a measure title.
     if new_status == "false_positive":
         if not (body.notes or "").strip():
-            raise HTTPException(status_code=400, detail="Une justification est obligatoire pour declarer un faux positif")
+            raise HTTPException(status_code=400, detail="A justification is required to declare a false positive")
     if new_status == "to_fix":
         if not (body.measure_title or "").strip():
-            raise HTTPException(status_code=400, detail="Le nom de la mesure est obligatoire")
+            raise HTTPException(status_code=400, detail="The measure name is required")
 
     # FEAT-45 — triaging a derogated finding lifts its derogation: the
     # analyst's decision supersedes the acceptance, and the register says so.
@@ -396,9 +396,9 @@ async def bulk_triage(
     if body.status not in ("new", "false_positive", "to_fix", "fixed"):
         raise HTTPException(status_code=400, detail="Invalid status")
     if body.status == "false_positive" and not (body.notes or "").strip():
-        raise HTTPException(status_code=400, detail="Une justification est obligatoire pour declarer un faux positif")
+        raise HTTPException(status_code=400, detail="A justification is required to declare a false positive")
     if body.status == "to_fix" and not (body.measure_title or "").strip():
-        raise HTTPException(status_code=400, detail="Le nom de la mesure est obligatoire")
+        raise HTTPException(status_code=400, detail="The measure name is required")
     ids = await _target_ids(db, body)
     if body.status == "to_fix" and len(ids) > _MEASURE_MAX_FINDINGS:
         raise HTTPException(status_code=400, detail=(
@@ -413,7 +413,7 @@ async def bulk_triage(
         await log_action(db, user, request, "finding.bulk_triage",
                          target=f"{len(findings)} findings", details={"status": body.status, **_filter_details(body)})
     if not findings:
-        raise HTTPException(status_code=404, detail="Aucun finding trouve pour les ids fournis")
+        raise HTTPException(status_code=404, detail="No finding found for the given ids")
 
     triaged_by = (user.name if user else None) or (user.email if user else "system")
     now = datetime.now(timezone.utc)

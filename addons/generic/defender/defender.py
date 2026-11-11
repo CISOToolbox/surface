@@ -222,7 +222,7 @@ async def run(config: dict[str, Any]) -> dict[str, Any]:
     client_id = (config.get("client_id") or "").strip()
     secret = (config.get("client_secret") or "").strip()
     if not (tenant and client_id and secret):
-        return {"ok": False, "error": "tenant_id, client_id et client_secret sont requis",
+        return {"ok": False, "error": "tenant_id, client_id and client_secret are required",
                 "hosts": [], "findings": [], "excepted": []}
 
     hosts: list[dict[str, Any]] = []
@@ -298,13 +298,13 @@ async def run(config: dict[str, Any]) -> dict[str, Any]:
 
 SURFACE_CONNECTORS = {
     "defender": {
-        "label": "Microsoft Defender for Endpoint (vulnérabilités du parc)",
+        "label": "Microsoft Defender for Endpoint (fleet vulnerabilities)",
         "callable": run,
         "interval_hours": 6,
         "config_schema": [
-            {"key": "tenant_id", "label": "Tenant Entra (GUID)", "type": "text", "required": True},
+            {"key": "tenant_id", "label": "Entra tenant (GUID)", "type": "text", "required": True},
             {"key": "client_id", "label": "Application (client) ID", "type": "text", "required": True},
-            {"key": "client_secret", "label": "Secret client", "type": "password",
+            {"key": "client_secret", "label": "Client secret", "type": "password",
              "secret": True, "required": True},
         ],
     },

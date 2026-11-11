@@ -111,7 +111,7 @@ async def _run(api, monkeypatch=None):
 
 def test_missing_config_fails_without_calling_anything():
     result = asyncio.run(defender.run({"tenant_id": "t"}))
-    assert result["ok"] is False and "requis" in result["error"]
+    assert result["ok"] is False and "required" in result["error"]
 
 
 def test_nominal_import_binds_findings_to_their_host():

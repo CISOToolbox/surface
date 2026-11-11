@@ -116,5 +116,5 @@ async def send_test(user: Optional[User] = Depends(get_current_user),
         return {"results": {"surface": "skipped_disabled"}}
     status = await send_test_alert(db, user.email, prefs)
     if status == "failed":
-        raise HTTPException(status_code=502, detail="Envoi SMTP en échec — vérifier la configuration SMTP")
+        raise HTTPException(status_code=502, detail="SMTP send failed: check the SMTP configuration")
     return {"results": {"surface": status}}

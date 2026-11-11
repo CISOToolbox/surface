@@ -546,7 +546,7 @@ async def shodan_set_config(
 
     key = body.api_key.strip()
     if not key:
-        raise HTTPException(status_code=400, detail="La cle API est vide")
+        raise HTTPException(status_code=400, detail="The API key is empty")
 
     # Verify the key against Shodan's account endpoint (0 credit cost)
     try:
@@ -558,12 +558,12 @@ async def shodan_set_config(
             )
         resp = await asyncio.to_thread(_probe)
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Shodan injoignable : {e}")
+        raise HTTPException(status_code=502, detail=f"Shodan unreachable: {e}")
 
     if resp.status_code == 401:
-        raise HTTPException(status_code=400, detail="Cle API Shodan invalide (401 Unauthorized)")
+        raise HTTPException(status_code=400, detail="Invalid Shodan API key (401 Unauthorized)")
     if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Erreur Shodan ({resp.status_code}) : {resp.text[:200]}")
+        raise HTTPException(status_code=502, detail=f"Shodan error ({resp.status_code}): {resp.text[:200]}")
 
     try:
         profile = resp.json()

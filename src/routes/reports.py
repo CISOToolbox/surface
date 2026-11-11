@@ -52,13 +52,13 @@ def _validate_email(addr: str) -> str:
     enforce a strict regex. Raises ValueError on anything suspicious."""
     raw = addr or ""
     if any(c in raw for c in ("\r", "\n", "\x00")):
-        raise ValueError("Caractères de contrôle interdits dans l'adresse")
+        raise ValueError("Control characters are not allowed in an address")
     clean = raw.strip()
     if not clean:
-        raise ValueError("Adresse vide")
+        raise ValueError("Empty address")
     _, parsed = parseaddr(clean)
     if not parsed or not _EMAIL_ADDR_RE.match(parsed):
-        raise ValueError(f"Adresse invalide : {addr!r}")
+        raise ValueError(f"Invalid address: {addr!r}")
     return parsed
 
 
@@ -69,7 +69,7 @@ def _parse_recipients(raw: str) -> list[str]:
         if r:
             out.append(_validate_email(r))
     if not out:
-        raise ValueError("Aucun destinataire valide")
+        raise ValueError("No valid recipient")
     return out
 
 
@@ -78,7 +78,7 @@ def _validate_smtp_host(host: str) -> str:
     as scan targets (blocks loopback, metadata, docker siblings, …)."""
     clean = (host or "").strip()
     if not clean:
-        raise ValueError("Host SMTP manquant")
+        raise ValueError("SMTP host missing")
     # _resolve_safe_target enforces charset + blocklist + DNS resolution
     _, canonical = _resolve_safe_target(clean)
     return canonical
@@ -381,8 +381,8 @@ async def smtp_set_config(
         if server_touched:
             raise HTTPException(
                 status_code=409,
-                detail="Config SMTP gérée dans Pilot (Paramètres) en mode suite — "
-                       "seuls les destinataires se règlent ici.")
+                detail="SMTP is managed in Pilot (Settings) in suite mode: "
+                       "only the recipients are set here.")
         row = (await db.execute(
             select(AppSettings).where(AppSettings.key == "smtp.recipients")
         )).scalar_one_or_none()
@@ -399,17 +399,17 @@ async def smtp_set_config(
         try:
             _validate_smtp_host(body.host)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"SMTP host refusé : {e}")
+            raise HTTPException(status_code=400, detail=f"SMTP host refused: {e}")
     if body.sender:
         try:
             _validate_email(body.sender)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Sender invalide : {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid sender: {e}")
     if body.recipients:
         try:
             _parse_recipients(body.recipients)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Recipients invalides : {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid recipients: {e}")
 
     entries = {
         "host": body.host,
@@ -444,7 +444,7 @@ async def email_digest_send(
     require_min_role(user, "editor", SURFACE_ROLES)
     cfg = await _load_smtp(db)
     if not cfg.get("host") or not cfg.get("from_addr") or not cfg.get("recipients"):
-        raise HTTPException(status_code=400, detail="SMTP non configuré (host/sender/recipients manquants)")
+        raise HTTPException(status_code=400, detail="SMTP not configured (host, sender or recipients missing)")
 
     data = await _aggregate_report(db)
     try:

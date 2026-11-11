@@ -112,7 +112,7 @@ def test_email_security_reports_on_a_name_without_an_address(monkeypatch):
 @pytest.mark.parametrize("name", [_MISSING, _OUTAGE])
 def test_a_name_that_does_not_exist_or_a_failed_lookup_is_an_error(monkeypatch, scanner, name):
     scan, asked = scanner(monkeypatch)
-    with pytest.raises(ValueError, match="non resolvable"):
+    with pytest.raises(ValueError, match="does not resolve"):
         scan(name)
     assert not asked
 
@@ -153,7 +153,7 @@ def test_takeover_reports_a_cname_to_a_name_that_does_not_exist(monkeypatch):
 
 def test_takeover_on_a_name_that_does_not_exist_without_a_cname_is_an_error(monkeypatch):
     mod, fetched = _takeover(monkeypatch, chain=())
-    with pytest.raises(ValueError, match="non resolvable"):
+    with pytest.raises(ValueError, match="does not resolve"):
         mod.scan_host_takeover(_MISSING)
     assert fetched == []
 
@@ -165,7 +165,7 @@ def test_takeover_on_a_name_without_an_address_nor_a_cname_finds_nothing(monkeyp
 
 def test_takeover_on_a_failed_lookup_is_an_error(monkeypatch):
     mod, fetched = _takeover(monkeypatch)
-    with pytest.raises(ValueError, match="non resolvable"):
+    with pytest.raises(ValueError, match="does not resolve"):
         mod.scan_host_takeover(_OUTAGE)
     assert fetched == []
 

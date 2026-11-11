@@ -186,12 +186,12 @@ async def run_now(name: str, request: Request,
                if f.get("required") and not cfg.get(f["key"], "").strip()]
     if missing:
         raise HTTPException(status_code=422,
-                            detail=f"configuration incomplète : {', '.join(missing)}")
+                            detail=f"incomplete configuration: {', '.join(missing)}")
 
     lock = lock_for(name)
     if lock.locked():
         raise HTTPException(status_code=409,
-                            detail="un import est déjà en cours pour ce connecteur")
+                            detail="an import is already running for this connector")
     async with lock:
         report = await run_connector(db, name, meta, cfg)
         await record_run(db, name, report)

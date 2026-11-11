@@ -52,4 +52,4 @@ def check_scan_quota(user_id: str) -> None:
     """
     from fastapi import HTTPException
     if not scan_limiter.check(user_id, limit=20, window_seconds=60):
-        raise HTTPException(status_code=429, detail="Trop de scans recents. Reessayer dans 1 minute.")
+        raise HTTPException(status_code=429, detail="Too many recent scans. Retry in 1 minute.")
