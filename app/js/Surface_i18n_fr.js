@@ -600,6 +600,8 @@ if (typeof _registerTranslations === "function") {
         "findings.col.status": "Statut",
         "findings.col.datetime": "Date & heure",
         "findings.count": "findings",
+        "findings.shown": "{shown} affichés sur {total}",
+        "findings.show_all": "Tout afficher",
         "findings.empty": "Aucun finding ne correspond aux filtres.",
         // ── Bulk action bar ────────────────────────────────
         "bulk.selected": "{n} élément(s) sélectionné(s)",

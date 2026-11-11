@@ -597,6 +597,8 @@ if (typeof _registerTranslations === "function") {
         "findings.col.status": "Status",
         "findings.col.datetime": "Date & time",
         "findings.count": "findings",
+        "findings.shown": "{shown} of {total} shown",
+        "findings.show_all": "Show all",
         "findings.empty": "No finding matches the filters.",
         // ── Bulk action bar ────────────────────────────────
         "bulk.selected": "finding(s) selected",

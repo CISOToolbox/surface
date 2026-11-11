@@ -203,7 +203,15 @@ function _fmtDate(iso: string | undefined, mode?: string) {
     if (!iso) return "";
     var d = new Date(iso);
     if (isNaN(d.getTime())) return "";
-    var tz = _getTimezone();
+    return _dateFormatter(_getTimezone(), mode).format(d);
+}
+
+// One formatter per (timezone, mode), reused: building one per date (what
+// toLocaleString does) cost most of the time of a table of findings.
+var _dateFormatters: Record<string, Intl.DateTimeFormat> = {};
+function _dateFormatter(tz: string, mode?: string): Intl.DateTimeFormat {
+    var key = tz + "|" + (mode || "");
+    if (_dateFormatters[key]) return _dateFormatters[key];
     var opts: Intl.DateTimeFormatOptions = {
         year: "numeric", month: "2-digit", day: "2-digit",
         hour: "2-digit", minute: "2-digit",
@@ -213,13 +221,16 @@ function _fmtDate(iso: string | undefined, mode?: string) {
     // Use sv-SE locale — it produces "YYYY-MM-DD HH:MM" which is the
     // format the rest of the app was using before. Keeps alignment and
     // is culture-neutral.
+    var fmt: Intl.DateTimeFormat;
     try {
-        return d.toLocaleString("sv-SE", opts);
+        fmt = new Intl.DateTimeFormat("sv-SE", opts);
     } catch (e) {
         // Invalid TZ → fall back to browser TZ
         delete opts.timeZone;
-        return d.toLocaleString("sv-SE", opts);
+        fmt = new Intl.DateTimeFormat("sv-SE", opts);
     }
+    _dateFormatters[key] = fmt;
+    return fmt;
 }
 
 // Default IANA zones offered in the Settings picker. "" = browser auto.
@@ -294,6 +305,7 @@ function _tn(key: string, n: number | string) {
 
 window.selectPanel = function(id) {
     _panel = id;
+    _findingsShowAll = false;
     _selectedFinding = null;
     _selectedHost = null;
     if (window.ct_bulkbar) {
@@ -305,19 +317,35 @@ window.selectPanel = function(id) {
         if (args) try { if (JSON.parse(args)[0] === id) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current"); } catch(e) {}
     });
     document.querySelector(".ct-rail, .sidebar")?.classList.remove("open");
-    _loadAndRender();
+    // Switching panels draws from the data already loaded: reloading every
+    // list (up to 10 000 findings) on each click took seconds. Every change
+    // made from the page reloads through _loadAndRender, or marks the data
+    // stale (_markDataStale: a connector run, a job seen finishing); data
+    // older than _DATA_MAX_AGE_MS (scans run in the background) is reloaded
+    // on the way.
+    if (_dataLoadedAt && Date.now() - _dataLoadedAt < _DATA_MAX_AGE_MS) renderPanel();
+    else _loadAndRender();
 };
 
+var _DATA_MAX_AGE_MS = 60000;
+var _dataLoadedAt = 0;
+var _dataStaleGen = 0;  // bumped by _markDataStale
+// Data changed without a reload of its own: the next panel switch reloads,
+// and a load already in flight (it read the data before) does not count.
+function _markDataStale() { _dataLoadedAt = 0; _dataStaleGen++; }
+
 function _loadAndRender() {
-    var p1 = SurfaceAPI.listFindings({ limit: "10000" }).then(function(d) { _findings = d || []; }).catch(function() { _findings = []; });
+    var loaded = true;  // a failed load is retried on the next panel switch
+    var gen = _dataStaleGen;
+    var p1 = SurfaceAPI.listFindings({ limit: "10000" }).then(function(d) { _findings = d || []; }).catch(function() { _findings = []; loaded = false; });
     var p2 = SurfaceAPI.listMeasures().then(function(d) { _measures = d || []; }).catch(function() { _measures = []; });
-    var p3 = SurfaceAPI.listMonitored().then(function(d) { _monitored = d || []; }).catch(function() { _monitored = []; });
+    var p3 = SurfaceAPI.listMonitored().then(function(d) { _monitored = d || []; }).catch(function() { _monitored = []; loaded = false; });
     var p4 = SurfaceAPI.listJobs().then(function(d) { _jobs = d || []; }).catch(function() { _jobs = []; });
     var p6 = SurfaceAPI.listExclusions().then(function(d) { _exclusions = d || []; }).catch(function() { _exclusions = []; });
     var p5 = _scannersCatalog
         ? Promise.resolve()
         : SurfaceAPI.scannersCatalog().then(function(d) { _scannersCatalog = d || {}; }).catch(function() { _scannersCatalog = {}; });
-    return Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { renderPanel(); });
+    return Promise.all([p1, p2, p3, p4, p5, p6]).then(function() { _dataLoadedAt = loaded && gen === _dataStaleGen ? Date.now() : 0; renderPanel(); });
 }
 
 // The module role lands after a couple of round trips: whatever was drawn
@@ -687,6 +715,8 @@ window._runConnector = function(name) {
                     .replace("{findings}", String(r.findings || 0))
                     .replace("{closed}", String(r.closed || 0)));
             }
+            // Hosts and findings imported (part of them, even on a failure).
+            _markDataStale();
             _rerenderConnectors();
         })
         .catch(function(e) { showStatus(e.message || t("common.error"), true); });
@@ -964,7 +994,13 @@ function _renderJobs(c: HTMLElement) {
             if (_panel !== "jobs") { clearInterval(_jobsPollTimer!); _jobsPollTimer = null; return; }
             SurfaceAPI.listJobs().then(function(d) {
                 if (_panel !== "jobs") return;
+                var wasRunning = _jobs.filter(function(j) { return j.status === "running" || j.status === "pending"; })
+                    .map(function(j) { return j.id; });
                 _jobs = d || [];
+                // A job that finished brought findings: the next panel reloads.
+                if (_jobs.some(function(j) { return wasRunning.indexOf(j.id) >= 0 && j.status !== "running" && j.status !== "pending"; })) {
+                    _markDataStale();
+                }
                 _renderJobs(document.getElementById("content")!);
             });
         }, 3000);
@@ -2798,8 +2834,12 @@ function _refreshFindingsBody() {
     // ct_bulkbar keeps its own selection set; we just need to prune
     // entries that are no longer in the filtered view so bulk actions
     // don't try to act on hidden rows.
+    // The first _FINDINGS_SHOWN rows are drawn, all of them on demand: ten
+    // thousand rows took seconds to draw and made the page sluggish. A bulk
+    // selection only spans the rows drawn.
+    var shown = _findingsShowAll ? filtered : filtered.slice(0, _FINDINGS_SHOWN);
     var filteredIds: Record<string, boolean> = {};
-    filtered.forEach(function(f) { filteredIds[f.id] = true; });
+    shown.forEach(function(f) { filteredIds[f.id] = true; });
     var sel = ct_bulkbar.getSelection("surface-findings");
     var prunedKeys: string[] = [];
     sel.forEach(function(k) { if (filteredIds[k]) prunedKeys.push(k); });
@@ -2807,7 +2847,7 @@ function _refreshFindingsBody() {
 
     h += ct_table.render({
         // ct_table works on Record<string, any>[] (shared declaration)
-        rows: filtered as unknown as Record<string, any>[],
+        rows: shown as unknown as Record<string, any>[],
         rowKey: "id",
         onRowClick: "_openFindingRow",
         rowClass: function(f) { return "finding-row sev-" + f.severity + " status-" + f.status; },
@@ -2834,10 +2874,21 @@ function _refreshFindingsBody() {
         ]
     });
 
+    if (shown.length < filtered.length) {
+        h += '<div class="ct-row ct-mt-2"><span class="ct-text-label ct-muted">'
+           + esc(t("findings.shown", { shown: shown.length, total: filtered.length })) + '</span>'
+           + '<button type="button" class="ct-btn" data-size="sm" data-click="_showAllFindings">'
+           + esc(t("findings.show_all")) + '</button></div>';
+    }
+
     wrap.innerHTML = h;
     _setupFindingsBulkbar();
     ct_bulkbar.update("surface-findings");
 }
+
+var _FINDINGS_SHOWN = 500;
+var _findingsShowAll = false;
+window._showAllFindings = function() { _findingsShowAll = true; _refreshFindingsBody(); };
 
 // ct_table passes the row object; wrappers adapt to the legacy quickTriage signature.
 window._openFindingRow = function(row) { if (row && row.id) window._openFinding(row.id); };
@@ -3856,6 +3907,52 @@ function _findingMatchesAsset(f: SurfaceFinding, a: SurfaceMonitoredAsset): bool
     return false;
 }
 
+// The findings of the loaded list keyed by what a host matches on (the
+// target's host part, the evidence hostname, the evidence address), built
+// once per list: a Hosts page no longer walks every finding for every asset.
+// Other kinds (domain rollup, CIDR, share) still go through the full test.
+var _hostIndex: { of: SurfaceFinding[]; by: Record<string, SurfaceFinding[]> } | null = null;
+function _findingsHostIndex(): Record<string, SurfaceFinding[]> {
+    if (_hostIndex && _hostIndex.of === _findings) return _hostIndex.by;
+    var by: Record<string, SurfaceFinding[]> = Object.create(null);
+    var add = function(kind: string, key: string, f: SurfaceFinding) {
+        if (!key) return;
+        var k = kind + ":" + key;
+        (by[k] || (by[k] = [])).push(f);
+    };
+    _findings.forEach(function(f) {
+        var ev: any = f.evidence || {};
+        add("host", _targetHostPart(f.target || ""), f);
+        add("evhost", String(ev.hostname || ev.host || "").toLowerCase(), f);
+        add("evaddr", String(ev.address || "").toLowerCase(), f);
+    });
+    _hostIndex = { of: _findings, by: by };
+    return by;
+}
+
+// The loaded findings that belong to any of `assets`, each once, in list
+// order — the same set as testing _findingMatchesAsset on every finding.
+function _findingsOfAssets(assets: SurfaceMonitoredAsset[]): SurfaceFinding[] {
+    var hit = new Set<SurfaceFinding>();
+    var by = _findingsHostIndex();
+    var take = function(k: string) { (by[k] || []).forEach(function(f) { hit.add(f); }); };
+    var others = assets.filter(function(a) {
+        if (a.kind !== "host") return true;
+        var val = (a.value || "").toLowerCase();
+        var rip = (a.resolved_ip || "").toLowerCase();
+        if (val) { take("host:" + val); take("evhost:" + val); }
+        if (rip) { take("host:" + rip); take("evaddr:" + rip); }
+        return false;
+    });
+    if (others.length) {
+        _findings.forEach(function(f) {
+            if (hit.has(f)) return;
+            for (var i = 0; i < others.length; i++) { if (_findingMatchesAsset(f, others[i]!)) { hit.add(f); return; } }
+        });
+    }
+    return _findings.filter(function(f) { return hit.has(f); });
+}
+
 // A host plus its same-IP aliases: findings keyed by a shared resolved IP
 // belong to all of them, so a card and its detail count/list the same set.
 function _assetAliases(a: SurfaceMonitoredAsset): SurfaceMonitoredAsset[] {
@@ -3924,10 +4021,7 @@ function _countFindingsForAssets(assets: SurfaceMonitoredAsset[]): SurfaceHostCo
         critical: 0, high: 0, medium: 0, low: 0, info: 0,
         false_positive: 0, fixed: 0,
     };
-    _findings.forEach(function(f) {
-        var hit = false;
-        for (var i = 0; i < assets.length; i++) { if (_findingMatchesAsset(f, assets[i])) { hit = true; break; } }
-        if (!hit) return;
+    _findingsOfAssets(assets).forEach(function(f) {
         out.total++;
         if (f.status === "false_positive") { out.false_positive++; return; }
         if (f.status === "fixed")          { out.fixed++;          return; }
@@ -4510,10 +4604,7 @@ function _renderHostDetail(c: HTMLElement) {
         h += '</div>';
     }
 
-    var hostFindingsAll = _findings.filter(function(f) {
-        for (var i = 0; i < detailGroup.length; i++) { if (_findingMatchesAsset(f, detailGroup[i]!)) return true; }
-        return false;
-    });
+    var hostFindingsAll = _findingsOfAssets(detailGroup);
     var fpCount = hostFindingsAll.filter(function(f) { return f.status === "false_positive"; }).length;
     var hostFindings = _hostHideFP ? hostFindingsAll.filter(function(f) { return f.status !== "false_positive"; }) : hostFindingsAll;
 

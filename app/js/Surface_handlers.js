@@ -18,7 +18,7 @@ _ctDeclareHandlers([
     "_requestDerogationDetail", "_rerunJob", "_runConnector", "_saveMonitored", "_saveScannersDialog",
     "_scanAllMonitored", "_scanHost", "_scanMonitored", "_scanSharesOnHost", "_sendSmtpDigestNow",
     "_setAuditSearch", "_setFindingsSearch", "_setHostSearch", "_setJobsScannerFilter",
-    "_setJobsStatusFilter", "_setMonitoredSearch", "_setStatusFilter", "_toggleConnector",
+    "_setJobsStatusFilter", "_setMonitoredSearch", "_setStatusFilter", "_showAllFindings", "_toggleConnector",
     "_toggleHostFromDetail", "_toggleHostHideFP", "_toggleHostsInactive", "_toggleMonBulkAll", "_toggleMonBulkOne",
     "_toggleMonitored", "_toggleMonitoredScanner", "_toggleScanner", "_toggleSeverity", "_triageDetail",
     "_triageHostFindingDetail", "exportReport", "importHosts", "openSettings", "selectPanel"

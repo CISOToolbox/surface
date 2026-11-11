@@ -446,6 +446,7 @@ interface Window {
     _setHostSearch?: (v: string) => void;
     _hostsSetView?: (view: string) => void;
     _toggleHostsInactive?: () => void;
+    _showAllFindings?: () => void;
     _clearHostSearch?: () => void;
     _openHost?: (id: string) => void;
     _backToHosts?: () => void;
