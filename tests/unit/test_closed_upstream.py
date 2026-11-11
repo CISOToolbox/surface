@@ -65,8 +65,10 @@ def test_it_is_absent_from_the_posture_filter():
 
 
 def test_it_is_a_filterable_status():
-    assert "closed_upstream" in _source("src/routes/findings.py"), (
-        "the status is not in _VALID_STATUSES — the UI filter would be ignored"
+    # The list's filters accept the statuses of src/finding_assets.py.
+    statuses = re.search(r"^STATUSES = \(([^)]*)\)", _source("src/finding_assets.py"), re.M)
+    assert statuses and "closed_upstream" in statuses.group(1), (
+        "the status is not in STATUSES — the UI filter would be ignored"
     )
 
 

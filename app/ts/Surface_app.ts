@@ -270,7 +270,14 @@ window._TZ_OPTIONS_GLOBAL = [
 ];
 
 var _panel = "dashboard";
-var _findings: SurfaceFinding[] = [];
+// FEAT-70 — the Findings table reads one page of its filter from the server.
+var _FINDINGS_PAGE = 100;
+var _findingsOffset = 0;
+var _findingsSort: { key: "created_at" | "severity"; dir: "asc" | "desc" } = { key: "created_at", dir: "desc" };
+var _findingsPage: { key: string; page: SurfaceFindingPage | null; failed?: boolean } | null = null;
+var _findingsShown: SurfaceFindingPage | null = null;   // the page on screen, kept while the next one loads
+var _findingScanners: string[] = [];
+var _findingsSearchTimer: ReturnType<typeof setTimeout> | null = null;
 // FEAT-69 — figures the server computes over every finding: the cards'
 // counts, the dashboard, and the findings of the host page being viewed.
 var _assetCounts: SurfaceAssetCounts = { assets: {}, ip_groups: {} };
@@ -287,9 +294,11 @@ var _jobsFilterScanner = "";
 var _jobsFilterStatus = "";
 var _scannersCatalog: SurfaceScannersCatalog | null = null;
 var _measures: SurfaceMeasure[] = [];
-var _filterStatus = "open";  // default: show new + to_fix findings
-var _filterSeverities: string[] = [];  // multi-select; empty = all
-var _filterScanners: string[] = [];    // multi-select; empty = all
+// Findings filter rows: values included / excluded (ct_pillfilter).
+var _OPEN_STATUSES = ["new", "to_fix"];
+var _filterStatus = ct_pillfilter.make(_OPEN_STATUSES);  // default: open findings
+var _filterSeverities = ct_pillfilter.make();
+var _filterScanners = ct_pillfilter.make();
 var _monitoredFilterScanners: string[] = []; // multi-select scanner filter on Surveillance page
 var _selectedFinding: SurfaceFinding | null = null;
 var _selectedHost: SurfaceMonitoredAsset | null = null;    // MonitoredAsset object, set when user clicks a host card
@@ -313,7 +322,7 @@ function _tn(key: string, n: number | string) {
 
 window.selectPanel = function(id) {
     _panel = id;
-    _findingsShowAll = false;
+    _findingsOffset = 0;
     _selectedFinding = null;
     _selectedHost = null;
     if (window.ct_bulkbar) {
@@ -345,13 +354,15 @@ function _markDataStale() { _dataLoadedAt = 0; _dataStaleGen++; }
 function _loadAndRender() {
     var loaded = true;  // a failed load is retried on the next panel switch
     var gen = _dataStaleGen;
-    var p1 = SurfaceAPI.listFindings({ limit: "10000" }).then(function(d) { _findings = d || []; }).catch(function() { _findings = []; loaded = false; });
+    var p1 = SurfaceAPI.findingScanners().then(function(d) { _findingScanners = d || []; }).catch(function() { _findingScanners = []; loaded = false; });
+    _findingsPage = null;  // the table fetches its page again, at the same offset
     var p2 = SurfaceAPI.listMeasures().then(function(d) { _measures = d || []; }).catch(function() { _measures = []; });
     var p3 = SurfaceAPI.listMonitored().then(function(d) { _monitored = d || []; }).catch(function() { _monitored = []; loaded = false; });
     var p4 = SurfaceAPI.listJobs().then(function(d) { _jobs = d || []; }).catch(function() { _jobs = []; });
     var p7 = SurfaceAPI.findingCounts().then(function(d) { _assetCounts = d || { assets: {}, ip_groups: {} }; }).catch(function() { _assetCounts = { assets: {}, ip_groups: {} }; loaded = false; });
     var p8 = SurfaceAPI.findingStats(_browserZone()).then(function(d) { _findingStats = d || null; }).catch(function() { _findingStats = null; loaded = false; });
     _hostFindings = null;  // the host page fetches its list again
+    _ncFindingsLoad = null;  // and the register, the findings it names
     var p6 = SurfaceAPI.listExclusions().then(function(d) { _exclusions = d || []; }).catch(function() { _exclusions = []; });
     var p5 = _scannersCatalog
         ? Promise.resolve()
@@ -2582,23 +2593,23 @@ function _dashHealth() {
 // ── Coverage gaps ────────────────────────────────────────────
 // ── Navigation helpers ───────────────────────────────────────
 window._dashGotoSeverity = function(sev) {
-    _filterStatus = "open";
-    _filterSeverities = [sev];
-    _filterScanners = [];
+    _filterStatus = ct_pillfilter.make(_OPEN_STATUSES);
+    _filterSeverities = ct_pillfilter.make([sev]);
+    _filterScanners = ct_pillfilter.make();
     _findingsSearch = "";
     selectPanel("findings");
 };
 window._dashGotoRecent = function() {
-    _filterStatus = "";
-    _filterSeverities = [];
-    _filterScanners = [];
+    _filterStatus = ct_pillfilter.make();
+    _filterSeverities = ct_pillfilter.make();
+    _filterScanners = ct_pillfilter.make();
     _findingsSearch = "";
     selectPanel("findings");
 };
 window._dashGotoScanner = function(scanner) {
-    _filterStatus = "";
-    _filterSeverities = [];
-    _filterScanners = [scanner];
+    _filterStatus = ct_pillfilter.make();
+    _filterSeverities = ct_pillfilter.make();
+    _filterScanners = ct_pillfilter.make([scanner]);
     _findingsSearch = "";
     selectPanel("findings");
 };
@@ -2608,9 +2619,9 @@ window._dashGotoScanner = function(scanner) {
 // emits). Works whether the host is in monitored_assets or not, so the
 // click affordance is consistent regardless of auto-enrol state.
 window._dashGotoHost = function(hostValue) {
-    _filterStatus = "";
-    _filterSeverities = [];
-    _filterScanners = [];
+    _filterStatus = ct_pillfilter.make();
+    _filterSeverities = ct_pillfilter.make();
+    _filterScanners = ct_pillfilter.make();
     _findingsSearch = hostValue || "";
     selectPanel("findings");
 };
@@ -2650,16 +2661,17 @@ function _refreshFindingsBody() {
     var wrap = document.getElementById("findings-body-wrap");
     if (!wrap) return;
 
-    // Build distinct scanner list from current data
-    var scannerSetFindings: Record<string, boolean> = {};
-    _findings.forEach(function(f) { if (f.scanner) scannerSetFindings[f.scanner] = true; });
-    var scannerList = Object.keys(scannerSetFindings).sort();
+    // Every scanner with findings, and any pill still set on one gone since.
+    var scannerList = _findingScanners.slice();
+    _filterScanners.inc.concat(_filterScanners.exc).forEach(function(v) { if (scannerList.indexOf(v) < 0) scannerList.push(v); });
+    scannerList.sort();
 
     var h = "";
 
     // ── Status filter pills ────────────────────────────────
+    // "Open" and "All" are shortcuts; each status pill cycles
+    // neutral → included → excluded (ct_pillfilter).
     var statusOptions = [
-        { v: "open",           key: "status.open" },
         { v: "new",            key: "status.new" },
         { v: "to_fix",         key: "status.to_fix" },
         { v: "false_positive", key: "dash.false_positive" },
@@ -2668,43 +2680,41 @@ function _refreshFindingsBody() {
         // Placed after "fixed": it is a closure, not a state to work on.
         { v: "closed_upstream", key: "status.closed_upstream", help: "status.closed_upstream_help" },
         // FEAT-45 — covered by an approved derogation; the finding is silenced until it expires.
-        { v: "derogated",      key: "status.derogated", help: "status.derogated_help" },
-        { v: "",               key: "status.all" }
+        { v: "derogated",      key: "status.derogated", help: "status.derogated_help" }
     ];
+    h += '<span class="ct-text-label ct-muted filter-pills-howto">' + esc(t("ct.pillfilter.hint")) + '</span>';
     h += '<div class="filter-pills-row">';
     h += '<span class="filter-pills-lbl">' + esc(t("findings.filter.status")) + '</span>';
+    h += '<button type="button" class="filter-pill status-pill-open' + (ct_pillfilter.isExactly(_filterStatus, _OPEN_STATUSES) ? " active" : "") + '" data-click="_setStatusOpen">' + esc(t("status.open")) + '</button>';
     statusOptions.forEach(function(opt) {
-        var on = _filterStatus === opt.v;
         // Tooltip when the pill carries one: "Closed upstream" is not
         // self-explanatory the way "New" is.
-        var help = opt.help ? ' title="' + esc(t(opt.help)) + '"' : '';
-        h += '<button type="button" class="filter-pill status-pill-' + (opt.v || "all") + (on ? " active" : "") + '"' + help + ' data-click="_setStatusFilter" data-args=\'' + _da(opt.v) + '\'>' + esc(t(opt.key)) + '</button>';
+        h += ct_pillfilter.pill(_filterStatus, opt.v, t(opt.key), { click: "_toggleStatus", cls: "status-pill-" + opt.v, title: opt.help ? t(opt.help) : "" });
     });
+    h += '<button type="button" class="filter-pill status-pill-all' + (ct_pillfilter.isEmpty(_filterStatus) ? " active" : "") + '" data-click="_clearStatusFilter">' + esc(t("status.all")) + '</button>';
     h += '</div>';
 
-    // ── Severity multi-select pills ────────────────────────
+    // ── Severity pills ─────────────────────────────────────
     h += '<div class="filter-pills-row">';
     h += '<span class="filter-pills-lbl">' + esc(t("findings.filter.severity")) + '</span>';
     ["critical", "high", "medium", "low", "info"].forEach(function(s) {
-        var on = _filterSeverities.indexOf(s) >= 0;
-        h += '<button type="button" class="filter-pill sev-' + s + (on ? " active" : "") + '" data-click="_toggleSeverity" data-args=\'' + _da(s) + '\'>' + esc(t("sev." + s)) + '</button>';
+        h += ct_pillfilter.pill(_filterSeverities, s, t("sev." + s), { click: "_toggleSeverity", cls: "sev-" + s });
     });
-    if (_filterSeverities.length) {
+    if (!ct_pillfilter.isEmpty(_filterSeverities)) {
         h += '<button type="button" class="filter-pill filter-pill-clear" data-click="_clearSeverityFilter">' + esc(t("findings.filter.reset")) + '</button>';
     } else {
         h += '<span class="filter-pills-hint">' + esc(t("findings.filter.hint")) + '</span>';
     }
     h += '</div>';
 
-    // ── Scanner multi-select pills ─────────────────────────
+    // ── Scanner pills ──────────────────────────────────────
     if (scannerList.length) {
         h += '<div class="filter-pills-row">';
         h += '<span class="filter-pills-lbl">' + esc(t("findings.filter.scanner")) + '</span>';
         scannerList.forEach(function(s) {
-            var on = _filterScanners.indexOf(s) >= 0;
-            h += '<button type="button" class="filter-pill' + (on ? " active" : "") + '" data-click="_toggleScanner" data-args=\'' + _da(s) + '\'>' + esc(_scannerLabel(s)) + '</button>';
+            h += ct_pillfilter.pill(_filterScanners, s, _scannerLabel(s), { click: "_toggleScanner" });
         });
-        if (_filterScanners.length) {
+        if (!ct_pillfilter.isEmpty(_filterScanners)) {
             h += '<button type="button" class="filter-pill filter-pill-clear" data-click="_clearScannerFilter">' + esc(t("findings.filter.reset")) + '</button>';
         } else {
             h += '<span class="filter-pills-hint">' + esc(t("findings.filter.hint_m")) + '</span>';
@@ -2712,50 +2722,50 @@ function _refreshFindingsBody() {
         h += '</div>';
     }
 
-    var searchQ = _findingsSearch.trim().toLowerCase();
-    var filtered = _findings.filter(function(f) {
-        if (_filterStatus === "open") { if (f.status !== "new" && f.status !== "to_fix") return false; }
-        else if (_filterStatus && f.status !== _filterStatus) return false;
-        if (_filterSeverities.length && _filterSeverities.indexOf(f.severity) < 0) return false;
-        if (_filterScanners.length && _filterScanners.indexOf(f.scanner!) < 0) return false;
-        if (searchQ) {
-            var hay = (_findingTitle(f) + " " + (f.target || "") + " " + _findingDesc(f) + " " + (f.scanner || "") + " " + (f.type || "")).toLowerCase();
-            if (hay.indexOf(searchQ) < 0) return false;
-        }
-        return true;
-    });
-
-    h += '<div class="ct-text-label ct-muted ct-mb-2">' + filtered.length + ' / ' + _findings.length + ' ' + esc(t("findings.count")) + '</div>';
-
-    if (!filtered.length) {
-        h += '<div class="ct-empty-state">' + esc(t("findings.empty")) + '</div>';
+    var page = _findingsPageOf();
+    if (!page && _findingsPage && _findingsPage.failed) {
+        h += '<div class="ct-empty-state">' + esc(t("findings.load_failed"))
+           + ' <button type="button" class="ct-btn" data-size="sm" data-click="_findingsRetry">' + esc(t("findings.retry")) + '</button></div>';
         wrap.innerHTML = h;
         return;
     }
+    page = page || _findingsShown;
+    if (!page) {
+        h += '<div class="ct-empty-state">' + esc(t("common.loading")) + '</div>';
+        wrap.innerHTML = h;
+        return;
+    }
+    _findingsShown = page;
+    var rows = page.items;
 
-    // ct_bulkbar keeps its own selection set; we just need to prune
-    // entries that are no longer in the filtered view so bulk actions
-    // don't try to act on hidden rows.
-    // The first _FINDINGS_SHOWN rows are drawn, all of them on demand: ten
-    // thousand rows took seconds to draw and made the page sluggish. A bulk
-    // selection only spans the rows drawn.
-    var shown = _findingsShowAll ? filtered : filtered.slice(0, _FINDINGS_SHOWN);
-    var filteredIds: Record<string, boolean> = {};
-    shown.forEach(function(f) { filteredIds[f.id] = true; });
+    if (!rows.length) {
+        h += '<div class="ct-empty-state">' + esc(t("findings.empty")) + '</div>';
+        wrap.innerHTML = h;
+        ct_bulkbar.clear("surface-findings");
+        return;
+    }
+
+    // The selection spans the page drawn; "every finding of the filter" is
+    // offered on top of it (ct_bulkbar.extend).
+    var pageIds: Record<string, boolean> = {};
+    rows.forEach(function(f) { pageIds[f.id] = true; });
     var sel = ct_bulkbar.getSelection("surface-findings");
     var prunedKeys: string[] = [];
-    sel.forEach(function(k) { if (filteredIds[k]) prunedKeys.push(k); });
+    sel.forEach(function(k) { if (pageIds[k]) prunedKeys.push(k); });
     if (prunedKeys.length !== sel.size) ct_bulkbar.setSelection("surface-findings", prunedKeys);
 
+    h += '<div id="findings-extent" class="ct-text-label ct-muted ct-mb-2"></div>';
     h += ct_table.render({
         // ct_table works on Record<string, any>[] (shared declaration)
-        rows: shown as unknown as Record<string, any>[],
+        rows: rows as unknown as Record<string, any>[],
         rowKey: "id",
         onRowClick: "_openFindingRow",
         rowClass: function(f) { return "finding-row sev-" + f.severity + " status-" + f.status; },
         bulk: { scope: "surface-findings" },
+        sortHandler: "_sortFindings",
+        initialSort: { key: _findingsSort.key, direction: _findingsSort.dir },
         columns: [
-            { key: "severity", label: t("findings.col.severity"), width: "80px",
+            { key: "severity", label: t("findings.col.severity"), width: "80px", sortable: true,
               render: function(f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.severity) + '">' + esc(f.severity) + '</span>'; } },
             { key: "type", label: t("findings.col.type"),
               render: function(f) { return '<span class="ct-text-label ct-muted">' + esc(f.type || "") + '</span>'; } },
@@ -2765,7 +2775,7 @@ function _refreshFindingsBody() {
               render: function(f) { return '<span class="ct-text-label ct-journal-sep ct-break-all">' + esc(f.target || "-") + '</span>'; } },
             { key: "status", label: t("findings.col.status"), width: "110px",
               render: function(f) { return '<span class="ct-badge" data-tone="' + _surfaceTone(f.status) + '">' + esc(_statusLabel(f.status)) + '</span>'; } },
-            { key: "created_at", label: t("findings.col.datetime"), width: "130px",
+            { key: "created_at", label: t("findings.col.datetime"), width: "130px", sortable: true,
               render: function(f) { return '<span class="ct-text-label ct-muted ct-nowrap">' + esc(f.created_at ? _fmtDate(f.created_at) : "-") + '</span>'; } }
         ],
         actions: [
@@ -2776,21 +2786,99 @@ function _refreshFindingsBody() {
         ]
     });
 
-    if (shown.length < filtered.length) {
-        h += '<div class="ct-row ct-mt-2"><span class="ct-text-label ct-muted">'
-           + esc(t("findings.shown", { shown: shown.length, total: filtered.length })) + '</span>'
-           + '<button type="button" class="ct-btn" data-size="sm" data-click="_showAllFindings">'
-           + esc(t("findings.show_all")) + '</button></div>';
+    var from = _findingsOffset + 1, to = _findingsOffset + rows.length;
+    h += '<div class="ct-row ct-items-center ct-gap-2 ct-mt-2 ct-text-meta ct-muted">';
+    h += '<span>' + esc(t("findings.range").replace("{from}", String(from)).replace("{to}", String(to)).replace("{total}", String(page.total))) + '</span>';
+    if (page.total > _FINDINGS_PAGE) {
+        h += '<button type="button" class="ct-btn" data-size="sm" data-click="_findingsPageNav" data-args=\'[-1]\'' + (_findingsOffset > 0 ? '' : ' disabled') + '>' + esc(t("findings.page_prev")) + '</button>';
+        h += '<button type="button" class="ct-btn" data-size="sm" data-click="_findingsPageNav" data-args=\'[1]\'' + (to < page.total ? '' : ' disabled') + '>' + esc(t("findings.page_next")) + '</button>';
     }
+    h += '</div>';
 
     wrap.innerHTML = h;
     _setupFindingsBulkbar();
     ct_bulkbar.update("surface-findings");
 }
 
-var _FINDINGS_SHOWN = 500;
-var _findingsShowAll = false;
-window._showAllFindings = function() { _findingsShowAll = true; _refreshFindingsBody(); };
+// The table's filter, as the server applies it.
+function _findingsFilter(): SurfaceFindingFilter {
+    return {
+        status: _filterStatus.inc.slice(), status_not: _filterStatus.exc.slice(),
+        severity: _filterSeverities.inc.slice(), severity_not: _filterSeverities.exc.slice(),
+        scanner: _filterScanners.inc.slice(), scanner_not: _filterScanners.exc.slice(),
+        q: _findingsSearch.trim()
+    };
+}
+
+// The table's page: null while it loads, and the body is drawn again when
+// it lands. A reload of the data drops it (same offset); a list that shrank
+// brings the offset back to its last page. A load that failed stays null
+// (`failed`), until a retry or another filter asks again.
+function _findingsPageOf(): SurfaceFindingPage | null {
+    var query: SurfaceFindingQuery = Object.assign(_findingsFilter(), { sort: _findingsSort.key, dir: _findingsSort.dir });
+    var key = JSON.stringify(query) + "|" + _findingsOffset;
+    if (_findingsPage && _findingsPage.key === key) return _findingsPage.page;
+    var entry: { key: string; page: SurfaceFindingPage | null; failed?: boolean } = { key: key, page: null };
+    _findingsPage = entry;
+    SurfaceAPI.findingsPage(query, _findingsOffset, _FINDINGS_PAGE).then(function(p) {
+        entry.page = p || { items: [], total: 0 };
+    }).catch(function(e) {
+        entry.failed = true;
+        showStatus((e && e.message) || t("common.error"), true);
+    }).then(function() {
+        if (_findingsPage !== entry) return;
+        if (entry.page) {
+            var last = Math.max(0, Math.floor((entry.page.total - 1) / _FINDINGS_PAGE) * _FINDINGS_PAGE);
+            if (_findingsOffset > last) _findingsOffset = last;
+        }
+        if (_panel === "findings" && !_selectedFinding) _refreshFindingsBody();
+    });
+    return null;
+}
+
+window._findingsRetry = function() { _findingsPage = null; _refreshFindingsBody(); };
+
+// A filter, the search or the sort changed: from the first page, nothing selected.
+function _findingsFilterChanged() {
+    _findingsOffset = 0;
+    ct_bulkbar.clear("surface-findings");
+    _refreshFindingsBody();
+}
+
+window._findingsPageNav = function(dir) {
+    _findingsOffset = Math.max(0, _findingsOffset + dir * _FINDINGS_PAGE);
+    _refreshFindingsBody();
+};
+
+window._sortFindings = function(key) {
+    if (key !== "created_at" && key !== "severity") return;
+    _findingsSort = _findingsSort.key === key
+        ? { key: key, dir: _findingsSort.dir === "desc" ? "asc" : "desc" }
+        : { key: key, dir: "desc" };
+    _findingsFilterChanged();
+};
+
+// Above the table: the whole page is selected → offer every finding of the
+// filter; that done → say so, with a way back.
+window._findingsBulkChanged = function(scope) {
+    var el = document.getElementById("findings-extent");
+    var page = _findingsShown;
+    if (!el || !page) return;
+    var n = ct_bulkbar.extent(scope), selected = ct_bulkbar.count(scope);
+    var h = "";
+    if (n != null) {
+        h = esc(t("findings.filter_selected", { n: n })) + ' <button type="button" class="ct-btn" data-size="sm" data-click="_findingsSelectPage">' + esc(t("findings.select_page_only")) + '</button>';
+    } else if (page.total > page.items.length && selected === page.items.length) {
+        h = esc(t("findings.page_selected", { n: selected })) + ' <button type="button" class="ct-btn" data-size="sm" data-click="_findingsSelectFilter">' + esc(t("findings.select_filter", { n: page.total })) + '</button>';
+    }
+    el.innerHTML = h;
+};
+window._findingsSelectFilter = function() {
+    if (_findingsShown) ct_bulkbar.extend("surface-findings", _findingsShown.total);
+};
+window._findingsSelectPage = function() {
+    ct_bulkbar.setSelection("surface-findings", Array.from(ct_bulkbar.getSelection("surface-findings")));
+};
 
 // ct_table passes the row object; wrappers adapt to the legacy quickTriage signature.
 window._openFindingRow = function(row) { if (row && row.id) window._openFinding(row.id); };
@@ -2800,6 +2888,7 @@ window._quickTriageFpRow = function(row) { if (row && row.id) window._quickTriag
 function _setupFindingsBulkbar() {
     ct_bulkbar.attach({
         scope: "surface-findings",
+        onChange: "_findingsBulkChanged",
         label: (t("bulk.findings_selected") || "{n} finding(s) sélectionné(s)"),
         actions: [
             { id: "to_fix", icon: "check", label: t("bulk.to_fix") || "À corriger",
@@ -2816,23 +2905,53 @@ function _setupFindingsBulkbar() {
     });
 }
 
-window._bulkSurfaceToFix = function(scope) {
+// What a bulk action of `scope` targets: the findings selected, or every
+// finding of the table's filter (the server checks the count still holds).
+// `rows` are those of them on screen.
+function _bulkTarget(scope: string): { n: number; target: SurfaceBulkTarget; rows: SurfaceFinding[] } | null {
     var ids = Array.from(ct_bulkbar.getSelection(scope));
-    if (!ids.length) return;
-    if (ids.length > 10000) { showStatus("Sélection trop grande : " + ids.length + " findings (max 10000 par remédiation). Réduisez la sélection.", true); return; }
-    var selected = ids.map(_findingById).filter(function(f): f is SurfaceFinding { return !!f; });
+    var rows = ids.map(_findingById).filter(function(f): f is SurfaceFinding { return !!f; });
+    var extent = ct_bulkbar.extent(scope);
+    if (extent != null && scope === "surface-findings") {
+        return { n: extent, target: { filter: _findingsFilter(), expected: extent }, rows: rows };
+    }
+    return ids.length ? { n: ids.length, target: { ids: ids }, rows: rows } : null;
+}
+
+// A bulk action the server refused. A filter that no longer matches the count
+// shown (409) is read again: nothing selected, the table reloaded.
+function _bulkFailed(scope: string, e: Error & { status?: number }) {
+    if (e && e.status === 409) {
+        showStatus(t("bulk.filter_changed"), true);
+        ct_bulkbar.clear(scope);
+        _loadAndRender();
+        return;
+    }
+    showStatus((e && e.message) || t("common.error"), true);
+}
+
+window._bulkSurfaceToFix = function(scope) {
+    var bt = _bulkTarget(scope);
+    if (!bt) return;
+    var n = bt.n;
+    if (n > 10000) { showStatus("Sélection trop grande : " + n + " findings (max 10000 par remédiation). Réduisez la sélection.", true); return; }
+    var selected = bt.rows;
     // Interpolate {n} — t() returns the raw key/value, no placeholder handling.
     var interp = function(key: string, fallback: string) {
-        var v = (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
+        var v = (t(key) || fallback || "").replace(/\{n\}/g, String(n));
         return v;
     };
-    var defaultTitle = selected.length === 1 ? _findingTitle(selected[0]!)
-        : (t("bulk.measure_default_title") || "Mesure corrective") + " (" + ids.length + " findings)";
-    var defaultDesc = selected.map(function(f) { return "- " + _findingTitle(f); }).join("\n");
+    var defaultTitle = n === 1 && selected.length === 1 ? _findingTitle(selected[0]!)
+        : (t("bulk.measure_default_title") || "Mesure corrective") + " (" + n + " findings)";
+    // Every finding of a filter: only those of the page are at hand to be listed.
+    var unlisted = n - selected.length;
+    var defaultDesc = selected.map(function(f) { return "- " + _findingTitle(f); }).join("\n")
+        + (unlisted > 0 ? "\n" + t("bulk.measure_desc_more", { n: unlisted }) : "");
     var helpText = interp("bulk.measure_help", "UNE remédiation sera créée et liée aux {n} findings sélectionnés.");
     var summary = '<div class="ct-text-label ct-muted ct-mb-1">' + esc(helpText) + '</div>'
                 + '<div class="ct-text-label ct-muted ct-strong ct-mt-1">'
-                + esc("Findings couverts") + ' (' + ids.length + ')</div>'
+                + esc(t("bulk.measure_covered", { n: n }))
+                + (unlisted > 0 ? ' · ' + esc(t("bulk.measure_covered_listed", { n: selected.length })) : '') + '</div>'
                 + '<div class="ct-maxh-150 ct-scroll-y ct-bordered ct-r-md ct-p-2">'
                 + selected.map(function(f) {
                       return '<div class="ct-py-1 ct-px-0"><span class="ct-badge" data-tone="' + _surfaceTone(f.severity) + '">'
@@ -2848,43 +2967,43 @@ window._bulkSurfaceToFix = function(scope) {
         extraContent: summary
     }).then(function(data) {
         if (!data || data.__deleted) return;
-        SurfaceAPI.bulkTriageFindings({
-            ids: ids, status: "to_fix",
+        SurfaceAPI.bulkTriageFindings(Object.assign({}, bt!.target, {
+            status: "to_fix",
             measure_title: data.title,
             measure_description: data.description,
             responsable: data.responsable,
             echeance: data.echeance
-        }).then(function(r) {
+        })).then(function(r) {
             var msg = r.updated + " finding(s) → " + (t("status.to_fix") || "À corriger");
             if (r.measures_created) msg += " (" + r.measures_created + " remédiation(s) créée(s))";
             showStatus(msg);
             ct_bulkbar.clear(scope);
             _loadAndRender();
-        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+        }).catch(function(e) { _bulkFailed(scope, e); });
     });
 };
 
 window._bulkSurfaceFixed = function(scope) {
-    var ids = Array.from(ct_bulkbar.getSelection(scope));
-    if (!ids.length) return;
+    var bt = _bulkTarget(scope);
+    if (!bt) return;
     ct_modal.confirm({
-        title: t("bulk.fixed_confirm_title") || "Marquer " + ids.length + " finding(s) comme corrigés ?",
+        title: t("bulk.fixed_confirm_title", { n: bt.n }),
         message: t("bulk.fixed_confirm_msg") || "Les findings seront marqués corrigés."
     }).then(function(ok) {
         if (!ok) return;
-        SurfaceAPI.bulkTriageFindings({ ids: ids, status: "fixed" }).then(function(r) {
+        SurfaceAPI.bulkTriageFindings(Object.assign({}, bt!.target, { status: "fixed" })).then(function(r) {
             showStatus(r.updated + " finding(s) " + (t("bulk.fixed") || "corrigé(s)"));
             ct_bulkbar.clear(scope);
             _loadAndRender();
-        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+        }).catch(function(e) { _bulkFailed(scope, e); });
     });
 };
 
 window._bulkSurfaceFP = function(scope) {
-    var ids = Array.from(ct_bulkbar.getSelection(scope));
-    if (!ids.length) return;
+    var bt = _bulkTarget(scope);
+    if (!bt) return;
     var interp = function(key: string, fallback: string) {
-        return (t(key) || fallback || "").replace(/\{n\}/g, String(ids.length));
+        return (t(key) || fallback || "").replace(/\{n\}/g, String(bt!.n));
     };
     var body = '<div class="ct-text-label ct-muted ct-mb-3">'
              + esc(interp("bulk.fp_help", "La justification sera attachée à chaque finding pour audit."))
@@ -2914,22 +3033,22 @@ window._bulkSurfaceFP = function(scope) {
         ]
     }).then(function(res: any) {
         if (!res) return;
-        SurfaceAPI.bulkTriageFindings({ ids: ids, status: "false_positive", notes: res.notes }).then(function(r) {
+        SurfaceAPI.bulkTriageFindings(Object.assign({}, bt!.target, { status: "false_positive", notes: res.notes })).then(function(r) {
             showStatus(r.updated + " finding(s) → " + (t("bulk.false_positive") || "faux positif"));
             ct_bulkbar.clear(scope);
             _loadAndRender();
-        }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+        }).catch(function(e) { _bulkFailed(scope, e); });
     });
 };
 
 window._bulkSurfaceDelete = function(scope) {
-    var ids = Array.from(ct_bulkbar.getSelection(scope));
-    if (!ids.length) return;
-    SurfaceAPI.bulkDeleteFindings(ids).then(function(r) {
+    var bt = _bulkTarget(scope);
+    if (!bt) return;
+    SurfaceAPI.bulkDeleteFindings(bt.target).then(function(r) {
         showStatus(r.deleted + " finding(s) " + (t("bulk.deleted") || "supprimé(s)"));
         ct_bulkbar.clear(scope);
         _loadAndRender();
-    }).catch(function(e) { showStatus(e.message || t("common.error"), true); });
+    }).catch(function(e) { _bulkFailed(scope, e); });
 };
 
 
@@ -2952,10 +3071,14 @@ function _measureStatusBadge(statut: string | undefined) {
 
 // All findings filter toggles refresh ONLY the body wrapper, leaving the
 // search input alive so keyboard focus/caret stays with the user.
-window._setStatusFilter = function(v) { _filterStatus = v || ""; _refreshFindingsBody(); };
+window._toggleStatus = function(v) { ct_pillfilter.cycle(_filterStatus, v); _findingsFilterChanged(); };
+window._setStatusOpen = function() { _filterStatus = ct_pillfilter.make(_OPEN_STATUSES); _findingsFilterChanged(); };
+window._clearStatusFilter = function() { ct_pillfilter.clear(_filterStatus); _findingsFilterChanged(); };
+// The server is asked once the typing pauses.
 window._setFindingsSearch = function(v) {
     _findingsSearch = v || "";
-    _refreshFindingsBody();
+    if (_findingsSearchTimer) clearTimeout(_findingsSearchTimer);
+    _findingsSearchTimer = setTimeout(function() { _findingsSearchTimer = null; _findingsFilterChanged(); }, 300);
     var clearBtn = document.getElementById("findings-search-clear");
     if (clearBtn) clearBtn.style.display = _findingsSearch ? "" : "none";
 };
@@ -2963,35 +3086,27 @@ window._clearFindingsSearch = function() {
     _findingsSearch = "";
     var inp = document.getElementById("findings-search") as HTMLInputElement | null;
     if (inp) inp.value = "";
-    _refreshFindingsBody();
+    if (_findingsSearchTimer) { clearTimeout(_findingsSearchTimer); _findingsSearchTimer = null; }
+    _findingsFilterChanged();
     var clearBtn = document.getElementById("findings-search-clear");
     if (clearBtn) clearBtn.style.display = "none";
     if (inp) inp.focus();
 };
-window._toggleSeverity = function(s) {
-    var i = _filterSeverities.indexOf(s);
-    if (i >= 0) _filterSeverities.splice(i, 1);
-    else _filterSeverities.push(s);
-    _refreshFindingsBody();
-};
-window._clearSeverityFilter = function() { _filterSeverities = []; _refreshFindingsBody(); };
-window._toggleScanner = function(s) {
-    var i = _filterScanners.indexOf(s);
-    if (i >= 0) _filterScanners.splice(i, 1);
-    else _filterScanners.push(s);
-    _refreshFindingsBody();
-};
-window._clearScannerFilter = function() { _filterScanners = []; _refreshFindingsBody(); };
+window._toggleSeverity = function(s) { ct_pillfilter.cycle(_filterSeverities, s); _findingsFilterChanged(); };
+window._clearSeverityFilter = function() { ct_pillfilter.clear(_filterSeverities); _findingsFilterChanged(); };
+window._toggleScanner = function(s) { ct_pillfilter.cycle(_filterScanners, s); _findingsFilterChanged(); };
+window._clearScannerFilter = function() { ct_pillfilter.clear(_filterScanners); _findingsFilterChanged(); };
 
+// A finding of the table or not (a non-conformity names any): the full
+// record, evidence included (the list strips the screenshots).
 window._openFinding = function(id) {
-    var f = _findings.find(function(x) { return x.id === id; });
-    if (!f) return;
-    // Fetch full evidence (includes png_b64 stripped from list responses)
+    var f = _findingById(id);
     SurfaceAPI.get("/api/findings/" + id).then(function(full) {
         _selectedFinding = full;
         renderPanel();
-    }).catch(function() {
-        _selectedFinding = f!;
+    }).catch(function(e) {
+        if (!f) { showStatus((e && e.message) || t("common.error"), true); return; }
+        _selectedFinding = f;
         renderPanel();
     });
 };
@@ -3044,13 +3159,9 @@ function _ncOptions(): CtNcOptions {
         // subject. A finding opens in its own modal.
         items: {
             options: function() {
-                var out: CtNcItemOption[] = [];
-                for (var i = 0; i < _findings.length; i++) {
-                    var f = _findings[i];
-                    if (f.status !== "new" && f.status !== "to_fix") continue;
-                    out.push({ id: f.id, label: _findingTitle(f) + (f.target ? " · " + f.target : "") });
-                }
-                return out;
+                return (_ncFindings || []).map(function(f) {
+                    return { id: f.id, label: _findingTitle(f) + (f.target ? " · " + f.target : "") };
+                });
             },
             open: function(id) { _panel = "findings"; window._openFinding(id); },
         },
@@ -3085,18 +3196,50 @@ function _ncOptions(): CtNcOptions {
     };
 }
 
+// The open findings a record or a derogation can name: the latest ones,
+// fetched when the register or a derogation request opens (the table no
+// longer holds every finding).
+var _NC_FINDINGS_MAX = 10000;
+var _ncFindings: SurfaceFinding[] | null = null;
+var _ncFindingsLoad: Promise<void> | null = null;   // dropped by a reload of the data
+// One load per reload of the data; the list of the previous one serves until
+// the new one lands.
+function _loadNcFindings(): Promise<void> {
+    if (_ncFindingsLoad) return _ncFindingsLoad;
+    var query: SurfaceFindingQuery = { status: _OPEN_STATUSES.slice(), status_not: [], severity: [], severity_not: [],
+                                       scanner: [], scanner_not: [], q: "", sort: "created_at", dir: "desc" };
+    var load: Promise<void> = SurfaceAPI.findingsPage(query, 0, _NC_FINDINGS_MAX)
+        .then(function(p) { _ncFindings = (p && p.items) || []; })
+        .catch(function() { _ncFindings = _ncFindings || []; if (_ncFindingsLoad === load) _ncFindingsLoad = null; });
+    _ncFindingsLoad = load;
+    return load;
+}
+
 function _renderNonconformities(c: HTMLElement) {
+    // The first opening waits for the findings: a record form opened before
+    // they land would offer none.
+    if (!_ncFindings) {
+        c.innerHTML = '<div class="ct-empty-state">' + esc(t("common.loading")) + '</div>';
+        _loadNcFindings().then(function() { if (_panel === "nonconformities") renderPanel(); });
+        return;
+    }
+    _loadNcFindings();
     ct_nonconformity.renderPanel(c, _ncOptions());
 }
 
 window._requestDerogationDetail = function() {
     var f = _selectedFinding;
     if (!f) return;
-    ct_nonconformity.requestDerogation(_ncOptions(), {
-        subject_type: "finding", subject_id: f.id,
-        subject_label: _findingTitle(f) + (f.target ? " · " + f.target : ""),
-        title: _findingTitle(f)
-    });
+    var request = function() {
+        ct_nonconformity.requestDerogation(_ncOptions(), {
+            subject_type: "finding", subject_id: f!.id,
+            subject_label: _findingTitle(f!) + (f!.target ? " · " + f!.target : ""),
+            title: _findingTitle(f!)
+        });
+    };
+    if (_ncFindings) { _loadNcFindings(); request(); return; }
+    showStatus(t("common.loading"));
+    _loadNcFindings().then(request);
 };
 
 // ── Defender finding enrichment (FEAT-37) ──────────────────────
@@ -4261,13 +4404,16 @@ window._backToHosts = function() {
     // Return to whichever list the user opened the detail from. Domains/
     // ip_ranges are reached from the Surveillance table; hosts from the grid.
     if (_selectedHostReturnPanel) { _panel = _selectedHostReturnPanel; _selectedHostReturnPanel = null; }
-    // Back to a finding: its current triage state (it may have been triaged
-    // from the host's page). The list row carries no screenshot, so the
-    // evidence stays the one the detail fetched.
+    // Back to a finding: it is read again for its current triage state (it
+    // may have been triaged from the host's page), and shown as it was until
+    // the answer lands.
     if (_panel === "findings" && _selectedFinding) {
         var cur = _selectedFinding;
-        var fresh = _findings.find(function(x) { return x.id === cur.id; });
-        if (fresh) _selectedFinding = Object.assign({}, cur, fresh, { evidence: cur.evidence });
+        SurfaceAPI.get("/api/findings/" + cur.id).then(function(full) {
+            if (_selectedFinding !== cur || !full) return;
+            _selectedFinding = full;
+            renderPanel();
+        }).catch(function() {});
     }
     renderPanel();
 };
@@ -4313,10 +4459,11 @@ function _hostFindingsOf(group: SurfaceMonitoredAsset[], total: number): Surface
     return null;
 }
 
-// A finding of the loaded list, or of the host page's, which reaches past it.
+// A finding of the table's page, or of the host page's.
 function _findingById(id: string): SurfaceFinding | null {
     var byId = function(x: SurfaceFinding) { return x.id === id; };
-    return _findings.find(byId) || ((_hostFindings && _hostFindings.list) || []).find(byId) || null;
+    return ((_findingsShown && _findingsShown.items) || []).find(byId)
+        || ((_hostFindings && _hostFindings.list) || []).find(byId) || null;
 }
 
 function _renderHostDetail(c: HTMLElement) {
@@ -4628,13 +4775,13 @@ window._toggleHostBulkAll = function() {};
 
 window._openFindingFromHost = function(id) {
     var f = _findingById(id);
-    if (!f) return;
     // Fetch full evidence (with png_b64) then render inline in host detail
     SurfaceAPI.get("/api/findings/" + id).then(function(full) {
         _hostSelectedFinding = full;
         renderPanel();
-    }).catch(function() {
-        _hostSelectedFinding = f!;
+    }).catch(function(e) {
+        if (!f) { showStatus((e && e.message) || t("common.error"), true); return; }
+        _hostSelectedFinding = f;
         renderPanel();
     });
 };

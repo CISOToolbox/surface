@@ -165,7 +165,26 @@ interface SurfaceTriagePayload {
     notes?: string;
 }
 
-interface SurfaceBulkTriagePayload extends SurfaceTriagePayload { ids: string[]; }
+/** The Findings table's filter, as the server applies it (FEAT-70). */
+interface SurfaceFindingFilter {
+    status: string[]; status_not: string[];
+    severity: string[]; severity_not: string[];
+    scanner: string[]; scanner_not: string[];
+    q: string;
+}
+
+interface SurfaceFindingQuery extends SurfaceFindingFilter {
+    sort: "created_at" | "severity";
+    dir: "asc" | "desc";
+}
+
+interface SurfaceFindingPage { items: SurfaceFinding[]; total: number; }
+
+/** What a bulk action targets: ids, or every finding of a filter with the
+ *  count the user was shown (refused by the server when it changed). */
+interface SurfaceBulkTarget { ids?: string[]; filter?: SurfaceFindingFilter; expected?: number; }
+
+interface SurfaceBulkTriagePayload extends SurfaceTriagePayload, SurfaceBulkTarget {}
 
 interface SurfaceBulkTriageResult { updated: number; measures_created?: number; }
 
@@ -282,7 +301,8 @@ interface SurfaceAPIShape {
     get(url: string): Promise<any>;
     post(url: string, body?: unknown): Promise<any>;
     put(url: string, body?: unknown): Promise<any>;
-    listFindings(filters?: Record<string, string>): Promise<SurfaceFinding[]>;
+    findingsPage(query: SurfaceFindingQuery, offset: number, limit: number): Promise<SurfaceFindingPage>;
+    findingScanners(): Promise<string[]>;
     findingsOfAssets(assetIds: string[], offset: number, limit: number, hideFp: boolean): Promise<SurfaceFinding[]>;
     findingStats(tz: string): Promise<SurfaceFindingStats>;
     findingCounts(): Promise<SurfaceAssetCounts>;
@@ -301,7 +321,7 @@ interface SurfaceAPIShape {
     saveNonconformitySettings(days: number): Promise<unknown>;
     triageFinding(id: string, payload: SurfaceTriagePayload): Promise<SurfaceFinding>;
     bulkTriageFindings(payload: SurfaceBulkTriagePayload): Promise<SurfaceBulkTriageResult>;
-    bulkDeleteFindings(ids: string[]): Promise<{ deleted: number }>;
+    bulkDeleteFindings(target: SurfaceBulkTarget): Promise<{ deleted: number }>;
     quickScan(targetHost: string): Promise<SurfaceScanResult>;
     bulkImport(findings: SurfaceImportFinding[]): Promise<{ inserted: number; skipped?: number }>;
     listMonitored(): Promise<SurfaceMonitoredAsset[]>;
@@ -441,7 +461,9 @@ interface Window {
     _bulkSurfaceFixed?: (scope: string) => void;
     _bulkSurfaceFP?: (scope: string) => void;
     _bulkSurfaceDelete?: (scope: string) => void;
-    _setStatusFilter?: (v: string) => void;
+    _toggleStatus?: (v: string) => void;
+    _setStatusOpen?: () => void;
+    _clearStatusFilter?: () => void;
     _setFindingsSearch?: (v: string) => void;
     _clearFindingsSearch?: () => void;
     _toggleSeverity?: (s: string) => void;
@@ -466,9 +488,14 @@ interface Window {
     // Hosts
     _setHostSearch?: (v: string) => void;
     _hostFindingsPage?: (dir: number) => void;
+    _findingsPageNav?: (dir: number) => void;
+    _sortFindings?: (key: string) => void;
+    _findingsBulkChanged?: (scope: string) => void;
+    _findingsSelectFilter?: () => void;
+    _findingsSelectPage?: () => void;
+    _findingsRetry?: () => void;
     _hostsSetView?: (view: string) => void;
     _toggleHostsInactive?: () => void;
-    _showAllFindings?: () => void;
     _clearHostSearch?: () => void;
     _openHost?: (id: string) => void;
     _backToHosts?: () => void;

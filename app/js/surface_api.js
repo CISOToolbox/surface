@@ -32,7 +32,7 @@
                 var msgs = { 400: t("error.bad_request") || "Invalid request", 403: t("error.forbidden") || "Access denied", 404: t("error.not_found") || "Not found", 500: t("error.server") || "Server error" };
                 detail = msgs[resp.status] || (t("error.generic") || "Error " + resp.status);
             }
-            throw new Error(detail);
+            throw Object.assign(new Error(detail), { status: resp.status });
         }
         return resp.json();
     }
@@ -41,18 +41,19 @@
         get: function (url) { return _fetch(url.replace(/^\/api/, "")); },
         post: function (url, body) { return _fetch(url.replace(/^\/api/, ""), { method: "POST", body: body }); },
         put: function (url, body) { return _fetch(url.replace(/^\/api/, ""), { method: "PUT", body: body }); },
-        listFindings: function (filters) {
-            var qs = "";
-            if (filters) {
-                var parts = [];
-                for (var k in filters)
-                    if (filters[k])
-                        parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(filters[k]));
-                if (parts.length)
-                    qs = "?" + parts.join("&");
-            }
+        // FEAT-70 — a page of the Findings table and the total of its filter;
+        // each filter key repeats once per value.
+        findingsPage: function (query, offset, limit) {
+            var qs = "?with_total=true&limit=" + limit + "&offset=" + offset
+                + "&sort=" + encodeURIComponent(query.sort) + "&dir=" + encodeURIComponent(query.dir);
+            ["status", "status_not", "severity", "severity_not", "scanner", "scanner_not"].forEach(function (k) {
+                query[k].forEach(function (v) { qs += "&" + k + "=" + encodeURIComponent(v); });
+            });
+            if (query.q)
+                qs += "&q=" + encodeURIComponent(query.q);
             return _fetch("/findings" + qs);
         },
+        findingScanners: function () { return _fetch("/findings/scanners"); },
         // FEAT-69 — a page of a host page's findings (the host and its same-IP
         // aliases), most severe first, and the dashboard's figures, both over
         // every finding.
@@ -88,8 +89,8 @@
         bulkTriageFindings: function (payload) {
             return _fetch("/findings/bulk-triage", { method: "POST", body: payload });
         },
-        bulkDeleteFindings: function (ids) {
-            return _fetch("/findings/bulk-delete", { method: "POST", body: { ids: ids } });
+        bulkDeleteFindings: function (target) {
+            return _fetch("/findings/bulk-delete", { method: "POST", body: target });
         },
         quickScan: function (targetHost) {
             return _fetch("/scans/quick", { method: "POST", body: { target_host: targetHost } });

@@ -11,9 +11,10 @@
  * CSP-safe (data-click everywhere).
  *
  * Public API:
- *   ct_bulkbar.attach({scope, label, actions, onClear})
+ *   ct_bulkbar.attach({scope, label, actions, onClear, onChange})
  *     Register the actions to display for a given scope. Safe to call
- *     repeatedly — the latest attach() for a scope wins.
+ *     repeatedly — the latest attach() for a scope wins. onChange is a
+ *     global function name called as fn(scope) after every redraw.
  *   ct_bulkbar.update(scope, count?)
  *     Re-render the bar for scope (defaults to getSelection().size).
  *   ct_bulkbar.getSelection(scope) → Set<key>
@@ -24,6 +25,10 @@
  *   ct_bulkbar.deselect(scope, key)
  *   ct_bulkbar.setSelection(scope, keys)  — replace selection
  *   ct_bulkbar.clear(scope)               — empty selection, hide bar
+ *   ct_bulkbar.extend(scope, n)           — the selection stands for n items,
+ *     more than its keys (every row of a paged table's filter): shown in the
+ *     label and the confirmations until the selection changes
+ *   ct_bulkbar.extent(scope) → number | null — that n, while it holds
  *
  * Action spec:
  *   { id, icon?, label, onClick, variant?, confirm? }
@@ -58,6 +63,8 @@ interface CtBulkbarAttachOpts {
     actions?: CtBulkbarAction[];
     /** Global function name invoked as fn(scope) after the × clear button. */
     onClear?: string | null;
+    /** Global function name invoked as fn(scope) after every redraw. */
+    onChange?: string | null;
 }
 interface CtBulkbarApi {
     attach(opts?: CtBulkbarAttachOpts): void;
@@ -70,6 +77,8 @@ interface CtBulkbarApi {
     deselect(scope: string, key: string): void;
     setSelection(scope: string, keys: string[]): void;
     clear(scope: string): void;
+    extend(scope: string, n: number): void;
+    extent(scope: string): number | null;
 }
 interface Window {
     ct_bulkbar?: CtBulkbarApi;

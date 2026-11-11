@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.auth import get_current_user, require_min_role, require_admin, SURFACE_ROLES
-from src import finding_assets
+from src import finding_assets, finding_filters
 from src.database import get_db
 from src.models import Finding, Measure, User
 from src.rate_limit import check_scan_quota
@@ -44,41 +44,55 @@ def _to_dict(f: Finding, *, include_evidence: bool = True) -> dict:
 
 @router.get("")
 async def list_findings(
-    status: str | None = None,
-    severity: str | None = None,
-    scanner: str | None = None,
+    status: list[str] = Query(default_factory=list),
     status_not: list[str] = Query(default_factory=list),
+    severity: list[str] = Query(default_factory=list),
+    severity_not: list[str] = Query(default_factory=list),
+    scanner: list[str] = Query(default_factory=list),
+    scanner_not: list[str] = Query(default_factory=list),
+    q: str = "",
+    sort: finding_filters.SortKey = "created_at",
+    direction: finding_filters.SortDir = Query("desc", alias="dir"),
     asset_id: list[uuid.UUID] = Query(default_factory=list),
+    with_total: bool = False,
     limit: int = 500,
     offset: int = 0,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """The findings, newest first. With `asset_id` (repeatable: a host and
-    its same-IP aliases), those of these assets only, most severe first.
-    `status_not` (repeatable) leaves out these statuses."""
-    _VALID_STATUSES = {"new", "to_fix", "false_positive", "fixed", "closed_upstream", "derogated"}
-    _VALID_SEVERITIES = {"info", "low", "medium", "high", "critical"}
+    """A page of findings, newest first, filtered as the Findings table does
+    (src/finding_filters.py; the filters repeat). `sort` / `dir` order it
+    for every page. With `asset_id` (repeatable: a host and its same-IP
+    aliases), those of these assets only, most severe first. `with_total`
+    returns `{items, total}`, the total over the whole filter."""
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)
-    q = select(Finding).options(selectinload(Finding.measure))
+    where = finding_filters.conditions(finding_filters.FindingFilter(
+        status=status, status_not=status_not, severity=severity, severity_not=severity_not,
+        scanner=scanner, scanner_not=scanner_not, q=q))
     if asset_id:
         assets = await finding_assets.assets_by_ids(db, asset_id)
-        q = q.where(finding_assets.assets_condition(assets)).order_by(finding_assets.SEVERITY_RANK)
-    q = q.order_by(Finding.created_at.desc(), Finding.id)
-    if status and status in _VALID_STATUSES:
-        q = q.where(Finding.status == status)
-    excluded = [s for s in status_not if s in _VALID_STATUSES]
-    if excluded:
-        q = q.where(Finding.status.notin_(excluded))
-    if severity and severity in _VALID_SEVERITIES:
-        q = q.where(Finding.severity == severity)
-    if scanner:
-        q = q.where(Finding.scanner == scanner)
-    q = q.limit(limit).offset(offset)
-    result = await db.execute(q)
-    findings = result.scalars().all()
-    return [_to_dict(f, include_evidence=False) for f in findings]
+        where.append(finding_assets.assets_condition(assets))
+        order = [finding_assets.SEVERITY_RANK, Finding.created_at.desc(), Finding.id]
+    else:
+        order = finding_filters.order_by(sort, direction)
+    q_page = (select(Finding).options(selectinload(Finding.measure))
+              .where(*where).order_by(*order).limit(limit).offset(offset))
+    items = [_to_dict(f, include_evidence=False) for f in (await db.execute(q_page)).scalars().all()]
+    if not with_total:
+        return items
+    total = (await db.execute(select(func.count()).select_from(Finding).where(*where))).scalar_one()
+    return {"items": items, "total": total}
+
+
+@router.get("/scanners")
+async def list_finding_scanners(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The scanners that have findings, for the table's pills."""
+    rows = await db.execute(select(Finding.scanner).where(Finding.scanner != "").distinct().order_by(Finding.scanner))
+    return [s for (s,) in rows.all()]
 
 
 @router.get("/stats")
@@ -291,9 +305,67 @@ async def triage_finding(
 
 from pydantic import BaseModel, Field as _PField
 
+# A measure covers at most this many findings (its finding_ids).
+_MEASURE_MAX_FINDINGS = 10000
 
-class BulkTriageRequest(BaseModel):
-    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=10000)
+
+class _BulkTarget(BaseModel):
+    """The findings a bulk action targets: a list of ids, or every finding
+    of the table's filter, with the count the user was shown."""
+    ids: list[uuid.UUID] = _PField(default_factory=list, max_length=10000)
+    filter: finding_filters.FindingFilter | None = None
+    expected: int | None = None
+
+
+_CHUNK = 5000
+
+
+def _chunks(ids: list[uuid.UUID]):
+    # Tens of thousands of ids do not fit in one IN list (bind parameters).
+    for i in range(0, len(ids), _CHUNK):
+        yield ids[i:i + _CHUNK]
+
+
+async def _target_ids(db: AsyncSession, body: _BulkTarget) -> list[uuid.UUID]:
+    """The ids of the targeted findings. A filter is resolved once, and the
+    action then runs on those ids: a finding arriving meanwhile is left out."""
+    if body.filter is None:
+        if not body.ids:
+            raise HTTPException(status_code=400, detail="No finding selected")
+        return list(body.ids)
+    if body.ids or body.expected is None:
+        raise HTTPException(status_code=400, detail="A filter needs the expected count, and no ids")
+    ids = list((await db.execute(
+        select(Finding.id).where(*finding_filters.conditions(body.filter))
+    )).scalars().all())
+    # The filter is evaluated again here: refuse when it no longer matches
+    # what the user confirmed.
+    if len(ids) != body.expected:
+        raise HTTPException(status_code=409, detail=(
+            f"The filter now matches {len(ids)} findings, not {body.expected}: refresh and try again"))
+    return ids
+
+
+def _filter_details(body: _BulkTarget) -> dict:
+    """For the audit log: the filter a bulk action ran on, if it ran on one."""
+    return {} if body.filter is None else {"filter": body.filter.model_dump(exclude_defaults=True)}
+
+
+async def _revoke_derogations(db: AsyncSession, ids: list[uuid.UUID], reason: str, actor: str) -> None:
+    """Revoke the live derogations of these findings: looked up once, then
+    revoked one subject at a time (few findings carry one)."""
+    from src.models import Derogation
+    from src.nonconformity_common import revoke_for_subject
+    wanted = {str(i) for i in ids}
+    live = (await db.execute(select(Derogation.subject_id).where(
+        Derogation.subject_type == "finding",
+        Derogation.status.in_(["approved", "pending_approval"])).distinct())).scalars().all()
+    for sid in live:
+        if sid in wanted:
+            await revoke_for_subject(db, Derogation, "finding", sid, reason, actor=actor)
+
+
+class BulkTriageRequest(_BulkTarget):
     status: str
     notes: str | None = None
     measure_title: str | None = None
@@ -327,14 +399,19 @@ async def bulk_triage(
         raise HTTPException(status_code=400, detail="Une justification est obligatoire pour declarer un faux positif")
     if body.status == "to_fix" and not (body.measure_title or "").strip():
         raise HTTPException(status_code=400, detail="Le nom de la mesure est obligatoire")
+    ids = await _target_ids(db, body)
+    if body.status == "to_fix" and len(ids) > _MEASURE_MAX_FINDINGS:
+        raise HTTPException(status_code=400, detail=(
+            f"A measure covers at most {_MEASURE_MAX_FINDINGS} findings, {len(ids)} selected"))
 
-    result = await db.execute(
-        select(Finding).options(selectinload(Finding.measure)).where(Finding.id.in_(body.ids))
-    )
-    findings = result.scalars().all()
+    findings = []
+    for chunk in _chunks(ids):
+        findings += (await db.execute(
+            select(Finding).options(selectinload(Finding.measure)).where(Finding.id.in_(chunk))
+        )).scalars().all()
     if findings:
         await log_action(db, user, request, "finding.bulk_triage",
-                         target=f"{len(findings)} findings", details={"status": body.status})
+                         target=f"{len(findings)} findings", details={"status": body.status, **_filter_details(body)})
     if not findings:
         raise HTTPException(status_code=404, detail="Aucun finding trouve pour les ids fournis")
 
@@ -350,12 +427,9 @@ async def bulk_triage(
     # while being worked on.
     derogated = [f for f in findings if f.status == "derogated" or body.status not in ("new", "to_fix")]
     if derogated:
-        from src.models import Derogation
-        from src.nonconformity_common import revoke_for_subject
         actor = (user.name if user else None) or (user.email if user else None) or "system"
+        await _revoke_derogations(db, [f.id for f in derogated], f"finding triaged to '{body.status}'", actor)
         for f in derogated:
-            await revoke_for_subject(db, Derogation, "finding", str(f.id),
-                                     f"finding triaged to '{body.status}'", actor=actor)
             f.derogation_id = None
     for f in findings:
         f.status = body.status
@@ -409,12 +483,13 @@ async def bulk_triage(
         "updated": len(updated),
         "status": body.status,
         "measures_created": measures_created,
-        "items": updated,
+        # The caller of a filter named no finding: it gets the count alone.
+        "items": updated if body.filter is None else [],
     }
 
 
-class BulkDeleteRequest(BaseModel):
-    ids: list[uuid.UUID] = _PField(..., min_length=1, max_length=10000)
+class BulkDeleteRequest(_BulkTarget):
+    pass
 
 
 @router.post("/bulk-delete")
@@ -427,22 +502,24 @@ async def bulk_delete(
     """Delete N findings at once (and their linked measures via cascade)."""
     require_min_role(user, "editor", SURFACE_ROLES)
     check_scan_quota(str(user.id) if user else "anonymous")
-    await log_action(db, user, request, "finding.bulk_delete", target=f"{len(body.ids)} findings")
-    # Collect measure IDs before deleting so we can notify Pilot
-    measure_rows = (await db.execute(
-        select(Measure.id).where(Measure.finding_id.in_(body.ids))
-    )).scalars().all()
-    from src.models import Derogation
-    from src.nonconformity_common import revoke_for_subject
+    ids = await _target_ids(db, body)
+    await log_action(db, user, request, "finding.bulk_delete", target=f"{len(ids)} findings",
+                     details=_filter_details(body))
     actor = (user.name if user else None) or (user.email if user else "system")
-    for fid in body.ids:
-        await revoke_for_subject(db, Derogation, "finding", str(fid), "finding deleted", actor=actor)
-    await db.execute(sa_delete(Measure).where(Measure.finding_id.in_(body.ids)))
-    result = await db.execute(sa_delete(Finding).where(Finding.id.in_(body.ids)))
+    await _revoke_derogations(db, ids, "finding deleted", actor)
+    measure_rows: list[str] = []
+    deleted = 0
+    for chunk in _chunks(ids):
+        # Collect measure IDs before deleting so we can notify Pilot
+        measure_rows += (await db.execute(
+            select(Measure.id).where(Measure.finding_id.in_(chunk))
+        )).scalars().all()
+        await db.execute(sa_delete(Measure).where(Measure.finding_id.in_(chunk)))
+        deleted += (await db.execute(sa_delete(Finding).where(Finding.id.in_(chunk)))).rowcount
     await db.commit()
     # Notify Pilot of each deleted measure
     if measure_rows:
         from src.pilot_notify import notify_pilot_measure_deleted
         for mid in measure_rows:
             asyncio.ensure_future(notify_pilot_measure_deleted(mid))
-    return {"deleted": result.rowcount}
+    return {"deleted": deleted}

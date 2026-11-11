@@ -319,8 +319,9 @@ async def test_a_host_page_lists_its_findings_most_severe_first_by_page(db):
     await db.commit()
 
     async def page(offset, status_not=()):
-        rows = await list_findings(status=None, severity=None, scanner=None, status_not=list(status_not),
-                                   asset_id=[host.id], limit=2, offset=offset, user=None, db=db)
+        rows = await list_findings(status=[], status_not=list(status_not), severity=[], severity_not=[],
+                                   scanner=[], scanner_not=[], q="", sort="created_at", direction="desc",
+                                   asset_id=[host.id], with_total=False, limit=2, offset=offset, user=None, db=db)
         return [(r["target"], r["severity"]) for r in rows]
 
     assert await page(0) == [("h.example:22", "critical"), ("h.example:443", "critical")]

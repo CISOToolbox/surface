@@ -11,9 +11,10 @@
  * CSP-safe (data-click everywhere).
  *
  * Public API:
- *   ct_bulkbar.attach({scope, label, actions, onClear})
+ *   ct_bulkbar.attach({scope, label, actions, onClear, onChange})
  *     Register the actions to display for a given scope. Safe to call
- *     repeatedly — the latest attach() for a scope wins.
+ *     repeatedly — the latest attach() for a scope wins. onChange is a
+ *     global function name called as fn(scope) after every redraw.
  *   ct_bulkbar.update(scope, count?)
  *     Re-render the bar for scope (defaults to getSelection().size).
  *   ct_bulkbar.getSelection(scope) → Set<key>
@@ -24,6 +25,10 @@
  *   ct_bulkbar.deselect(scope, key)
  *   ct_bulkbar.setSelection(scope, keys)  — replace selection
  *   ct_bulkbar.clear(scope)               — empty selection, hide bar
+ *   ct_bulkbar.extend(scope, n)           — the selection stands for n items,
+ *     more than its keys (every row of a paged table's filter): shown in the
+ *     label and the confirmations until the selection changes
+ *   ct_bulkbar.extent(scope) → number | null — that n, while it holds
  *
  * Action spec:
  *   { id, icon?, label, onClick, variant?, confirm? }
@@ -39,8 +44,9 @@
  */
 (function () {
     "use strict";
-    var _registry = {}; // scope → {label, actions, onClear}
+    var _registry = {}; // scope → {label, actions, onClear, onChange}
     var _selections = {}; // scope → Set<key>
+    var _extents = {}; // scope → n the selection stands for
     var _activeScope = null;
     var _barEl = null;
     function _set(scope) {
@@ -67,15 +73,18 @@
         _registry[opts.scope] = {
             label: opts.label || "{n} sélectionné(s)",
             actions: Array.isArray(opts.actions) ? opts.actions : [],
-            onClear: opts.onClear || null
+            onClear: opts.onClear || null,
+            onChange: opts.onChange || null
         };
     }
     function getSelection(scope) { return _set(scope); }
     function count(scope) { return _set(scope).size; }
     function isSelected(scope, key) { return _set(scope).has(key); }
-    function select(scope, key) { _set(scope).add(key); update(scope); }
-    function deselect(scope, key) { _set(scope)["delete"](key); update(scope); }
+    // Any change of the selection ends what it stood for.
+    function select(scope, key) { delete _extents[scope]; _set(scope).add(key); update(scope); }
+    function deselect(scope, key) { delete _extents[scope]; _set(scope)["delete"](key); update(scope); }
     function toggle(scope, key) {
+        delete _extents[scope];
         var s = _set(scope);
         if (s.has(key))
             s["delete"](key);
@@ -84,10 +93,21 @@
         update(scope);
     }
     function setSelection(scope, keys) {
+        delete _extents[scope];
         _selections[scope] = new Set(Array.isArray(keys) ? keys : []);
         update(scope);
     }
+    function extend(scope, n) { _extents[scope] = n; update(scope); }
+    function extent(scope) { return _extents[scope] != null ? _extents[scope] : null; }
+    function _count(scope) { return _extents[scope] != null ? _extents[scope] : _set(scope).size; }
+    function _changed(scope) {
+        var reg = _registry[scope];
+        var fn = reg && reg.onChange ? window[reg.onChange] : null;
+        if (typeof fn === "function")
+            fn(scope);
+    }
     function clear(scope) {
+        delete _extents[scope];
         _selections[scope] = new Set();
         if (_activeScope === scope && _barEl) {
             _barEl.hidden = true;
@@ -95,6 +115,7 @@
             _activeScope = null;
         }
         _syncDOM(scope);
+        _changed(scope);
     }
     // Sync any DOM checkboxes bound to this scope with the current
     // selection state (after external add/remove / clear).
@@ -122,7 +143,7 @@
     }
     function update(scope, countOverride) {
         var reg = _registry[scope];
-        var n = countOverride != null ? countOverride : _set(scope).size;
+        var n = countOverride != null ? countOverride : _count(scope);
         var bar = _ensureBar();
         if (!n || !reg) {
             if (_activeScope === scope || n === 0) {
@@ -131,6 +152,7 @@
                 _activeScope = null;
             }
             _syncDOM(scope);
+            _changed(scope);
             return;
         }
         _activeScope = scope;
@@ -162,6 +184,7 @@
         bar.innerHTML = h;
         bar.hidden = false;
         _syncDOM(scope);
+        _changed(scope);
     }
     // Dispatchers (CSP-safe) ──────────────────────────────────────
     window._ctBulkbarDispatch = function (scope, actionId) {
@@ -177,7 +200,7 @@
         }
         if (!action || !action.onClick)
             return;
-        var n = _set(scope).size;
+        var n = _count(scope);
         function run() {
             var fn = window[action.onClick];
             if (typeof fn === "function")
@@ -215,6 +238,8 @@
         select: select,
         deselect: deselect,
         setSelection: setSelection,
-        clear: clear
+        clear: clear,
+        extend: extend,
+        extent: extent
     };
 })();
