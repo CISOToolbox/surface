@@ -281,15 +281,15 @@ def _render_digest_html(data: dict[str, Any]) -> str:
     return f"""<!doctype html>
 <html><body style="font-family:Segoe UI,sans-serif;background:#f9fafb;margin:0;padding:24px">
 <div style="max-width:720px;margin:0 auto;background:white;border:1px solid #e5e7eb;border-radius:12px;padding:24px">
-    <h1 style="margin:0 0 4px;color:#1e40af">Surface — digest hebdomadaire</h1>
-    <p style="color:#6b7280;margin:0 0 24px">Synthèse générée le {generated_at}</p>
+    <h1 style="margin:0 0 4px;color:#1e40af">Surface — weekly digest</h1>
+    <p style="color:#6b7280;margin:0 0 24px">Generated on {generated_at}</p>
 
-    <h2 style="font-size:1.1em;margin:0 0 8px">Résumé</h2>
+    <h2 style="font-size:1.1em;margin:0 0 8px">Summary</h2>
     <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <tr style="background:#f9fafb">
-            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{active}</strong> findings actifs</td>
-            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{new7}</strong> nouveaux (7 j)</td>
-            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{hosts}</strong> hosts surveillés</td>
+            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{active}</strong> active findings</td>
+            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{new7}</strong> new (7 days)</td>
+            <td style="padding:8px;border:1px solid #e5e7eb"><strong>{hosts}</strong> monitored hosts</td>
         </tr>
         <tr>
             <td style="padding:8px;border:1px solid #e5e7eb;color:#b91c1c"><strong>{crit}</strong> critical</td>
@@ -298,14 +298,14 @@ def _render_digest_html(data: dict[str, Any]) -> str:
         </tr>
     </table>
 
-    <h2 style="font-size:1.1em;margin:16px 0 8px">Top 10 findings à traiter</h2>
+    <h2 style="font-size:1.1em;margin:16px 0 8px">Top 10 findings to address</h2>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">{rows}</table>
 
-    <h2 style="font-size:1.1em;margin:16px 0 8px">Top 10 hosts exposés</h2>
+    <h2 style="font-size:1.1em;margin:16px 0 8px">Top 10 exposed hosts</h2>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb">{host_rows}</table>
 
-    <p style="color:#9ca3af;font-size:0.85em;margin-top:24px">Scans 7 j : {scans_7d} lancés, {success}% succès. Mesures : {m_done}/{m_total} terminées.</p>
-    <p style="color:#9ca3af;font-size:0.85em">Ce rapport est généré automatiquement par Surface (CISO Toolbox).</p>
+    <p style="color:#9ca3af;font-size:0.85em;margin-top:24px">Scans over 7 days: {scans_7d} launched, {success}% successful. Remediations: {m_done}/{m_total} done.</p>
+    <p style="color:#9ca3af;font-size:0.85em">This report is generated automatically by Surface (CISO Toolbox).</p>
 </div>
 </body></html>"""
 
@@ -333,7 +333,7 @@ def _build_digest_message(cfg: dict[str, str], data: dict[str, Any]) -> tuple[MI
     sender = _validate_email(cfg["from_addr"])
     recipients = _parse_recipients(cfg.get("recipients", ""))
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Surface — digest hebdomadaire"
+    msg["Subject"] = "Surface — weekly digest"
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(_render_digest_html(data), "html", "utf-8"))
