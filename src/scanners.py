@@ -431,7 +431,7 @@ def _run_scanners_inner(kind: str, value: str, enabled: list[str],
             logger.exception("Scanner %s crashed for %s/%s", name, kind, value)
             findings.append({
                 "scanner": name, "type": "exception", "severity": "info",
-                "title": f"Erreur scanner {name} pour {value}",
+                "title": f"Scanner {name} failed on {value}",
                 "description": str(e), "target": value, "evidence": {},
             })
         # The HTTP scanners swallow request errors: a proxy that failed them

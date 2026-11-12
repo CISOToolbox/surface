@@ -75,7 +75,7 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
         # Measure is "terminée" OR no measure attached → reopen
         existing.status = "new"
         existing.title = fd.get("title", existing.title)
-        existing.description = (fd.get("description", "") or "") + "\n\n[Reouvert : detecte a nouveau apres remediation]"
+        existing.description = (fd.get("description", "") or "") + "\n\n[Reopened: detected again after remediation]"
         existing.evidence = fd.get("evidence", {}) or {}
         existing.severity = fd.get("severity", existing.severity)
         existing.triaged_at = None
@@ -90,9 +90,9 @@ async def insert_or_dedupe(db: AsyncSession, fd: dict[str, Any]) -> str:
     # "fixed" one. This status is NOT frozen, unlike false_positive: nobody
     # decided to ignore it, the source merely went quiet.
     if existing.status in ("fixed", "closed_upstream"):
-        _motif = ("[Reouvert : de nouveau remonte par la source amont]"
+        _motif = ("[Reopened: reported again by the upstream source]"
                   if existing.status == "closed_upstream"
-                  else "[Reouvert : detecte a nouveau]")
+                  else "[Reopened: detected again]")
         existing.status = "new"
         existing.title = fd.get("title", existing.title)
         existing.description = (fd.get("description", "") or "") + "\n\n" + _motif

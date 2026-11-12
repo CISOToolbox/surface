@@ -101,7 +101,7 @@ async def _run_nmap_job(job_id: uuid.UUID) -> None:
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-                raise RuntimeError(f"Scan timeout apres {timeout}s")
+                raise RuntimeError(f"Scan timed out after {timeout}s")
 
             if proc.returncode not in (0, None):
                 err_text = (stderr.decode(errors="replace") if stderr else "")[:1000]

@@ -155,9 +155,9 @@ def _cve_finding(v: dict[str, Any], machine_name: str, machine_ip: str,
         # or no longer carries the connector in its scanner list.
         "host_ref": v.get("machineId", ""),
         "target": target,
-        "title": f"{v.get('cveId','CVE ?')} - {product or 'produit inconnu'}"
-                 + (f" sur {machine_name}" if machine_name else ""),
-        "description": (f"Vulnérabilité remontée par Microsoft Defender sur "
+        "title": f"{v.get('cveId','CVE ?')} - {product or 'unknown product'}"
+                 + (f" on {machine_name}" if machine_name else ""),
+        "description": (f"Vulnerability reported by Microsoft Defender on "
                         f"{machine_name or v.get('machineId','')}."),
         "severity": _SEVERITY.get(str(v.get("severity", "")).lower(), "medium"),
         "evidence": {
@@ -197,9 +197,9 @@ def _reco_finding(r: dict[str, Any]) -> dict[str, Any]:
         "scanner": "defender",
         "type": "defender_recommendation",
         "target": str(r.get("id", "")).lower(),
-        "title": r.get("recommendationName", "Recommandation Defender"),
-        "description": (f"{exposed} machine(s) exposée(s). "
-                        f"Catégorie : {r.get('recommendationCategory', '?')}."),
+        "title": r.get("recommendationName", "Defender recommendation"),
+        "description": (f"{exposed} exposed machine(s). "
+                        f"Category: {r.get('recommendationCategory', '?')}."),
         "severity": sev,
         "evidence": {
             "product": r.get("productName", ""),

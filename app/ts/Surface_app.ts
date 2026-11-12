@@ -2047,6 +2047,13 @@ function _timelineDaily(): SurfaceTimelineBucket[] {
     });
 }
 
+// A host enrolled by a scan carries the note the backend wrote then. Hosts
+// enrolled before that note was written in English keep the earlier one.
+function _isAutoDiscovered(a: SurfaceMonitoredAsset): boolean {
+    var notes = a.notes || "";
+    return notes.indexOf("Auto-discovered") === 0 || notes.indexOf("Auto-decouvert") === 0;
+}
+
 function _surfaceInventory() {
     var byKind: Record<string, number> = { domain: 0, host: 0, ip_range: 0, file_share: 0 };
     var hostsSource = { auto: 0, manual: 0 };
@@ -2055,7 +2062,7 @@ function _surfaceInventory() {
     _monitored.forEach(function(a) {
         if (byKind[a.kind] != null) byKind[a.kind]++;
         if (a.kind === "host") {
-            var auto = (a.notes || "").indexOf("Auto-decouvert") === 0;
+            var auto = _isAutoDiscovered(a);
             if (auto) hostsSource.auto++;
             else hostsSource.manual++;
             // Auto-discovered host creation date unknown in state; fall back to created_at field if present
@@ -4259,7 +4266,7 @@ function _refreshHostCards() {
         // above — reflects everything observable at this IP without double
         // counting a finding that matches several same-IP aliases.
         var counts = _entryCounts[a.id]!;
-        var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
+        var autoDiscovered = _isAutoDiscovered(a);
         var last = a.last_scan_at ? _fmtDate(a.last_scan_at) : t("monitored.last.never");
         var score = _riskScoreFor(a, counts);
         var tier = _riskTier(score);
@@ -4475,7 +4482,7 @@ function _renderHostDetail(c: HTMLElement) {
     // its same-IP aliases (empty for domains/ip_ranges), so card and detail agree.
     var detailGroup = _assetGroup(a);
     var counts = _countFindingsForAssets(detailGroup);
-    var autoDiscovered = (a.notes || "").indexOf("Auto-decouvert") === 0;
+    var autoDiscovered = _isAutoDiscovered(a);
     var last = a.last_scan_at ? _fmtDate(a.last_scan_at, "long") : t("monitored.last.never");
 
     var score = _riskScoreFor(a, counts);

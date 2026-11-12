@@ -543,8 +543,8 @@ async def _run_manual_scan(
                 existing_values.add(dv)
                 db.add(MonitoredAsset(
                     kind="host", value=dv,
-                    label=f"Decouvert via {asset.value}",
-                    notes=f"Auto-decouvert lors du scan manuel de {asset.value} le {datetime.now(timezone.utc).isoformat()[:19]}",
+                    label=f"Discovered via {asset.value}",
+                    notes=f"Auto-discovered during the manual scan of {asset.value} on {datetime.now(timezone.utc).isoformat()[:19]}",
                     enabled=True,
                     scan_frequency_hours=asset.scan_frequency_hours or 24,
                     enabled_scanners=inherited_scanners,

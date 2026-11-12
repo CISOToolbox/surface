@@ -135,11 +135,11 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
                     "scanner": "port_scan",
                     "type": "open_port",
                     "severity": sev,
-                    "title": f"Port {port}/{service} ouvert sur {host}",
-                    "description": f"Le service {service} est joignable sur {host}:{port}. " +
-                                   ("Ce protocole est obsolete ou tres expose, a fermer immediatement." if sev == "critical" else
-                                    "Verifier que ce service est intentionnellement expose et durci." if sev == "high" else
-                                    "Service standard expose, verifier la configuration."),
+                    "title": f"Port {port}/{service} open on {host}",
+                    "description": f"The {service} service is reachable on {host}:{port}. " +
+                                   ("This protocol is obsolete or highly exposed: close it immediately." if sev == "critical" else
+                                    "Check that this service is exposed on purpose and hardened." if sev == "high" else
+                                    "Standard service exposed: check its configuration."),
                     "target": f"{host}:{port}",
                     "evidence": {"host": host, "port": port, "service": service},
                 })
@@ -148,15 +148,15 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
     # full list of open ports (even info ones) in evidence.
     summary_sev = "info"
     if not open_ports:
-        summary_msg = "Aucun port commun ouvert. L'host est peut-etre derriere un firewall, en down, ou repond uniquement sur des ports non standards."
+        summary_msg = "No common port open. The host may be behind a firewall, down, or answering on non-standard ports only."
     else:
         port_list = ", ".join(f"{p}/{s}" for p, s, _ in open_ports)
-        summary_msg = f"{len(open_ports)} port(s) ouvert(s) detecte(s) : {port_list}."
+        summary_msg = f"{len(open_ports)} open port(s) detected: {port_list}."
     findings.append({
         "scanner": "port_scan",
         "type": "scan_summary",
         "severity": summary_sev,
-        "title": f"Resume du scan sur {host}",
+        "title": f"Scan summary for {host}",
         "description": summary_msg,
         "target": host,
         "evidence": {"host": host, "ports_tested": len(COMMON_PORTS), "open_ports": [{"port": p, "service": s, "severity": sev} for p, s, sev in open_ports]},
@@ -175,8 +175,8 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
                         "scanner": "tls",
                         "type": "tls_invalid",
                         "severity": "high",
-                        "title": f"Certificat TLS invalide sur {host}:443",
-                        "description": "Le certificat TLS ne valide pas (expire, nom invalide, autorite inconnue ou auto-signe). Voir l'evidence pour les details du certificat.",
+                        "title": f"Invalid TLS certificate on {host}:443",
+                        "description": "The TLS certificate does not validate (expired, wrong name, unknown authority or self-signed). See the evidence for the certificate details.",
                         "target": f"{host}:443",
                         "evidence": cert_raw,
                     })
@@ -185,8 +185,8 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
                         "scanner": "tls",
                         "type": "tls_unreachable",
                         "severity": "medium",
-                        "title": f"Handshake TLS impossible sur {host}:443",
-                        "description": "Le port 443 est ouvert mais le handshake TLS echoue. Configuration TLS cassee ?",
+                        "title": f"TLS handshake failed on {host}:443",
+                        "description": "Port 443 is open but the TLS handshake fails: the TLS configuration may be broken.",
                         "target": f"{host}:443",
                         "evidence": {"host": host, "port": 443},
                     })
@@ -211,8 +211,10 @@ def _quick_scan_sync(host: str) -> list[dict[str, Any]]:
                         "scanner": "tls",
                         "type": "tls_expiring",
                         "severity": sev,
-                        "title": f"Certificat TLS de {host} expire dans {days_left} jour(s)",
-                        "description": f"Le certificat de {host} expire le {cert['notAfter']}. Renouveler avant cette date.",
+                        "title": (f"TLS certificate of {host} expired {-days_left} day(s) ago" if days_left < 0
+                                  else f"TLS certificate of {host} expires in {days_left} day(s)"),
+                        "description": (f"The certificate of {host} expired on {cert['notAfter']}. Renew it." if days_left < 0
+                                        else f"The certificate of {host} expires on {cert['notAfter']}. Renew it before that date."),
                         "target": f"{host}:443",
                         "evidence": {"notAfter": cert["notAfter"], "subject": cert.get("subject"), "issuer": cert.get("issuer")},
                     })

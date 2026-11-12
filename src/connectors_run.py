@@ -61,6 +61,10 @@ logger = logging.getLogger("surface-backend")
 # expiry (not the feed going quiet) is what brings the finding back to work.
 FROZEN_STATUSES = ("false_positive", "fixed", "derogated")
 
+# Why the findings of a host stop: the host was disabled in Surface, not
+# excepted upstream.
+HOST_DISABLED = "host disabled in Surface"
+
 # One lock per connector, shared by the scheduler pass and the manual-run
 # route. Single-process (uvicorn) by construction, like the scheduler itself.
 _LOCKS: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -211,14 +215,14 @@ async def _reconcile(db, connector: str, seen_keys: set[str],
             continue                      # already closed, do not rewrite
         f.status = "closed_upstream"
         motif = reasons.get(f.dedup_key)
-        if motif == "hôte désactivé dans Surface":
-            note = "[Fermé automatiquement : " + motif + "]"
+        if motif == HOST_DISABLED:
+            note = "[Closed automatically: " + motif + "]"
         elif motif:
-            note = ("[Fermé automatiquement : exception posée côté source amont — "
+            note = ("[Closed automatically: exception set at the upstream source — "
                     + motif + "]")
         else:
-            note = ("[Fermé automatiquement : la source amont ne le remonte plus "
-                    "— corrigé, ou écarté de son côté.]")
+            note = ("[Closed automatically: the upstream source no longer reports it "
+                    "— fixed, or dismissed on its side.]")
         f.triage_notes = ((f.triage_notes or "") + "\n" + note).strip()
         if motif:
             ev = dict(f.evidence or {})
@@ -250,7 +254,7 @@ async def run_connector(db, name: str, meta: dict[str, Any],
         # Incomplete import: keep what was seen, but CLOSE NOTHING. This is
         # guard #1, and the only thing standing between a network blip and a
         # mass closure.
-        report["error"] = result.get("error") or "import incomplet"
+        report["error"] = result.get("error") or "incomplete import"
         logger.warning("Connector '%s' incomplete, skipping reconciliation: %s",
                        name, report["error"])
 
@@ -291,7 +295,7 @@ async def run_connector(db, name: str, meta: dict[str, Any],
             if str(c.get("host_ref", "") or "") in silenced_machines:
                 key = compute_dedup_key(name, c.get("type", ""),
                                         c.get("target", "") or c.get("title", ""))
-                silence_reasons[key] = "hôte désactivé dans Surface"
+                silence_reasons[key] = HOST_DISABLED
                 continue
             kept.append(c)
         report["silenced"] = len(findings) - len(kept)

@@ -307,7 +307,7 @@ async def test_a_disabled_host_stops_reporting_and_its_findings_close(db):
     assert report["closed"] == 1
     f = (await db.execute(select(Finding))).scalar_one()
     assert f.status == "closed_upstream"
-    assert "hôte désactivé dans Surface" in (f.triage_notes or "")
+    assert "host disabled in Surface" in (f.triage_notes or "")
 
 
 @pytest.mark.asyncio
