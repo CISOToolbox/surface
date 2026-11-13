@@ -71,7 +71,7 @@
         if (!opts.scope)
             return;
         _registry[opts.scope] = {
-            label: opts.label || "{n} sélectionné(s)",
+            label: opts.label || t("ct.bulk.selected"),
             actions: Array.isArray(opts.actions) ? opts.actions : [],
             onClear: opts.onClear || null,
             onChange: opts.onChange || null

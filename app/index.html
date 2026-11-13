@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,38 +15,38 @@
     <button class="btn-hamburger" data-click="_toggleSidebarMobile">&#9776;</button>
     <span class="ct-modulepicker" role="img" aria-label="Surface"><span data-i18n="module.surface">Surface</span></span>
     <span class="ct-appbar-sep"></span>
-    <nav class="ct-appbar-context" aria-label="Contexte"><span class="ct-muted" id="header-subtitle"></span></nav>
-<!-- Menu Fichier désactivé : fonctions locales (ouvrir/enregistrer/imports) pas encore branchées en mode suite — réactiver en décommentant. -->
+    <nav class="ct-appbar-context" aria-label="Context" data-i18n-aria-label="chrome.context"><span class="ct-muted" id="header-subtitle"></span></nav>
+<!-- File menu disabled: local functions (open/save/imports) not wired up yet in suite mode — re-enable by uncommenting. -->
 <!--     <div class="toolbar-menu">
-        <button class="ct-btn" data-size="sm" data-click="toggleMenu"><span data-i18n="menu_file">Fichier</span></button>
+        <button class="ct-btn" data-size="sm" data-click="toggleMenu"><span data-i18n="menu_file">File</span></button>
         <div class="toolbar-dropdown" id="io-menu">
-            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["importHosts"]' data-i18n="menu.import_hosts">Importer hôtes</div>
-            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["exportReport"]' data-i18n="menu.export_report">Exporter rapport</div>
+            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["importHosts"]' data-i18n="menu.import_hosts">Import hosts</div>
+            <div class="toolbar-dropdown-item" data-click="_menuAction" data-args='["exportReport"]' data-i18n="menu.export_report">Export report</div>
         </div>
     </div> -->
     <span class="ct-spacer"></span>
     <span class="ct-appbar-saved" id="status-msg"></span>
     <div class="ct-appbar-actions">
-        <button class="ct-iconaction" data-click="ct_toggleLang" data-icon="globe" aria-label="Langue" title="Langue FR / EN"></button>
-        <button class="ct-iconaction" data-click="ct_toggleTheme" data-icon="moon" aria-label="Thème" title="Thème clair / sombre"></button>
+        <button class="ct-iconaction" data-click="ct_toggleLang" data-icon="globe" aria-label="Language" data-i18n-aria-label="chrome.lang" title="Language FR / EN" data-i18n-title="chrome.lang_toggle"></button>
+        <button class="ct-iconaction" data-click="ct_toggleTheme" data-icon="moon" aria-label="Theme" data-i18n-aria-label="chrome.theme" title="Light / dark theme" data-i18n-title="chrome.theme_toggle"></button>
         <span class="ct-toolbar-right" id="toolbar-right"></span>
     </div>
 </header>
 
 <div class="ct-body">
 
-<nav class="ct-rail" id="sidebar" aria-label="Navigation du module">
+<nav class="ct-rail" id="sidebar" aria-label="Module navigation" data-i18n-aria-label="chrome.nav">
   <div class="ct-rail-scroll">
     <div class="ct-rail-section">
       <button class="ct-rail-group" aria-expanded="true" data-click="ct_toggleRailGroup" data-pass-el>
         <span class="ct-icon-btn-slot" data-icon="chevron-right"></span><span>SURFACE</span>
       </button>
-      <button class="ct-rail-item" aria-current="page" data-click="selectPanel" data-args='["dashboard"]'><span class="ct-rail-item-label" data-i18n="nav.dashboard">Tableau de bord</span></button>
-      <button class="ct-rail-item" data-click="selectPanel" data-args='["monitored"]'><span class="ct-rail-item-label" data-i18n="nav.monitored">Surveillance</span></button>
+      <button class="ct-rail-item" aria-current="page" data-click="selectPanel" data-args='["dashboard"]'><span class="ct-rail-item-label" data-i18n="nav.dashboard">Dashboard</span></button>
+      <button class="ct-rail-item" data-click="selectPanel" data-args='["monitored"]'><span class="ct-rail-item-label" data-i18n="nav.monitored">Monitoring</span></button>
       <button class="ct-rail-item" data-click="selectPanel" data-args='["hosts"]'><span class="ct-rail-item-label" data-i18n="nav.hosts">Hosts</span></button>
       <button class="ct-rail-item" data-click="selectPanel" data-args='["jobs"]'><span class="ct-rail-item-label" data-i18n="nav.jobs">Scans</span></button>
       <button class="ct-rail-item" data-click="selectPanel" data-args='["findings"]'><span class="ct-rail-item-label" data-i18n="nav.findings">Findings</span></button>
-      <button class="ct-rail-item" data-click="selectPanel" data-args='["measures"]'><span class="ct-rail-item-label" data-i18n="nav.measures">Mesures</span></button>
+      <button class="ct-rail-item" data-click="selectPanel" data-args='["measures"]'><span class="ct-rail-item-label" data-i18n="nav.measures">Action Plan</span></button>
       <button class="ct-rail-item" data-click="selectPanel" data-args='["nonconformities"]'><span class="ct-rail-item-label" data-i18n="nav.nonconformities">Non-conformities</span></button>
     </div>
 
@@ -54,16 +54,16 @@
       <button class="ct-rail-group" aria-expanded="true" data-click="ct_toggleRailGroup" data-pass-el>
         <span class="ct-icon-btn-slot" data-icon="chevron-right"></span><span>Administration</span>
       </button>
-      <button class="ct-rail-item ct-admin-only" data-click="selectPanel" data-args='["connectors"]'><span class="ct-rail-item-label" data-i18n="nav.connectors">Connecteurs</span></button>
-      <button class="ct-rail-item ct-admin-only" data-click="selectPanel" data-args='["audit"]'><span class="ct-rail-item-label" data-i18n="nav.audit">Journal d'audit</span></button>
+      <button class="ct-rail-item ct-admin-only" data-click="selectPanel" data-args='["connectors"]'><span class="ct-rail-item-label" data-i18n="nav.connectors">Connectors</span></button>
+      <button class="ct-rail-item ct-admin-only" data-click="selectPanel" data-args='["audit"]'><span class="ct-rail-item-label" data-i18n="nav.audit">Audit Log</span></button>
     </div>
 
     <div class="ct-rail-section">
       <button class="ct-rail-group" aria-expanded="true" data-click="ct_toggleRailGroup" data-pass-el>
-        <span class="ct-icon-btn-slot" data-icon="chevron-right"></span><span data-i18n="nav.help_section">AIDE</span>
+        <span class="ct-icon-btn-slot" data-icon="chevron-right"></span><span data-i18n="nav.help_section">HELP</span>
       </button>
-      <button class="ct-rail-item" data-click="toggleHelp" data-args='["methodo"]'><span class="ct-rail-item-label" data-i18n="nav.help_methodo">Methodologie</span></button>
-      <button class="ct-rail-item" data-click="toggleHelp" data-args='["usage"]'><span class="ct-rail-item-label" data-i18n="nav.help_usage">Utilisation</span></button>
+      <button class="ct-rail-item" data-click="toggleHelp" data-args='["methodo"]'><span class="ct-rail-item-label" data-i18n="nav.help_methodo">Methodology</span></button>
+      <button class="ct-rail-item" data-click="toggleHelp" data-args='["usage"]'><span class="ct-rail-item-label" data-i18n="nav.help_usage">Usage</span></button>
     </div>
   </div>
 
@@ -75,19 +75,19 @@
 <!-- ════════════════ Help overlay ════════════════ -->
 <div class="help-overlay" id="help-overlay" data-click-self="toggleHelp">
 <div class="help-panel">
-<button class="close-help" data-click="toggleHelp" aria-label="close">
+<button class="close-help" data-click="toggleHelp" aria-label="Close" data-i18n-aria-label="btn_close">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
 </button>
 
 <div class="help-tabs">
-    <div class="help-tab active" id="help-tab-methodo" data-click="switchHelpTab" data-args='["methodo"]' data-i18n="help.tab_methodo">Methodologie ASM</div>
-    <div class="help-tab" id="help-tab-usage" data-click="switchHelpTab" data-args='["usage"]' data-i18n="help.tab_usage">Utilisation</div>
+    <div class="help-tab active" id="help-tab-methodo" data-click="switchHelpTab" data-args='["methodo"]' data-i18n="help.tab_methodo">ASM Methodology</div>
+    <div class="help-tab" id="help-tab-usage" data-click="switchHelpTab" data-args='["usage"]' data-i18n="help.tab_usage">Usage guide</div>
 </div>
 
-<!-- ════════ Onglet Methodologie ════════ -->
+<!-- ════════ Methodology tab ════════ -->
 <div class="help-content" id="help-content-methodo" data-i18n-html="help.methodo_html"></div>
 
-<!-- ════════ Onglet Utilisation ════════ -->
+<!-- ════════ Usage tab ════════ -->
 <div class="help-content ct-hidden" id="help-content-usage" data-i18n-html="help.usage_html"></div>
 
 </div>

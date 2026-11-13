@@ -340,7 +340,7 @@ class NotificationPrefs(Base):
     """FEAT-35 — LOCAL per-user prefs (standalone); suite proxies Pilot."""
     __tablename__ = "notification_prefs"
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    lang = Column(String(5), nullable=False, default="fr", server_default=text("'fr'"))
+    lang = Column(String(5), nullable=False, default="en", server_default=text("'en'"))
     module_prefs = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     updated_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc),

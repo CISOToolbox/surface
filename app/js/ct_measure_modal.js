@@ -369,7 +369,7 @@
             h += opts.headerHtml;
         h += '<div class="ct-measure-form">';
         if (!_hidden("title", hide)) {
-            h += '<label>' + esc(_t("measure.field.title", "Titre"))
+            h += '<label>' + esc(_t("measure.field.title", "Title"))
                 + (opts.titleRequired !== false && !opts.titleReadOnly ? ' *' : '');
             if (opts.titleReadOnly) {
                 h += '<div style="font-weight:600">' + esc(v_title) + '</div>';
@@ -380,7 +380,7 @@
             h += '</label>';
         }
         if (!_hidden("description", hide)) {
-            h += '<label>' + esc(_t("measure.field.description", "Description"))
+            h += '<label>' + esc(_t("measure.field.description", "Details"))
                 + '<textarea id="' + _fieldId("description") + '" rows="3">' + esc(v_desc) + '</textarea>'
                 + '</label>';
         }
@@ -407,12 +407,12 @@
         // Collapsed body = latest entry + a "history (N)" link when N > 1.
         function _journalBodyHtml() {
             if (!v_log.length)
-                return '<div class="ct-journal-empty">' + esc(_t("measure.field.progress_log_empty", "Aucune note pour l'instant.")) + '</div>';
+                return '<div class="ct-journal-empty">' + esc(_t("measure.field.progress_log_empty", "No notes yet.")) + '</div>';
             var last = v_log[v_log.length - 1];
             var out = '<div class="ct-journal-entry">' + _journalLineHtml(last) + '</div>';
             if (v_log.length > 1)
                 out += '<button type="button" class="ct-journal-history-link" id="ctm-journal-history">'
-                    + esc(_t("measure.field.progress_log_history", "Voir l'historique")) + ' (' + v_log.length + ')</button>';
+                    + esc(_t("measure.field.progress_log_history", "View history")) + ' (' + v_log.length + ')</button>';
             return out;
         }
         // Full history in a secondary overlay (ct_modal is a single shared
@@ -424,8 +424,8 @@
                 return '<div class="ct-journal-entry">' + _journalLineHtml(e) + '</div>';
             }).join("");
             ov.innerHTML = '<div class="ct-journal-hist-box">'
-                + '<div class="ct-journal-hist-head"><strong>' + esc(_t("measure.field.progress_log", "Journal d'avancement")) + '</strong>'
-                + '<button type="button" class="ct-journal-hist-close" aria-label="Close">&times;</button></div>'
+                + '<div class="ct-journal-hist-head"><strong>' + esc(_t("measure.field.progress_log", "Progress log")) + '</strong>'
+                + '<button type="button" class="ct-journal-hist-close" aria-label="' + esc(_t("btn_close", "Close")) + '">&times;</button></div>'
                 + '<div class="ct-journal-hist-list">' + rows + '</div></div>';
             document.body.appendChild(ov);
             function close() { if (ov.parentNode)
@@ -445,12 +445,12 @@
         }
         if (journalVisible) {
             h += '<div class="ct-measure-journal">';
-            h += '<label class="ct-journal-lbl">' + esc(_t("measure.field.progress_log", "Journal d'avancement")) + '</label>';
+            h += '<label class="ct-journal-lbl">' + esc(_t("measure.field.progress_log", "Progress log")) + '</label>';
             h += '<div class="ct-journal-body" id="ctm-journal-body">' + _journalBodyHtml() + '</div>';
             if (!opts.journalReadOnly) {
                 h += '<div class="ct-journal-add">'
-                    + '<textarea id="' + _fieldId("progress_log_new") + '" rows="2" placeholder="' + esc(_t("measure.field.progress_log_ph", "Ajouter une note d'avancement…")) + '"></textarea>'
-                    + '<button type="button" class="ct-btn ct-journal-add-btn" id="ctm-journal-add">' + esc(_t("measure.field.progress_log_add", "Ajouter")) + '</button>'
+                    + '<textarea id="' + _fieldId("progress_log_new") + '" rows="2" placeholder="' + esc(_t("measure.field.progress_log_ph", "Add a progress note…")) + '"></textarea>'
+                    + '<button type="button" class="ct-btn ct-journal-add-btn" id="ctm-journal-add">' + esc(_t("measure.field.progress_log_add", "Add")) + '</button>'
                     + '</div>';
             }
             h += '</div>';
@@ -470,7 +470,7 @@
                 h += '</select></label>';
             }
             if (statVisible) {
-                h += '<label>' + esc(_t("measure.field.statut", "Statut"))
+                h += '<label>' + esc(_t("measure.field.statut", "Status"))
                     + '<select id="' + _fieldId("statut") + '">';
                 if (!opts.defaultStatus)
                     h += '<option value="">—</option>';
@@ -487,7 +487,7 @@
         if (respVisible || dueVisible) {
             h += '<div class="ct-measure-form__row">';
             if (respVisible) {
-                h += '<label>' + esc(_t("measure.field.responsable", "Responsable"));
+                h += '<label>' + esc(_t("measure.field.responsable", "Owner"));
                 if (pickerEnabled) {
                     // Slot replaced by ct_userpicker.mount() in onOpen
                     h += '<div id="ctm-owner-slot"></div>';
@@ -498,7 +498,7 @@
                 h += '</label>';
             }
             if (dueVisible) {
-                h += '<label>' + esc(_t("measure.field.echeance", "Échéance"))
+                h += '<label>' + esc(_t("measure.field.echeance", "Due date"))
                     + '<input type="date" id="' + _fieldId("echeance") + '" value="' + esc(v_due) + '">'
                     + '</label>';
             }
@@ -581,12 +581,12 @@
         // ── Buttons ──────────────────────────────────────────────────
         var isNew = !m || !m.id;
         var title = opts.title || (isNew
-            ? _t("measure.new", "Nouvelle mesure")
-            : _t("measure.edit", "Mesure") + (m.id ? " " + m.id : ""));
+            ? _t("measure.new", "New measure")
+            : _t("measure.edit", "Measure") + (m.id ? " " + m.id : ""));
         var buttons = [];
         if (typeof opts.onDelete === "function") {
             buttons.push({
-                id: "delete", label: _t("btn_delete", "Supprimer"), danger: true,
+                id: "delete", label: _t("btn_delete", "Delete"), danger: true,
                 result: function () {
                     // Defer so the measure modal finishes closing before the
                     // caller opens its own confirm dialog — ct_modal is a
@@ -601,13 +601,13 @@
                 }
             });
         }
-        buttons.push({ id: "cancel", label: _t("btn_cancel", "Annuler") });
+        buttons.push({ id: "cancel", label: _t("btn_cancel", "Cancel") });
         if (Array.isArray(opts.extraButtons)) {
             opts.extraButtons.forEach(function (b) { buttons.push(b); });
         }
         buttons.push({
             id: "save", primary: true,
-            label: opts.saveLabel || _t("btn_save", "Enregistrer"),
+            label: opts.saveLabel || _t("btn_save", "Save"),
             result: function () {
                 var data = collect();
                 var titleKey = outKey("title");
@@ -615,7 +615,7 @@
                     && opts.titleRequired !== false
                     && !(data[titleKey] || "").trim()) {
                     if (typeof showStatus === "function")
-                        showStatus(_t("measure.title_required", "Titre requis"), true);
+                        showStatus(_t("measure.title_required", "A title is required"), true);
                     var el = document.getElementById(_fieldId("title"));
                     if (el) {
                         try {
@@ -640,7 +640,7 @@
                         slotId: "ctm-owner-slot",
                         pickerId: pickerId,
                         value: v_resp,
-                        placeholder: _t("ct.userpicker.search_placeholder", "Rechercher..."),
+                        placeholder: _t("ct.userpicker.search_placeholder", "Search..."),
                         directoryUrl: directoryUrl,
                         sourceUrl: sourceUrl,
                         onCreate: function (query) {
@@ -709,7 +709,7 @@
                                     .then(function () { commit(); })
                                     .catch(function () {
                                     if (typeof showStatus === "function")
-                                        showStatus(_t("measure.field.progress_log_add_err", "Échec de l'ajout de la note"), true);
+                                        showStatus(_t("measure.field.progress_log_add_err", "Failed to add the note"), true);
                                 })
                                     .then(function () { if (addBtn)
                                     addBtn.disabled = false; });

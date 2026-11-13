@@ -183,7 +183,7 @@ window.AI_APP_CONFIG = {
         if (typeof renderPanel === "function")
             renderPanel();
         if (typeof showStatus === "function") {
-            showStatus(t("tz.saved") || "Timezone updated");
+            showStatus(t("tz.saved"));
         }
     };
     function _getTimezone() {
@@ -457,7 +457,7 @@ window.AI_APP_CONFIG = {
     function _renderAddonHelpDocs() {
         if (!_addonHelpDocs || !_addonHelpDocs.length)
             return;
-        var lang = document.documentElement.lang === "en" ? "en" : "fr";
+        var lang = _locale === "fr" ? "fr" : "en";
         ["methodo", "usage"].forEach(function (tab) {
             var parent = document.getElementById("help-content-" + tab);
             if (!parent)
@@ -490,7 +490,7 @@ window.AI_APP_CONFIG = {
         h += '<h2 class="ct-m-0">' + t("audit.title") + '</h2><span class="ct-flex-1"></span>';
         h += '<input type="search" class="appsec-filter" placeholder="' + t("audit.search") + '" value="' + esc(_auditFilter.q || "") + '" data-input="_setAuditSearch" data-pass-value>';
         h += '</div>';
-        h += '<div id="audit-body"><p class="text-muted">Chargement...</p></div>';
+        h += '<div id="audit-body"><p class="text-muted">' + esc(t("common.loading")) + '</p></div>';
         c.innerHTML = h;
         _refreshAuditBody();
     }
@@ -723,7 +723,7 @@ window.AI_APP_CONFIG = {
             body: _connectorFormHTML(k),
             size: "md",
             buttons: [
-                { id: "cancel", label: t("btn_cancel") || "Annuler" },
+                { id: "cancel", label: t("btn_cancel") },
                 { id: "save", primary: true, label: t("conn.save"),
                     result: function () { return _connectorModalValues(k); } }
             ]
@@ -784,7 +784,7 @@ window.AI_APP_CONFIG = {
             onOpen: function () { var el = document.getElementById("conn-new-instance"); if (el)
                 el.focus(); },
             buttons: [
-                { id: "cancel", label: t("btn_cancel") || "Annuler" },
+                { id: "cancel", label: t("btn_cancel") },
                 { id: "create", primary: true, label: t("conn.create"),
                     result: function () {
                         return {
@@ -810,7 +810,7 @@ window.AI_APP_CONFIG = {
             title: t("conn.delete_instance"),
             message: t("conn.delete_confirm").replace("{label}", k ? k.label : name),
             danger: true,
-            confirmLabel: t("btn_delete") || "Supprimer"
+            confirmLabel: t("btn_delete")
         }).then(function (ok) {
             if (!ok)
                 return;
@@ -992,7 +992,7 @@ window.AI_APP_CONFIG = {
             h += '<td class="ct-mono ct-text-meta ct-strong">' + esc(j.target) + '</td>';
             h += '<td><span class="ct-badge" data-size="sm" data-tone="' + scannerCls + '" title="' + esc(j.scanner || "") + '">' + esc(_scannerLabel(j.scanner)) + '</span>';
             if (j.profile && j.profile !== "scheduled")
-                h += '<div class="ct-text-label ct-muted ct-mt-1">profil: ' + esc(j.profile) + '</div>';
+                h += '<div class="ct-text-label ct-muted ct-mt-1">' + esc(t("jobs.profile")) + ' ' + esc(j.profile) + '</div>';
             h += '</td>';
             h += '<td>' + sourceBadge + '</td>';
             h += '<td><span class="ct-badge" data-size="sm" data-tone="' + _jobTone(j.status) + '"' + (j.status === "running" ? " data-live" : "") + '>' + esc(_jobStatusLabel(j.status)) + '</span>';
@@ -1277,7 +1277,7 @@ window.AI_APP_CONFIG = {
                 h += '<td class="ct-maxw-240">' + badges + '</td>';
             }
             else {
-                h += '<td><span class="scanner-mini scanner-mini-none">aucun</span></td>';
+                h += '<td><span class="scanner-mini scanner-mini-none">' + esc(t("hosts.scanners_none")) + '</span></td>';
             }
             h += '<td class="ct-text-label ct-muted">' + (freq > 0 ? String(t("monitored.frequency_hours")).replace("{n}", String(freq)) : "—") + '</td>';
             h += '<td><label class="ct-clickable"><input type="checkbox"' + (a.enabled ? " checked" : "") + ' data-change="_toggleMonitored" data-args=\'' + _da(a.id) + '\' data-pass-el></label></td>';
@@ -1620,7 +1620,7 @@ window.AI_APP_CONFIG = {
         var enabledSet = {};
         (enabled || []).forEach(function (n) { enabledSet[n] = true; });
         if (!entry.scanners || !entry.scanners.length) {
-            container.innerHTML = '<div class="surface-field-help">Aucun scanner disponible pour ce type.</div>';
+            container.innerHTML = '<div class="surface-field-help">' + esc(t("mon_modal.no_scanners_for_kind")) + '</div>';
             return;
         }
         var h = "";
@@ -1695,7 +1695,7 @@ window.AI_APP_CONFIG = {
             help.textContent = _kindHelp(k);
         var input = document.getElementById("monitored-value");
         if (input)
-            input.placeholder = { domain: "example.com", host: "1.2.3.4 ou api.example.com", ip_range: "192.168.1.0/24" }[k] || "";
+            input.placeholder = { domain: "example.com", host: t("mon_modal.host_placeholder"), ip_range: "192.168.1.0/24" }[k] || "";
     }
     var _editingMonitoredId = null;
     window._newMonitoredDialog = function () {
@@ -2935,18 +2935,18 @@ window.AI_APP_CONFIG = {
         ct_bulkbar.attach({
             scope: "surface-findings",
             onChange: "_findingsBulkChanged",
-            label: (t("bulk.findings_selected") || "{n} finding(s) sélectionné(s)"),
+            label: (t("bulk.findings_selected")),
             actions: [
-                { id: "to_fix", icon: "check", label: t("bulk.to_fix") || "À corriger",
+                { id: "to_fix", icon: "check", label: t("bulk.to_fix"),
                     variant: "primary", onClick: "_bulkSurfaceToFix" },
-                { id: "fixed", icon: "check", label: t("bulk.fixed") || "Corrigé",
+                { id: "fixed", icon: "check", label: t("bulk.fixed"),
                     variant: "success", onClick: "_bulkSurfaceFixed" },
-                { id: "fp", icon: "x", label: t("bulk.false_positive") || "Faux positif",
+                { id: "fp", icon: "x", label: t("bulk.false_positive"),
                     variant: "muted", onClick: "_bulkSurfaceFP" },
-                { id: "delete", icon: "trash", label: t("bulk.delete") || "Supprimer", danger: true,
+                { id: "delete", icon: "trash", label: t("bulk.delete"), danger: true,
                     onClick: "_bulkSurfaceDelete",
-                    confirm: { title: t("bulk.delete_confirm_title") || "Supprimer {n} finding(s) ?",
-                        message: t("bulk.delete_confirm_msg") || "Cette action est irréversible." } }
+                    confirm: { title: t("bulk.delete_confirm_title"),
+                        message: t("bulk.delete_confirm_msg") } }
             ]
         });
     }
@@ -2979,22 +2979,19 @@ window.AI_APP_CONFIG = {
             return;
         var n = bt.n;
         if (n > 10000) {
-            showStatus("Sélection trop grande : " + n + " findings (max 10000 par remédiation). Réduisez la sélection.", true);
+            showStatus(t("bulk.too_many", { n: n }), true);
             return;
         }
         var selected = bt.rows;
         // Interpolate {n} — t() returns the raw key/value, no placeholder handling.
-        var interp = function (key, fallback) {
-            var v = (t(key) || fallback || "").replace(/\{n\}/g, String(n));
-            return v;
-        };
+        var interp = function (key) { return t(key, { n: n }); };
         var defaultTitle = n === 1 && selected.length === 1 ? _findingTitle(selected[0])
-            : (t("bulk.measure_default_title") || "Mesure corrective") + " (" + n + " findings)";
+            : (t("bulk.measure_default_title")) + " (" + n + " findings)";
         // Every finding of a filter: only those of the page are at hand to be listed.
         var unlisted = n - selected.length;
         var defaultDesc = selected.map(function (f) { return "- " + _findingTitle(f); }).join("\n")
             + (unlisted > 0 ? "\n" + t("bulk.measure_desc_more", { n: unlisted }) : "");
-        var helpText = interp("bulk.measure_help", "UNE remédiation sera créée et liée aux {n} findings sélectionnés.");
+        var helpText = interp("bulk.measure_help");
         var summary = '<div class="ct-text-label ct-muted ct-mb-1">' + esc(helpText) + '</div>'
             + '<div class="ct-text-label ct-muted ct-strong ct-mt-1">'
             + esc(t("bulk.measure_covered", { n: n }))
@@ -3006,8 +3003,8 @@ window.AI_APP_CONFIG = {
             }).join("")
             + '</div>';
         ct_measure_modal.open({ title: defaultTitle, description: defaultDesc }, {
-            title: interp("bulk.measure_title", "Créer une remédiation couvrant {n} finding(s)"),
-            saveLabel: interp("bulk.measure_confirm", "Créer la remédiation"),
+            title: interp("bulk.measure_title"),
+            saveLabel: interp("bulk.measure_confirm"),
             hideFields: ["type", "statut"],
             ownerPicker: { pickerId: "surface-bulk-owner", directoryUrl: "api/directory" },
             extraContent: summary
@@ -3021,9 +3018,9 @@ window.AI_APP_CONFIG = {
                 responsable: data.responsable,
                 echeance: data.echeance
             })).then(function (r) {
-                var msg = r.updated + " finding(s) → " + (t("status.to_fix") || "À corriger");
+                var msg = r.updated + " finding(s) → " + (t("status.to_fix"));
                 if (r.measures_created)
-                    msg += " (" + r.measures_created + " remédiation(s) créée(s))";
+                    msg += " (" + t("bulk.measures_created", { n: r.measures_created }) + ")";
                 showStatus(msg);
                 ct_bulkbar.clear(scope);
                 _loadAndRender();
@@ -3036,12 +3033,12 @@ window.AI_APP_CONFIG = {
             return;
         ct_modal.confirm({
             title: t("bulk.fixed_confirm_title", { n: bt.n }),
-            message: t("bulk.fixed_confirm_msg") || "Les findings seront marqués corrigés."
+            message: t("bulk.fixed_confirm_msg")
         }).then(function (ok) {
             if (!ok)
                 return;
             SurfaceAPI.bulkTriageFindings(Object.assign({}, bt.target, { status: "fixed" })).then(function (r) {
-                showStatus(r.updated + " finding(s) " + (t("bulk.fixed") || "corrigé(s)"));
+                showStatus(r.updated + " finding(s) " + (t("bulk.fixed")));
                 ct_bulkbar.clear(scope);
                 _loadAndRender();
             }).catch(function (e) { _bulkFailed(scope, e); });
@@ -3051,32 +3048,30 @@ window.AI_APP_CONFIG = {
         var bt = _bulkTarget(scope);
         if (!bt)
             return;
-        var interp = function (key, fallback) {
-            return (t(key) || fallback || "").replace(/\{n\}/g, String(bt.n));
-        };
+        var interp = function (key) { return t(key, { n: bt.n }); };
         var body = '<div class="ct-text-label ct-muted ct-mb-3">'
-            + esc(interp("bulk.fp_help", "La justification sera attachée à chaque finding pour audit."))
+            + esc(interp("bulk.fp_help"))
             + '</div>'
             + '<div class="ct-measure-form">'
-            + '<label>' + esc(t("bulk.fp_justification") || "Justification") + ' *'
+            + '<label>' + esc(t("bulk.fp_justification")) + ' *'
             + '<textarea class="ct-input" id="surface-bulk-fp-notes" rows="5" placeholder="'
-            + esc(t("bulk.fp_placeholder") || "Expliquer pourquoi ces findings sont des faux positifs") + '"></textarea>'
+            + esc(t("bulk.fp_placeholder")) + '"></textarea>'
             + '</label>'
             + '</div>';
         ct_modal.open({
-            title: interp("bulk.fp_title", "Déclarer {n} finding(s) comme faux positifs"),
+            title: interp("bulk.fp_title"),
             body: body,
             size: "md",
             onOpen: function () { var el = document.getElementById("surface-bulk-fp-notes"); if (el)
                 el.focus(); },
             buttons: [
-                { id: "cancel", label: t("btn_cancel") || "Annuler" },
-                { id: "save", primary: true, label: interp("bulk.fp_confirm", "Confirmer ({n})"),
+                { id: "cancel", label: t("btn_cancel") },
+                { id: "save", primary: true, label: interp("bulk.fp_confirm"),
                     result: function () {
                         var notes = ((document.getElementById("surface-bulk-fp-notes") || {}).value || "").trim();
                         if (!notes) {
                             if (typeof showStatus === "function")
-                                showStatus(t("tm.justif_required") || "Justification requise", true);
+                                showStatus(t("tm.justif_required"), true);
                             return false;
                         }
                         return { notes: notes };
@@ -3086,7 +3081,7 @@ window.AI_APP_CONFIG = {
             if (!res)
                 return;
             SurfaceAPI.bulkTriageFindings(Object.assign({}, bt.target, { status: "false_positive", notes: res.notes })).then(function (r) {
-                showStatus(r.updated + " finding(s) → " + (t("bulk.false_positive") || "faux positif"));
+                showStatus(r.updated + " finding(s) → " + (t("bulk.false_positive")));
                 ct_bulkbar.clear(scope);
                 _loadAndRender();
             }).catch(function (e) { _bulkFailed(scope, e); });
@@ -3097,7 +3092,7 @@ window.AI_APP_CONFIG = {
         if (!bt)
             return;
         SurfaceAPI.bulkDeleteFindings(bt.target).then(function (r) {
-            showStatus(r.deleted + " finding(s) " + (t("bulk.deleted") || "supprimé(s)"));
+            showStatus(r.deleted + " finding(s) " + (t("bulk.deleted")));
             ct_bulkbar.clear(scope);
             _loadAndRender();
         }).catch(function (e) { _bulkFailed(scope, e); });
@@ -3386,7 +3381,8 @@ window.AI_APP_CONFIG = {
                 severity: f.severity || "",
                 title: f.title || "",
                 description: f.description || "",
-                evidence: f.evidence || {}
+                evidence: f.evidence || {},
+                language: _locale
             });
             var fp = parsed.is_probable_false_positive;
             var conf = Math.round((parsed.confidence || 0) * 100);
@@ -3450,15 +3446,15 @@ window.AI_APP_CONFIG = {
         if (!_selectedFinding)
             return;
         ct_modal.confirm({
-            title: t("fd.delete") || "Supprimer",
-            message: t("fd.delete_confirm") || "Supprimer ce finding ? Cette action est irréversible.",
+            title: t("fd.delete"),
+            message: t("fd.delete_confirm"),
             danger: true
         }).then(function (ok) {
             if (!ok)
                 return;
             SurfaceAPI.deleteFinding(_selectedFinding.id).then(function () {
                 _selectedFinding = null;
-                showStatus(t("fd.deleted") || "Finding supprimé");
+                showStatus(t("fd.deleted"));
                 _loadAndRender();
             }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
         });
@@ -3472,8 +3468,8 @@ window.AI_APP_CONFIG = {
             scanner: "nmap",
             type: "open_port",
             severity: "high",
-            title: "Port 3306 (MySQL) exposé sur db-prod.example.com",
-            description: "MySQL 5.7 detecté avec authentification anonyme désactivée mais port ouvert en externe. Restreindre l'accès au sous-réseau administratif ou fermer le port.",
+            title: "Port 3306 (MySQL) exposed on db-prod.example.com",
+            description: "MySQL 5.7 found with anonymous authentication disabled, but the port is open to the outside. Restrict access to the administration subnet or close the port.",
             target: "db-prod.example.com:3306",
             evidence: {
                 port: 3306,
@@ -3486,8 +3482,8 @@ window.AI_APP_CONFIG = {
             scanner: "shodan",
             type: "exposed_service",
             severity: "medium",
-            title: "Service RDP exposé sur Internet",
-            description: "Shodan a observé un service RDP (3389) joignable depuis Internet. Recommandation : placer derrière un VPN ou un bastion.",
+            title: "RDP service exposed on the Internet",
+            description: "Shodan saw an RDP service (3389) reachable from the Internet. Recommendation: put it behind a VPN or a bastion.",
             target: "rdp.example.com",
             evidence: {
                 port: 3389,
@@ -3498,8 +3494,8 @@ window.AI_APP_CONFIG = {
             scanner: "manual",
             type: "other",
             severity: "low",
-            title: "En-tête HSTS manquant sur www.example.com",
-            description: "Le site ne renvoie pas Strict-Transport-Security. Ajouter 'Strict-Transport-Security: max-age=31536000; includeSubDomains'.",
+            title: "HSTS header missing on www.example.com",
+            description: "The site does not send Strict-Transport-Security. Add 'Strict-Transport-Security: max-age=31536000; includeSubDomains'.",
             target: "www.example.com",
             evidence: {}
         }
@@ -3768,7 +3764,7 @@ window.AI_APP_CONFIG = {
                     render: function (m) { return '<span class="ct-mono ct-text-meta ct-strong">' + esc(m.id) + '</span>'; } },
                 { key: "title", label: t("measures.col.title"),
                     render: function (m) { return esc(m.title || ""); } },
-                { key: "finding_ids", label: t("measures.col.findings") || "Findings", width: "90px",
+                { key: "finding_ids", label: t("measures.col.findings"), width: "90px",
                     render: function (m) {
                         var n = (m.finding_ids && m.finding_ids.length) ? m.finding_ids.length : (m.finding_id ? 1 : 0);
                         return '<span class="fs-sm text-muted">' + n + '</span>';
@@ -3791,13 +3787,13 @@ window.AI_APP_CONFIG = {
         c.innerHTML = h;
         ct_bulkbar.attach({
             scope: "surface-measures",
-            label: "{n} remédiation(s) sélectionnée(s)",
+            label: t("measures.selected_n"),
             actions: [
-                { id: "done", icon: "check", label: t("measures.status.termine") || "Terminé", variant: "success",
+                { id: "done", icon: "check", label: t("measures.status.termine"), variant: "success",
                     onClick: "_bulkSurfaceMeasuresDone" },
-                { id: "delete", icon: "trash", label: t("bulk.delete") || "Supprimer", danger: true,
+                { id: "delete", icon: "trash", label: t("bulk.delete"), danger: true,
                     onClick: "_bulkSurfaceMeasuresDelete",
-                    confirm: { title: "Supprimer {n} remédiation(s) ?", message: "Cette action est irréversible." } }
+                    confirm: { title: t("measures.bulk_delete_title"), message: t("bulk.delete_confirm_msg") } }
             ]
         });
         ct_bulkbar.update("surface-measures");
@@ -3807,12 +3803,12 @@ window.AI_APP_CONFIG = {
         if (!m)
             return Promise.resolve();
         return ct_measure_modal.open(m, {
-            title: m.id + " — " + (m.title || "Mesure"),
+            title: m.id + " — " + (m.title || t("bulk.measure_default_title")),
             hideFields: ["type"],
             statusOptions: [
-                { value: "a_faire", label: t("measures.status.a_faire") || "À faire" },
-                { value: "en_cours", label: t("measures.status.en_cours") || "En cours" },
-                { value: "termine", label: t("measures.status.termine") || "Terminé" }
+                { value: "a_faire", label: t("measures.status.a_faire") },
+                { value: "en_cours", label: t("measures.status.en_cours") },
+                { value: "termine", label: t("measures.status.termine") }
             ],
             defaultStatus: "a_faire",
             ownerPicker: { pickerId: "surface-measure-owner", directoryUrl: "api/directory" },
@@ -3822,14 +3818,14 @@ window.AI_APP_CONFIG = {
             },
             onDelete: function () {
                 ct_modal.confirm({
-                    title: "Supprimer la remédiation",
-                    message: "Cette action est irréversible.",
+                    title: t("measures.delete_title"),
+                    message: t("bulk.delete_confirm_msg"),
                     danger: true
                 }).then(function (ok) {
                     if (!ok)
                         return;
                     SurfaceAPI.deleteMeasure(m.id).then(function () {
-                        showStatus(t("measures.deleted") || "Mesure supprimée");
+                        showStatus(t("measures.deleted"));
                         _loadAndRender();
                     }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
                 });
@@ -3840,7 +3836,7 @@ window.AI_APP_CONFIG = {
             return SurfaceAPI.updateMeasure(m.id, result).then(function (updated) {
                 if (updated)
                     Object.assign(m, updated);
-                showStatus(t("measures.updated") || "Mesure mise à jour");
+                showStatus(t("measures.updated"));
                 _loadAndRender();
             }).catch(function (e) { showStatus(e.message || t("common.error"), true); });
         });
@@ -3851,7 +3847,7 @@ window.AI_APP_CONFIG = {
             return;
         Promise.all(ids.map(function (id) { return SurfaceAPI.updateMeasure(id, { statut: "termine" }); }))
             .then(function () {
-            showStatus(ids.length + " " + (t("measures.marked_done") || "remédiation(s) terminée(s)"));
+            showStatus(ids.length + " " + (t("measures.marked_done")));
             ct_bulkbar.clear(scope);
             _loadAndRender();
         })
@@ -3863,7 +3859,7 @@ window.AI_APP_CONFIG = {
             return;
         Promise.all(ids.map(function (id) { return SurfaceAPI.deleteMeasure(id); }))
             .then(function () {
-            showStatus(ids.length + " " + (t("measures.deleted") || "remédiation(s) supprimée(s)"));
+            showStatus(ids.length + " " + (t("measures.deleted")));
             ct_bulkbar.clear(scope);
             _loadAndRender();
         })
@@ -4839,7 +4835,7 @@ window.AI_APP_CONFIG = {
             if (!payload)
                 return;
             return SurfaceAPI.triageFinding(f.id, payload).then(function () {
-                showStatus(t("fd.triage_ok") || "Triage enregistré");
+                showStatus(t("fd.triage_ok"));
                 _hostSelectedFinding = null;
                 _loadAndRender();
             }).catch(function (e) { showStatus(e.message || t("common.error"), true); });

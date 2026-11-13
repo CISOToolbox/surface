@@ -88,7 +88,7 @@
         if (!rows.length) {
             var emptySpan = cols.length + (bulkScope ? 1 : 0) + (actions.length ? 1 : 0);
             h += '<tr><td colspan="' + emptySpan + '" class="ct-table-empty">'
-                + (opts.emptyHtml || '<div class="ct-empty-state">Aucun élément</div>')
+                + (opts.emptyHtml || '<div class="ct-empty-state">' + esc(t("ct.empty.title")) + '</div>')
                 + '</td></tr>';
         }
         else {

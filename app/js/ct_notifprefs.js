@@ -48,8 +48,8 @@ var ct_notifprefs = {
             var h = '<div class="ct-notifprefs-form">';
             h += '<div class="ct-notifprefs-group"><h3 class="ct-notifprefs-section">' + esc(t("notif.section.general")) + '</h3>';
             h += '<div class="ct-form-row"><label for="np-lang">' + esc(t("notif.lang_global")) + '</label><select id="np-lang">'
-                + '<option value="fr"' + (p.lang !== "en" ? " selected" : "") + '>Français</option>'
-                + '<option value="en"' + (p.lang === "en" ? " selected" : "") + '>English</option>'
+                + '<option value="en"' + (p.lang !== "fr" ? " selected" : "") + '>English</option>'
+                + '<option value="fr"' + (p.lang === "fr" ? " selected" : "") + '>Français</option>'
                 + '</select>'
                 + '<div class="ct-notifprefs-help">' + esc(t("notif.lang_global_hint")) + '</div></div>';
             h += '<div class="ct-notifprefs-help">' + esc(t("notif.hint.general")) + '</div>';
@@ -167,7 +167,7 @@ var ct_notifprefs = {
                         subject_prefix: (_npVal("np-sf-prefix") || "").trim() || "[Surface]"
                     };
                 }
-                out.lang = _npVal("np-lang") || "fr";
+                out.lang = _npVal("np-lang") || "en";
                 return out;
             }
             var buttons = [{ id: "cancel", label: t("notif.cancel") }];

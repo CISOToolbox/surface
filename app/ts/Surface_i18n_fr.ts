@@ -692,6 +692,7 @@ if (typeof _registerTranslations === "function") {
         "jobs.col.findings":    "Findings",
         "jobs.col.started":     "Lance le",
         "jobs.col.duration":    "Duree",
+        "jobs.profile": "profil :",
         "jobs.status.pending":  "En attente",
         "jobs.status.running":  "En cours",
         "jobs.status.completed":"Terminé",
@@ -1008,5 +1009,12 @@ if (typeof _registerTranslations === "function") {
     "smtp.not_configured": "non configuré — voir Pilot → Paramètres",
     "smtp.sent_confirm": "Rapport envoyé ✔\\n\\nDestinataires : {recipients}\\n\\nVérifiez la boîte de réception (et les spams au premier envoi).",
     "smtp.send_failed": "Échec de l'envoi :\\n{msg}",
+    "hosts.scanners_none": "aucun",
+    "mon_modal.host_placeholder": "1.2.3.4 ou api.example.com",
+    "bulk.too_many": "Sélection trop grande : {n} findings (10000 au plus par remédiation). Réduisez la sélection.",
+    "bulk.measures_created": "{n} remédiation(s) créée(s)",
+    "measures.selected_n": "{n} remédiation(s) sélectionnée(s)",
+    "measures.bulk_delete_title": "Supprimer {n} remédiation(s) ?",
+    "measures.delete_title": "Supprimer la remédiation",
 });
 }

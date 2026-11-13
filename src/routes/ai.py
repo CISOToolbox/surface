@@ -57,38 +57,43 @@ async def _nvd_lookup(cve_id: str) -> str:
         cvss = cvss_list[0] if cvss_list else None
         refs = ", ".join(x.get("url", "") for x in (cve.get("references") or [])[:3])
         block = (
-            f"\n\nDonnées NVD vérifiées pour {cve_id} :\n"
+            f"\n\nVerified NVD data for {cve_id}:\n"
             f"Description: {desc}\n"
-            f"Publié: {cve.get('published', 'N/A')}\n"
+            f"Published: {cve.get('published', 'N/A')}\n"
         )
         if cvss:
             cd = cvss.get("cvssData", {})
             block += (
                 f"CVSS: {cd.get('baseScore')} ({cd.get('baseSeverity')})\n"
-                f"Vecteur: {cd.get('vectorString')}\n"
+                f"Vector: {cd.get('vectorString')}\n"
             )
-        return block + f"Références: {refs}"
+        return block + f"References: {refs}"
     except (httpx.HTTPError, ValueError, KeyError, IndexError):
         return ""
 
 
-def _finding_analysis_system() -> str:
+def _lang_name(language: str) -> str:
+    return "French" if (language or "").strip().lower().startswith("fr") else "English"
+
+
+def _finding_analysis_system(language: str = "en") -> str:
     """System prompt for the ASM finding triage — methodology owned here."""
     today = datetime.date.today().isoformat()
     year = today[:4]
     return (
-        "Tu es un analyste cybersécurité senior. L'utilisateur te donne un finding issu d'un scan ASM. "
-        f"Date du jour : {today}. Les CVE avec année {year} ou antérieure sont valides et publiées. "
-        "Les bases de données du scanner sont à jour — fais confiance aux données CVE fournies. "
-        "NE REJETTE PAS un CVE comme faux ou hallucination en te basant uniquement sur l'année. "
-        "Si un CVE ID est présent, utilise les données NVD fournies ci-dessous (si disponibles) comme source de vérité. "
-        "Tu dois répondre UNIQUEMENT en JSON strict, sans texte autour, avec ces champs : "
+        "You are a senior cybersecurity analyst. The user gives you a finding from an ASM scan. "
+        f"Today's date: {today}. CVEs of year {year} or earlier are valid and published. "
+        "The scanner's databases are up to date — trust the CVE data provided. "
+        "DO NOT REJECT a CVE as false or hallucinated on the sole basis of its year. "
+        "When a CVE ID is present, use the NVD data given below (when available) as the source of truth. "
+        "You must respond ONLY in strict JSON, with no text around it, with these fields: "
         '{"is_probable_false_positive": boolean, "confidence": number between 0 and 1, '
         '"severity_recommendation": "critical"|"high"|"medium"|"low"|"info", '
-        '"summary": "2-3 phrases expliquant la finding au CISO", '
-        '"remediation": ["étape 1", "étape 2", "étape 3"], '
+        '"summary": "2-3 sentences explaining the finding to the CISO", '
+        '"remediation": ["step 1", "step 2", "step 3"], '
         '"references": ["URL 1", "URL 2"]}. '
-        "Sois concret et actionnable."
+        f"Write the summary and the remediation steps in {_lang_name(language)}. "
+        "Be concrete and actionable."
     )
 
 
@@ -100,6 +105,7 @@ class FindingAnalyzeRequest(BaseModel):
     title: str = ""
     description: str = ""
     evidence: dict = {}
+    language: str = "en"
 
 
 class FindingAnalyzeResponse(BaseModel):
@@ -128,16 +134,16 @@ async def analyze_finding(body: FindingAnalyzeRequest,
     nvd_block = await _nvd_lookup(cve.group(0)) if cve else ""
 
     user_prompt = (
-        f"Scanner : {body.scanner or 'unknown'}\n"
-        f"Type : {body.type or 'unknown'}\n"
-        f"Cible : {body.target or 'unknown'}\n"
-        f"Sévérité actuelle : {body.severity or 'unknown'}\n"
-        f"Titre : {body.title}\n\n"
-        f"Description :\n{body.description or '(aucune)'}\n\n"
-        f"Évidence :\n{json.dumps(body.evidence or {}, indent=2, ensure_ascii=False)}"
+        f"Scanner: {body.scanner or 'unknown'}\n"
+        f"Type: {body.type or 'unknown'}\n"
+        f"Target: {body.target or 'unknown'}\n"
+        f"Current severity: {body.severity or 'unknown'}\n"
+        f"Title: {body.title}\n\n"
+        f"Description:\n{body.description or '(none)'}\n\n"
+        f"Evidence:\n{json.dumps(body.evidence or {}, indent=2, ensure_ascii=False)}"
         f"{nvd_block}"
     )
-    raw = await _provider_complete(db, _finding_analysis_system(), user_prompt, provider, model)
+    raw = await _provider_complete(db, _finding_analysis_system(body.language), user_prompt, provider, model)
     parsed = _parse_json_lax(raw)
     refs = [str(x) for x in (parsed.get("references") or [])
             if str(x).startswith(("http://", "https://"))]

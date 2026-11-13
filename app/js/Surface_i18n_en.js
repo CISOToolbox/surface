@@ -614,7 +614,7 @@ if (typeof _registerTranslations === "function") {
         "bulk.measure_desc_more": "… and {n} more finding(s) of the filter",
         "findings.empty": "No finding matches the filters.",
         // ── Bulk action bar ────────────────────────────────
-        "bulk.selected": "finding(s) selected",
+        "bulk.selected": "{n} item(s) selected",
         "bulk.false_positive": "False positive",
         "bulk.to_fix": "Create remediation",
         "bulk.fixed": "Fixed",
@@ -627,8 +627,8 @@ if (typeof _registerTranslations === "function") {
         "bulk.fp_justification": "Justification *",
         "bulk.fp_placeholder": "Explain why these findings are false positives (context, documented exception, intentional configuration...)",
         "bulk.measure_title": "Create a remediation for {n} finding(s)",
-        "bulk.measure_help": "One remediation will be created for each selected finding, all sharing the same title/description/owner/deadline. They'll appear grouped in the Remediations tab.",
-        "bulk.measure_confirm": "Create {n} remediation(s)",
+        "bulk.measure_help": "ONE remediation will be created and linked to the {n} selected findings.",
+        "bulk.measure_confirm": "Create the remediation",
         "bulk.delete_confirm": "Permanently delete {n} finding(s)? Linked remediations will also be deleted (cascade).",
         // ── Common actions ─────────────────────────────────
         "action.cancel": "Cancel",
@@ -665,6 +665,7 @@ if (typeof _registerTranslations === "function") {
         "jobs.col.findings": "Findings",
         "jobs.col.started": "Started",
         "jobs.col.duration": "Duration",
+        "jobs.profile": "profile:",
         "jobs.status.pending": "Pending",
         "jobs.status.running": "Running",
         "jobs.status.completed": "Completed",
@@ -980,5 +981,12 @@ if (typeof _registerTranslations === "function") {
         "smtp.not_configured": "not configured — see Pilot → Settings",
         "smtp.sent_confirm": "Report sent ✔\\n\\nRecipients: {recipients}\\n\\nCheck the inbox (and spam on first send).",
         "smtp.send_failed": "Send failed:\\n{msg}",
+        "hosts.scanners_none": "none",
+        "mon_modal.host_placeholder": "1.2.3.4 or api.example.com",
+        "bulk.too_many": "Selection too large: {n} findings (10000 at most per remediation). Narrow the selection.",
+        "bulk.measures_created": "{n} remediation(s) created",
+        "measures.selected_n": "{n} remediation(s) selected",
+        "measures.bulk_delete_title": "Delete {n} remediation(s)?",
+        "measures.delete_title": "Delete the remediation",
     });
 }

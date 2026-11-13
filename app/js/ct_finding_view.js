@@ -10,7 +10,7 @@
  * finding: header (back button + title + severity/status badges),
  * optional subheader (scanner + app + timestamps), info card
  * (target, CVE, description, evidence, screenshot, triage metadata,
- * notes), triage card ("À corriger" / "Faux positif" / "Réinitialiser"
+ * notes), triage card ("To fix" / "False positive" / "Reset"
  * + optional AI + optional Delete) and, when relevant, a linked
  * measure card.
  *
@@ -115,7 +115,7 @@
                 + ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"'
                 + ' stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>';
             h += '<button class="ct-btn" data-variant="ghost" data-size="sm" data-click="' + esc(opts.backHandler) + '">'
-                + _chevron + ' ' + esc(_t("fd.back", "Retour")) + '</button>';
+                + _chevron + ' ' + esc(_t("fd.back", "Back")) + '</button>';
         }
         h += '<h2 style="margin:0;flex:1">' + esc(f.title || "") + '</h2>';
         if (f.severity) {
@@ -149,16 +149,16 @@
             ? '<button type="button" class="ct-link-btn" data-click="' + esc(ta.handler) + '" data-args=\'' + _da.apply(null, ta.args) + '\''
                 + (ta.title ? ' title="' + esc(ta.title) + '"' : '') + '>' + esc(f.target) + '</button>'
             : esc(f.target || "-");
-        row(_t("fd.target", "Cible"), '<span class="ct-mono ct-break-all">' + target + '</span>', true);
+        row(_t("fd.target", "Target"), '<span class="ct-mono ct-break-all">' + target + '</span>', true);
         if (f.cve_id)
             row("CVE", f.cve_id);
         if (f.application_name)
             row(_t("findings.application", "Application"), f.application_name);
         if (f.created_at)
-            row(_t("fd.created", "Créé le"), _fmtDate(f.created_at));
+            row(_t("fd.created", "Created"), _fmtDate(f.created_at));
         if (f.triaged_at) {
-            var by = f.triaged_by ? (" " + _t("fd.triaged_by", "par") + " " + f.triaged_by) : "";
-            row(_t("fd.triaged", "Trié le"), _fmtDate(f.triaged_at) + by);
+            var by = f.triaged_by ? (" " + _t("fd.triaged_by", "by") + " " + f.triaged_by) : "";
+            row(_t("fd.triaged", "Triaged"), _fmtDate(f.triaged_at) + by);
         }
         if (f.description) {
             row(_t("fd.description", "Description"), f.description, false, "white-space:pre-wrap");
@@ -168,12 +168,12 @@
             var evDisplay = ev;
             if (opts.showScreenshot !== false && ev.png_b64 && typeof ev.png_b64 === "string") {
                 var src = "data:image/png;base64," + ev.png_b64;
-                row(_t("fd.screenshot", "Capture d'écran"), '<a href="' + esc(src) + '" target="_blank" rel="noopener">'
+                row(_t("fd.screenshot", "Screenshot"), '<a href="' + esc(src) + '" target="_blank" rel="noopener">'
                     + '<img src="' + esc(src) + '" alt="screenshot" style="max-width:100%;max-height:480px;border:1px solid var(--ct-line);border-radius:4px;background:#fff"/>'
                     + '</a>', true);
-                evDisplay = Object.assign({}, ev, { png_b64: "[" + Math.round(ev.png_b64.length * 0.75 / 1024) + " KB PNG — affichée au-dessus]" });
+                evDisplay = Object.assign({}, ev, { png_b64: "[" + Math.round(ev.png_b64.length * 0.75 / 1024) + " KB PNG — " + _t("fd.screenshot_above", "shown above") + "]" });
             }
-            row(_t("fd.evidence", "Preuves"), '<pre style="background:var(--ct-surface-2);color:var(--ct-ink);padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
+            row(_t("fd.evidence", "Evidence"), '<pre style="background:var(--ct-surface-2);color:var(--ct-ink);padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.75em;overflow:auto;max-height:240px">'
                 + esc(JSON.stringify(evDisplay, null, 2))
                 + '</pre>', true);
         }
@@ -203,7 +203,7 @@
         // note before clicking any of the triage buttons, in addition
         // to the fields the modal will ask for).
         h += '<textarea id="ct-fv-triage-notes" rows="3"'
-            + ' placeholder="' + esc(_t("fd.triage_notes_ph", "Ajouter une note (optionnel)")) + '"'
+            + ' placeholder="' + esc(_t("fd.triage_notes_ph", "Add a note (optional)")) + '"'
             + ' style="width:100%;padding:8px;border:1px solid var(--ct-line);border-radius:4px;font-size:0.85em;margin-bottom:8px;background:var(--ct-surface);color:var(--ct-ink)">'
             + esc(f.triage_notes || "")
             + '</textarea>';
@@ -211,19 +211,19 @@
         h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
         if (f.status !== "to_fix") {
             h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["to_fix"]\'>'
-                + _icn("check", 14) + ' ' + esc(_t("fd.triage_to_fix", "À corriger")) + '</button>';
+                + _icn("check", 14) + ' ' + esc(_t("fd.triage_to_fix", "To fix")) + '</button>';
         }
         if (f.status !== "false_positive") {
             h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["false_positive"]\'>'
-                + _icn("x", 14) + ' ' + esc(_t("fd.triage_fp", "Faux positif")) + '</button>';
+                + _icn("x", 14) + ' ' + esc(_t("fd.triage_fp", "False positive")) + '</button>';
         }
         if (f.status !== "fixed" && opts.showFixed !== false) {
             h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["fixed"]\'>'
-                + _icn("check", 14) + ' ' + esc(_t("fd.triage_fixed", "Corrigé")) + '</button>';
+                + _icn("check", 14) + ' ' + esc(_t("fd.triage_fixed", "Fixed")) + '</button>';
         }
         if (f.status !== "new") {
             h += '<button class="ct-btn" data-write data-click="' + esc(triage) + '" data-args=\'["new"]\'>'
-                + esc(_t("fd.triage_reset", "Réinitialiser")) + '</button>';
+                + esc(_t("fd.triage_reset", "Reset")) + '</button>';
         }
         if (opts.derogationHandler && (f.status === "new" || f.status === "to_fix")) {
             // No data-write here: the caller decides, with the module role the
@@ -233,12 +233,12 @@
         }
         if (opts.aiEnabled && opts.aiHandler) {
             h += '<button class="ct-btn btn-ai" data-click="' + esc(opts.aiHandler) + '">'
-                + '\u2728 ' + esc(_t("fd.ai_triage", "Triage IA")) + '</button>';
+                + '\u2728 ' + esc(_t("fd.ai_triage", "AI triage")) + '</button>';
         }
         if (opts.deleteHandler) {
             h += '<span style="flex:1"></span>';
             h += '<button class="ct-btn" data-write data-variant="danger" data-click="' + esc(opts.deleteHandler) + '">'
-                + esc(_t("fd.delete", "Supprimer")) + '</button>';
+                + esc(_t("fd.delete", "Delete")) + '</button>';
         }
         h += '</div>';
         h += '<div id="ai-triage-result" style="display:none;margin-top:12px;padding:12px;background:var(--ct-surface-2);color:var(--ct-ink);border:1px solid var(--ct-accent);border-radius:6px;font-size:0.88em"></div>';
@@ -252,15 +252,15 @@
         var statusKey = "measures.status." + (m.statut || "");
         var statusLbl = _t(statusKey, _t("measure.status." + (m.statut || ""), m.statut || ""));
         var h = '<div class="' + esc(cc) + '">';
-        h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(_t("fd.measure_linked", "Mesure liée")) + '</h3>';
+        h += '<h3 style="margin-top:0;font-size:0.95em">' + esc(_t("fd.measure_linked", "Linked measure")) + '</h3>';
         h += '<div style="font-weight:600">' + esc(m.id || "") + ' &mdash; ' + esc(m.title || "") + '</div>';
         var meta = [];
         if (statusLbl)
-            meta.push(esc(_t("fd.measure_status", "Statut")) + ' : ' + esc(statusLbl));
+            meta.push(esc(_t("fd.measure_status", "Status")) + ' : ' + esc(statusLbl));
         if (m.responsable)
-            meta.push(esc(_t("fd.measure_owner", "Responsable")) + ' : ' + esc(m.responsable));
+            meta.push(esc(_t("fd.measure_owner", "Owner")) + ' : ' + esc(m.responsable));
         if (m.echeance)
-            meta.push(esc(_t("fd.measure_due", "Échéance")) + ' : ' + esc(m.echeance));
+            meta.push(esc(_t("fd.measure_due", "Due date")) + ' : ' + esc(m.echeance));
         if (meta.length) {
             h += '<div style="font-size:0.82em;color:var(--ct-ink-2);margin-top:4px">' + meta.join(' &middot; ') + '</div>';
         }
@@ -307,8 +307,8 @@
                 title: f.title || "",
                 description: f.description || ""
             }, {
-                title: _t("tm.title_to_fix", "Créer une mesure corrective"),
-                saveLabel: _t("tm.confirm_to_fix", "Créer la mesure"),
+                title: _t("tm.title_to_fix", "Create a corrective measure"),
+                saveLabel: _t("tm.confirm_to_fix", "Create the measure"),
                 hideFields: ["type", "statut"],
                 ownerPicker: {
                     pickerId: opts.ownerPickerId || "ct-fv-owner",
@@ -339,12 +339,12 @@
                 + '<div class="ct-measure-form">'
                 + '<label>' + esc(_t("tm.fp_justif", "Justification")) + ' *'
                 + '<textarea class="ct-input" id="ct-fv-fp-notes" rows="6" placeholder="'
-                + esc(_t("tm.fp_justif_ph", "Expliquer pourquoi ce finding est un faux positif"))
+                + esc(_t("tm.fp_justif_ph", "Explain why this finding is a false positive"))
                 + '"></textarea>'
                 + '</label>'
                 + '</div>';
             return window.ct_modal.open({
-                title: _t("tm.title_fp", "Marquer comme faux positif"),
+                title: _t("tm.title_fp", "Mark as false positive"),
                 body: body,
                 size: "md",
                 onOpen: function () {
@@ -357,15 +357,15 @@
                     }
                 },
                 buttons: [
-                    { id: "cancel", label: _t("btn_cancel", "Annuler") },
-                    { id: "save", primary: true, label: _t("tm.confirm_fp", "Confirmer"),
+                    { id: "cancel", label: _t("btn_cancel", "Cancel") },
+                    { id: "save", primary: true, label: _t("tm.confirm_fp", "Confirm"),
                         result: function () {
                             var notes = ((document.getElementById("ct-fv-fp-notes") || {}).value || "").trim();
                             if (!notes) {
                                 if (typeof showStatus === "function")
                                     // 2nd arg ignored by the shared showStatus(msg) —
                                     // kept for app forks that accept an isError flag.
-                                    showStatus(_t("tm.justif_required", "Justification requise"), true);
+                                    showStatus(_t("tm.justif_required", "A justification is required"), true);
                                 return false;
                             }
                             // Merge the card's free-form note (if any) with the
@@ -381,16 +381,16 @@
         }
         if (status === "new") {
             return window.ct_modal.confirm({
-                title: _t("tm.title_reset", "Réinitialiser le statut"),
-                message: _t("tm.reset_help", "Le statut sera remis à « nouveau » et la mesure associée sera supprimée.")
+                title: _t("tm.title_reset", "Reset the status"),
+                message: _t("tm.reset_help", "The status goes back to “new” and the linked measure is deleted.")
             }).then(function (ok) {
                 return ok ? { status: "new", triage_notes: cardNotes } : null;
             });
         }
         if (status === "fixed") {
             return window.ct_modal.confirm({
-                title: _t("tm.title_fixed", "Marquer comme corrigé"),
-                message: _t("tm.fixed_help", "Le finding sera marqué comme corrigé. Il réapparaîtra s'il est détecté au prochain scan.")
+                title: _t("tm.title_fixed", "Mark as fixed"),
+                message: _t("tm.fixed_help", "The finding will be marked as fixed. It comes back if the next scan detects it again.")
             }).then(function (ok) {
                 return ok ? { status: "fixed", triage_notes: cardNotes } : null;
             });

@@ -70,7 +70,7 @@ async def get_prefs(user: Optional[User] = Depends(get_current_user),
     p = (await db.execute(
         select(NotificationPrefs).where(NotificationPrefs.user_id == user.id)
     )).scalar_one_or_none()
-    return {"lang": (p.lang if p else "fr"),
+    return {"lang": (p.lang if p else "en"),
             "module_prefs": {"surface": _normalize_surface(
                 ((p.module_prefs if p else {}) or {}).get("surface"))}}
 
@@ -83,7 +83,7 @@ async def put_prefs(body: dict,
     if _suite_mode():
         return await _pilot("PUT", "/api/internal/notification-prefs",
                             json={"email": user.email, "prefs": body})
-    lang = body.get("lang", "fr")
+    lang = body.get("lang", "en")
     if lang not in ("fr", "en"):
         raise HTTPException(status_code=422, detail="lang must be fr|en")
     block = _normalize_surface((body.get("module_prefs") or {}).get("surface"))
@@ -111,7 +111,7 @@ async def send_test(user: Optional[User] = Depends(get_current_user),
         select(NotificationPrefs).where(NotificationPrefs.user_id == user.id)
     )).scalar_one_or_none()
     prefs = surface_prefs_of({"module_prefs": (p.module_prefs if p else {}) or {},
-                              "lang": p.lang if p else "fr"})
+                              "lang": p.lang if p else "en"})
     if not prefs.get("alert_enabled"):
         return {"results": {"surface": "skipped_disabled"}}
     status = await send_test_alert(db, user.email, prefs)

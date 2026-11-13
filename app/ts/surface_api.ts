@@ -35,8 +35,8 @@ async function _fetch(url: string, opts?: SurfaceFetchOpts): Promise<any> {
         var detail = "";
         try { var errBody = await resp.json(); detail = errBody.detail || ""; } catch(e2) {}
         if (!detail || detail.length > 200 || detail.includes("Traceback") || detail.includes("sqlalchemy")) {
-            var msgs: Record<number, string> = {400: t("error.bad_request") || "Invalid request", 403: t("error.forbidden") || "Access denied", 404: t("error.not_found") || "Not found", 500: t("error.server") || "Server error"};
-            detail = msgs[resp.status] || (t("error.generic") || "Error " + resp.status);
+            var msgs: Record<number, string> = {400: t("error.bad_request"), 403: t("error.forbidden"), 404: t("error.not_found"), 500: t("error.server")};
+            detail = msgs[resp.status] || t("error.generic");
         }
         throw Object.assign(new Error(detail), { status: resp.status });
     }
