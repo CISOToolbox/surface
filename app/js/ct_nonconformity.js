@@ -1007,6 +1007,8 @@
             h += _row(t("der.decided_by"), d.decided_by + (d.decided_at ? " · " + String(d.decided_at).slice(0, 10) : ""));
         if (d.decision_note)
             h += _row(t("der.decision_note"), d.decision_note);
+        if (d.revoked_by)
+            h += _row(t("der.revoked_by"), d.revoked_by + (d.revoked_at ? " · " + String(d.revoked_at).slice(0, 10) : ""));
         if (d.revoked_reason)
             h += _row(t("der.revoked_reason"), d.revoked_reason);
         if (d.renews_id) {
@@ -1249,6 +1251,7 @@ _registerTranslations("fr", {
     "der.decided_by": "Décidée par",
     "der.decision_note": "Motif de la décision (obligatoire)",
     "der.decision_note_opt": "Note (optionnel)",
+    "der.revoked_by": "Révoquée par",
     "der.revoked_reason": "Motif de révocation",
     "der.renews": "Renouvelle",
     "der.act_approve": "Approuver",
@@ -1400,6 +1403,7 @@ _registerTranslations("en", {
     "der.decided_by": "Decided by",
     "der.decision_note": "Decision reason (required)",
     "der.decision_note_opt": "Note (optional)",
+    "der.revoked_by": "Revoked by",
     "der.revoked_reason": "Revocation reason",
     "der.renews": "Renews",
     "der.act_approve": "Approve",

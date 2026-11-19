@@ -154,6 +154,9 @@ def define_models(Base: Any) -> tuple[type, type]:
         decided_at = Column(DateTime(timezone=True), nullable=True)
         decision_note = Column(Text, default="")
         revoked_reason = Column(Text, default="")
+        # The revocation's own who and when: decided_* stay the approval's (BUG-157).
+        revoked_by = Column(String(255), default="")
+        revoked_at = Column(DateTime(timezone=True), nullable=True)
         renews_id = Column(UUID(as_uuid=True), nullable=True)
         created_at = Column(DateTime(timezone=True), default=_now, server_default=text("NOW()"))
         updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, server_default=text("NOW()"))
@@ -389,6 +392,8 @@ def der_to_dict(d: Any) -> dict:
         "decided_by": d.decided_by or "",
         "decided_at": d.decided_at.isoformat() if d.decided_at else None,
         "decision_note": d.decision_note or "", "revoked_reason": d.revoked_reason or "",
+        "revoked_by": d.revoked_by or "",
+        "revoked_at": d.revoked_at.isoformat() if d.revoked_at else None,
         "renews_id": str(d.renews_id) if d.renews_id else None,
         "days_left": (d.valid_until - date.today()).days if d.valid_until and d.status == "approved" else None,
         "created_at": d.created_at.isoformat() if d.created_at else None,
@@ -1082,13 +1087,14 @@ def make_router(Nonconformity: Any, Derogation: Any, hook: SubjectHook,
         check_transition("derogation", d.status, "revoked")
         d.status = "revoked"
         d.revoked_reason = body.reason[:5000]
-        d.decided_by = _actor(user)
+        d.revoked_by, d.revoked_at = _actor(user), _now()
         d.updated_at = _now()
         if d.subject_type == "nonconformity":
             await _release_nonconformity(db, Nonconformity, d)
         elif d.subject_type != "none":
             await hook.release(db, d, "revoked")
-        await _audit(db, user, request, "derogation.revoked", d.reference, {"reason": body.reason[:200]})
+        await _audit(db, user, request, "derogation.revoked", d.reference, {"reason": body.reason[:200]},
+                     actor=d.revoked_by)
         await db.commit()
         await db.refresh(d)
         return der_to_dict(d)
@@ -1129,12 +1135,13 @@ async def revoke_for_subject(db: AsyncSession, Derogation: Any, subject_type: st
         if d.status == "approved":
             d.status = "revoked"
             d.revoked_reason = reason[:5000]
+            d.revoked_by, d.revoked_at = actor, _now()
         else:                       # a request on a subject that moved on is moot
             d.status = "rejected"
             d.decision_note = reason[:5000]
-            d.decided_at = _now()
-        d.decided_by = actor
+            d.decided_by, d.decided_at = actor, _now()
         d.updated_at = _now()
+        await _audit(db, None, None, "derogation." + d.status, d.reference, {"reason": reason[:200]}, actor=actor)
     return len(rows)
 
 
