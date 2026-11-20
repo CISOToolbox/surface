@@ -61,6 +61,8 @@ interface CtDerRecord {
     decided_at?: string | null;
     decision_note?: string;
     revoked_reason?: string;
+    revoked_by?: string;
+    revoked_at?: string | null;
     renews_id?: string | null;
     days_left?: number | null;
     created_at?: string;
